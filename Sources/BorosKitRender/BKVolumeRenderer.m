@@ -78,6 +78,8 @@ static simd_float3 BKFloat3(N3Vector v)
     id<MTLCommandQueue> _queue;
     id<MTLComputePipelineState> _raycastPipeline;
     id<MTLComputePipelineState> _sizePipeline;
+    id<MTLComputePipelineState> _texturePipeline;  // bk_raycast_texture (on-screen output)
+    id<MTLComputePipelineState> _upscalePipeline;  // bk_upscale (LOD stretch)
     id<MTLTexture> _tfTexture;            // baked transfer function (4096 x 1, RGBA float)
     BKTransferFunction *_bakedTransferFunction; // which function _tfTexture currently holds
     BKTransferFunction *_defaultTransferFunction; // gray ramp used when none is set
@@ -116,7 +118,9 @@ static simd_float3 BKFloat3(N3Vector v)
     if (!library) return nil;
     _raycastPipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_raycast"] error:error];
     _sizePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_params_size"] error:error];
-    if (!_raycastPipeline || !_sizePipeline) return nil;
+    _texturePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_raycast_texture"] error:error];
+    _upscalePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_upscale"] error:error];
+    if (!_raycastPipeline || !_sizePipeline || !_texturePipeline || !_upscalePipeline) return nil;
     _queue = [_device newCommandQueue];
 
     // Defaults (documented in the header).
@@ -137,6 +141,7 @@ static simd_float3 BKFloat3(N3Vector v)
     _specular = 0.2f;
     _specularPower = 10;
     _missValue = NAN;                           // NAN = use the volume's outOfBoundsValue
+    _clipPlane = N3PlaneMake(N3VectorZero, N3VectorMake(0, 0, 1));
     return self;
 }
 
@@ -266,6 +271,11 @@ static simd_float3 BKFloat3(N3Vector v)
     p->slabThickness = (float)MAX(_slabThickness, 0.0);
     p->useSlab = _slabEnabled ? 1 : 0;
 
+    p->clipPoint = BKFloat3(_clipPlane.point);
+    simd_float3 clipNormal = BKFloat3(_clipPlane.normal);
+    p->clipNormal = simd_length(clipNormal) > 1e-6f ? simd_normalize(clipNormal) : simd_make_float3(0, 0, 1);
+    p->useClip = _clipPlaneEnabled ? 1 : 0;
+
     p->stepSize = _sampleSpacing > 0 ? (float)_sampleSpacing : (float)(0.5 * vt.minPixelSpacing);
     if (!(p->stepSize > 0)) p->stepSize = 0.5f;
     p->opacityUnitDistance = _opacityUnitDistance > 0 ? _opacityUnitDistance : 1.0f;
@@ -339,6 +349,64 @@ static simd_float3 BKFloat3(N3Vector v)
     return [[BKRenderResult alloc] initWithWidth:width height:height
                                             rgba:[NSData dataWithBytes:colorBuffer.contents length:pixels * 4]
                                           floats:[NSData dataWithBytes:valueBuffer.contents length:pixels * sizeof(float)]];
+}
+
+// Exposes the queue for on-screen views (see header).
+- (id<MTLCommandQueue>)commandQueue
+{
+    return _queue;
+}
+
+// What: ray-casts the current settings straight into `texture`, without waiting.
+// Why: the interactive 3D view renders into the screen's drawable on the GPU; the
+// caller commits and presents, so the main thread is never blocked on the GPU.
+- (BOOL)encodeRenderToTexture:(id<MTLTexture>)texture
+                commandBuffer:(id<MTLCommandBuffer>)commandBuffer
+              backgroundColor:(simd_float4)backgroundColor
+                        error:(NSError **)error
+{
+    if (!_volumeTexture) {
+        if (error) *error = BKRendererError(13, @"No volume has been set.");
+        return NO;
+    }
+    NSUInteger width = texture.width, height = texture.height;
+    if (width == 0 || height == 0) {
+        if (error) *error = BKRendererError(14, @"The output image size is zero.");
+        return NO;
+    }
+
+    BKTransferFunction *tf = [self effectiveTransferFunction];
+    [self updateTransferFunctionTexture:tf];
+
+    BKRenderParams params;
+    if (![self fillParams:&params width:width height:height tf:tf error:error]) return NO;
+
+    id<MTLComputeCommandEncoder> enc = [commandBuffer computeCommandEncoder];
+    [enc setComputePipelineState:_texturePipeline];
+    [enc setTexture:_volumeTexture.texture atIndex:0];
+    [enc setTexture:_tfTexture atIndex:1];
+    [enc setTexture:texture atIndex:2];
+    [enc setBytes:&params length:sizeof(params) atIndex:0];
+    [enc setBytes:&backgroundColor length:sizeof(backgroundColor) atIndex:1];
+    [enc dispatchThreadgroups:MTLSizeMake((width + 7) / 8, (height + 7) / 8, 1)
+        threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+    [enc endEncoding];
+    return YES;
+}
+
+// What: stretches `source` over `target` with linear filtering (one GPU pass).
+// Why: low-resolution frames while interacting must still fill the whole view.
+- (void)encodeUpscaleFromTexture:(id<MTLTexture>)source
+                       toTexture:(id<MTLTexture>)target
+                   commandBuffer:(id<MTLCommandBuffer>)commandBuffer
+{
+    id<MTLComputeCommandEncoder> enc = [commandBuffer computeCommandEncoder];
+    [enc setComputePipelineState:_upscalePipeline];
+    [enc setTexture:source atIndex:0];
+    [enc setTexture:target atIndex:1];
+    [enc dispatchThreadgroups:MTLSizeMake((target.width + 7) / 8, (target.height + 7) / 8, 1)
+        threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+    [enc endEncoding];
 }
 
 - (NSUInteger)gpuParameterBlockSize

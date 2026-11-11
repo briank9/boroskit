@@ -160,9 +160,9 @@ and lighting presets, and XML or binary plists. None of these need AppKit, so it
 on iPad too.
 
 **Not supported yet:**
-- **The preset's background colour** is stored in the preset but not drawn. The
-  renderer outputs a transparent background, and the display draws the colour behind
-  it.
+- **The preset's background colour** is stored in the preset. The offscreen renderer
+  outputs a transparent background; the interactive 3D view (`BKVolumeView`) paints
+  the preset's colour behind the volume.
 - **Convolution filters** (e.g. "Basic Smooth 5x5", which Horos applies to the volume
   before rendering) are stored by name but not applied.
 - **"Inverted polarity"** (a macOS display setting Horos checks) is ignored.
@@ -220,6 +220,70 @@ forth exactly.
 - Not yet used by Boros 6: adopting it in the app's image view is the next part
   of step 3 (see below).
 
+## The interactive 3D view (`BKVolumeView`, `BKVolumeScene`, `BKVolumeCamera`)
+
+### What it does, in plain terms
+
+This is the Metal replacement for the VTK view in the 3D (VR) window, for Mac and
+iPad. It has three parts:
+
+- **The camera** (`BKVolumeCamera`, in Render): what you look at and from where.
+  It does the moves of the VR window: trackball rotate (a drag across the whole
+  view turns 200°, like VTK), pan (the volume follows the pointer exactly), zoom,
+  roll, reset, and the standard views. The standard views match the Horos
+  buttons: front (`coView`), left side (`saView`, also Horos' reset view), right
+  side (`saViewOpposite`), from the feet (`axView`), plus back and from above.
+  Switching views keeps the zoom, as in Horos.
+- **The scene** (`BKVolumeScene`, in Render): everything that is shown, without
+  the screen: the volume, the camera, the preset, window/level, the background
+  colour and the quality while you move. The window/level drag uses the VR
+  window's formula: per mouse step, level -= dy x WW/100 and width += dx x WW/100.
+  For simple presets this moves the colours and opacity; for 16-bit presets it
+  moves and stretches the first curve, as Horos' CLUT editor does.
+- **The view** (`BKVolumeView`, in Display): an `NSView` on the Mac and a `UIView`
+  on iPad. The graphics chip draws the 3D image straight into the screen, so no
+  pixels are copied back and the app never waits for the GPU. Like the 2D view,
+  it offers actions (rotate, pan, zoom, roll, window/level, standard views, crop,
+  clipping plane) and each app decides which mouse or touch gesture triggers them.
+
+### Quality while you move (adaptive, not always lower)
+
+Horos always lowers the resolution while you rotate, which makes the image swim
+even on fast computers. Here the scene measures how long each frame takes on the
+graphics chip and only lowers quality **if full quality would miss the frame
+budget** (16 ms, about 60 frames per second, by default):
+
+- If full quality fits, rotation stays at full quality.
+- If not, it steps down one level at a time: 75 % resolution, 50 %, then 50 % with
+  half as many samples per ray, then 35 %. It steps back up when there is clearly
+  room (the finer level is estimated to fit in 80 % of the budget), so it doesn't
+  flicker between levels.
+- A full-quality frame is always drawn once you stop (after 0.25 s without a move,
+  or when the app says the drag ended).
+
+The decision is two small functions (`BKInitialInteractiveQualityLevel`,
+`BKNextInteractiveQualityLevel`) with their own tests. `currentQualityLevel`,
+`lastFrameTime` and `lastFullQualityFrameTime` show what is happening.
+
+### Also new in the renderer
+
+- **Render into a GPU texture** (`-encodeRenderToTexture:commandBuffer:...`):
+  the same ray-casting code as the offscreen render (one shared function in the
+  shader, so they cannot drift apart), written straight into the screen image
+  over the background colour.
+- **Clipping plane** (`clipPlane`, `clipPlaneEnabled`): cuts away everything on
+  one side of a plane. This is the building block for the VR window's scissors.
+- **Lighting** was already in place: the light sits at the viewer, and each sample
+  gets ambient + diffuse + specular light from the local surface direction (the
+  value gradient), with the preset's lighting values.
+
+### Limits for now
+
+- The view isn't used by Boros 6 yet (see step 4 below).
+- No PET/CT fusion (a second, blended volume), no 3D measurements or point
+  picking on the surface, and no movie/turntable export yet.
+- Volumes larger than 2048 voxels per side can't be loaded onto the GPU.
+
 ## The plan, step by step
 
 1. **Metal volume engine**: this package. Done: composite, MIP, MinIP and
@@ -230,7 +294,7 @@ forth exactly.
    tables); overlays (ROIs, the panorex curve, crosshairs, measurements) are
    drawn with Apple's standard 2D drawing (Core Graphics), which works with
    touch and Apple Pencil on iPad.
-4. **3D window on Metal** in Boros 6, behind a switch, so it can be compared
+4. **3D window on Metal** (started: `BKVolumeView`) in Boros 6, behind a switch, so it can be compared
    side by side with the old VTK version.
 5. **Meshes**: bone surfaces, intraoral scans (STL/PLY) and implant models,
    drawn with Metal. This is the base for the CMF workspace and implant

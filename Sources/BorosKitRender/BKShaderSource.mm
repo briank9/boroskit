@@ -66,19 +66,21 @@ static uchar4 bk_pack(float4 c)
     return uchar4(clamp(c, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
 
-// One thread = one output pixel. Builds the ray in patient space, clips it to the
-// volume/crop box (in voxel space; the transform is affine so the ray parameter t is
-// the same in both spaces) and to the slab, then marches through it.
-kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
-                       texture2d<float> transferFn   [[texture(1)]],
-                       constant BKRenderParams &p    [[buffer(0)]],
-                       device uchar4 *colorOut       [[buffer(1)]],
-                       device float  *valueOut       [[buffer(2)]],
-                       uint2 gid                     [[thread_position_in_grid]])
-{
-    if (gid.x >= p.width || gid.y >= p.height) return;
-    uint index = gid.y * p.width + gid.x;
+// The result of tracing one ray: the full-precision value (projected CT value, or the
+// accumulated opacity in composite mode) and the colour (premultiplied by alpha).
+struct BKTraceResult {
+    float value;
+    float4 color;
+};
 
+// Traces the ray of output pixel `gid`. Shared by every kernel below, so the buffer
+// output (exports, tests) and the texture output (on-screen 3D view) can never differ.
+// Builds the ray in patient space, clips it to the volume/crop box (in voxel space; the
+// transform is affine so the ray parameter t is the same in both spaces), to the slab
+// and to the clipping plane, then marches through what is left.
+static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transferFn,
+                              constant BKRenderParams &p, uint2 gid)
+{
     constexpr sampler linearSampler(coord::normalized, filter::linear, address::clamp_to_edge);
     constexpr sampler tfSampler(coord::normalized, filter::linear, address::clamp_to_edge);
 
@@ -137,13 +139,28 @@ kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
         }
     }
 
+    if (p.useClip != 0) {
+        // Clipping ("scissors") plane: keep only points with dot(x - clipPoint, n) <= 0,
+        // i.e. cut away the side the normal points to. s(t) = c0 + t*cn along the ray.
+        float c0 = dot(origin - p.clipPoint, p.clipNormal);
+        float cn = dot(dir, p.clipNormal);
+        if (fabs(cn) < 1e-6f) {
+            if (c0 > 0.0f) tHi = -INFINITY;               // ray runs parallel, on the cut side
+        } else if (cn > 0.0f) {
+            tHi = min(tHi, -c0 / cn);                    // ray moves into the cut side
+        } else {
+            tLo = max(tLo, -c0 / cn);                    // ray comes out of the cut side
+        }
+    }
+
     bool composite = (p.mode == BKModeComposite);
+    BKTraceResult r;
 
     if (!(tHi >= tLo) || isinf(tLo) || isinf(tHi)) {
         // Ray misses the volume (or the slab).
-        valueOut[index] = composite ? 0.0f : p.outOfBoundsValue;
-        colorOut[index] = composite ? uchar4(0) : uchar4(0, 0, 0, 255);
-        return;
+        r.value = composite ? 0.0f : p.outOfBoundsValue;
+        r.color = composite ? float4(0.0f) : float4(0.0f, 0.0f, 0.0f, 1.0f);
+        return r;
     }
 
     // Evenly spaced samples in the middle of n equal segments: always at least one,
@@ -167,6 +184,8 @@ kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
             float a = 1.0f - pow(1.0f - min(c.a, 0.9999f), exponent);
             float3 rgb = c.rgb;
             if (p.shading != 0) {
+                // Phong lighting from the value gradient (the "surface" normal), with
+                // the light at the viewer: ambient + diffuse * cos + specular * cos^power.
                 float3 g = bk_gradient(volume, linearSampler, v, p);
                 float len = length(g);
                 if (len > 1e-3f) {
@@ -179,9 +198,9 @@ kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
             color += (1.0f - alpha) * a * rgb;   // front-to-back compositing
             alpha += (1.0f - alpha) * a;
         }
-        valueOut[index] = alpha;
-        colorOut[index] = bk_pack(float4(color, alpha));
-        return;
+        r.value = alpha;
+        r.color = float4(color, alpha);
+        return r;
     }
 
     // MIP / MinIP / Average.
@@ -195,9 +214,55 @@ kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
     }
     if (p.mode == BKModeAverage) result /= (float)n;
 
-    valueOut[index] = result;
     float gray = clamp((result - (p.windowCenter - 0.5f * p.windowWidth)) / max(p.windowWidth, 1e-6f), 0.0f, 1.0f);
-    colorOut[index] = bk_pack(float4(gray, gray, gray, 1.0f));
+    r.value = result;
+    r.color = float4(gray, gray, gray, 1.0f);
+    return r;
+}
+
+// One thread = one output pixel, written to CPU-readable buffers (8-bit RGBA + float).
+// Used by -renderWithWidth:height:error: (exports, MPR slabs, tests).
+kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
+                       texture2d<float> transferFn   [[texture(1)]],
+                       constant BKRenderParams &p    [[buffer(0)]],
+                       device uchar4 *colorOut       [[buffer(1)]],
+                       device float  *valueOut       [[buffer(2)]],
+                       uint2 gid                     [[thread_position_in_grid]])
+{
+    if (gid.x >= p.width || gid.y >= p.height) return;
+    uint index = gid.y * p.width + gid.x;
+    BKTraceResult r = bk_trace(volume, transferFn, p, gid);
+    valueOut[index] = r.value;
+    colorOut[index] = bk_pack(r.color);
+}
+
+// One thread = one output pixel, written straight into a GPU texture (e.g. the screen's
+// drawable) so the 3D view never copies pixels back to the CPU. The colour is laid over
+// an opaque background colour, so the result can be shown as is.
+kernel void bk_raycast_texture(texture3d<float> volume                      [[texture(0)]],
+                               texture2d<float> transferFn                  [[texture(1)]],
+                               texture2d<float, access::write> target       [[texture(2)]],
+                               constant BKRenderParams &p                   [[buffer(0)]],
+                               constant float4 &background                  [[buffer(1)]],
+                               uint2 gid                                    [[thread_position_in_grid]])
+{
+    if (gid.x >= p.width || gid.y >= p.height) return;
+    BKTraceResult r = bk_trace(volume, transferFn, p, gid);
+    float3 rgb = r.color.rgb + (1.0f - r.color.a) * background.rgb;  // colour is premultiplied
+    target.write(float4(clamp(rgb, 0.0f, 1.0f), 1.0f), gid);
+}
+
+// Scales a (low-resolution) image up to the size of `target` with linear filtering.
+// Used while the user rotates or zooms: the 3D image is ray-cast at reduced resolution
+// for speed, then stretched to fill the view (Horos does the same with its LOD setting).
+kernel void bk_upscale(texture2d<float> source                 [[texture(0)]],
+                       texture2d<float, access::write> target  [[texture(1)]],
+                       uint2 gid                               [[thread_position_in_grid]])
+{
+    if (gid.x >= target.get_width() || gid.y >= target.get_height()) return;
+    constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
+    float2 uv = (float2(gid) + 0.5f) / float2(target.get_width(), target.get_height());
+    target.write(source.sample(s, uv), gid);
 }
 
 // Test helper: reports the size of the parameter block as the GPU sees it, so a unit

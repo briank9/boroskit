@@ -7,3 +7,5 @@
 #import "BKVolumeRenderer.h"
 #import "BKPreset.h"
 #import "BKPresetLoader.h"
+#import "BKVolumeCamera.h"
+#import "BKVolumeScene.h"

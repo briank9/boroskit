@@ -34,6 +34,8 @@ typedef simd_float3x3 bk_float3x3;
     bk_float3 cameraForward;      /* unit viewing direction */ \
     bk_float3 slabPoint;          /* a point on the slab's centre plane (patient mm) */ \
     bk_float3 slabNormal;         /* unit normal of the slab's centre plane */ \
+    bk_float3 clipPoint;          /* a point on the clipping ("scissors") plane, patient mm */ \
+    bk_float3 clipNormal;         /* unit normal; the side it points to is cut away */ \
     float viewWidth;              /* ortho: image width in mm; perspective: 2*tan(hfov/2) */ \
     float viewHeight;             /* ortho: image height in mm; perspective: 2*tan(vfov/2) */ \
     float stepSize;               /* requested distance between samples along a ray, mm */ \
@@ -55,7 +57,9 @@ typedef simd_float3x3 bk_float3x3;
     int32_t mode;                 /* BKRenderMode */ \
     int32_t projection;           /* BKProjection */ \
     int32_t useSlab;              /* 1 = limit rays to the slab */ \
-    int32_t shading;              /* 1 = gradient shading in composite mode */
+    int32_t shading;              /* 1 = gradient shading in composite mode */ \
+    int32_t useClip;              /* 1 = cut away the half-space in front of the clipping plane */ \
+    int32_t paddingForAlignment;  /* keeps the scalar tail a multiple of 8 bytes */
 
 typedef struct BKRenderParams {
     BK_RENDER_PARAMS_FIELDS

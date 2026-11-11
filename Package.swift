@@ -67,8 +67,10 @@ let package = Package(
         // --- BorosKitDisplay: 2D image display for Mac and iPad (replaces OpenGL DCMView drawing) ---
         .target(
             name: "BorosKitDisplay",
-            // Only Core is needed (N3 geometry, N3BezierPath for curve overlays).
-            dependencies: ["BorosKitCore"],
+            // Core: N3 geometry, N3BezierPath for curve overlays.
+            // Render: BKVolumeScene/BKVolumeRenderer for the interactive 3D view (BKVolumeView),
+            // so all on-screen views live in one UI module and Render stays UI-free.
+            dependencies: ["BorosKitCore", "BorosKitRender"],
             path: "Sources/BorosKitDisplay",
             publicHeadersPath: "include",
             cSettings: [
@@ -90,7 +92,7 @@ let package = Package(
         ),
         .testTarget(
             name: "BorosKitDisplayTests",
-            dependencies: ["BorosKitDisplay", "BorosKitCore"],
+            dependencies: ["BorosKitDisplay", "BorosKitCore", "BorosKitRender"],
             path: "Tests/BorosKitDisplayTests",
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),

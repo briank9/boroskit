@@ -21,6 +21,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <Metal/Metal.h>
+#import <simd/simd.h>
 #import "N3Geometry.h"
 
 @class CPRVolumeData, BKTransferFunction, BKVolumeTexture;
@@ -110,6 +111,13 @@ typedef NS_ENUM(int32_t, BKProjection) {
 @property (nonatomic) N3Vector cropMin;
 @property (nonatomic) N3Vector cropMax;
 
+// --- Clipping plane ("scissors") ---------------------------------------------------
+// When enabled, everything on the side of clipPlane that its normal points to is cut
+// away (patient mm). Why: the VR window's scissors / clipping tools remove part of
+// the volume to look inside; one plane is the building block for those.
+@property (nonatomic) BOOL clipPlaneEnabled;
+@property (nonatomic) N3Plane clipPlane;
+
 // --- Appearance ------------------------------------------------------------------
 // Grayscale window for MIP / MinIP / Average output (rgba8Data). floatData is never
 // windowed. Defaults: centre 40, width 400 (soft-tissue CT).
@@ -142,6 +150,29 @@ typedef NS_ENUM(int32_t, BKProjection) {
 - (nullable BKRenderResult *)renderWithWidth:(NSUInteger)width
                                       height:(NSUInteger)height
                                        error:(NSError * _Nullable * _Nullable)error;
+
+// --- GPU-only output (on-screen views) ----------------------------------------------
+// The command queue this renderer submits to. On-screen views create their command
+// buffers here so the 3D image and its presentation are ordered on one queue.
+@property (nonatomic, readonly) id<MTLCommandQueue> commandQueue;
+
+// Encodes a render of the current settings into `texture` (its full size; it needs
+// MTLTextureUsageShaderWrite, e.g. a CAMetalLayer drawable with framebufferOnly = NO)
+// and returns WITHOUT waiting for the GPU. The colour is laid over the opaque
+// `backgroundColor` (RGBA 0..1, alpha ignored). Why: the 3D view must never block the
+// main thread or copy pixels back to the CPU; the caller commits the command buffer
+// (and presents the drawable) itself. Returns NO + error if no volume is set.
+- (BOOL)encodeRenderToTexture:(id<MTLTexture>)texture
+                commandBuffer:(id<MTLCommandBuffer>)commandBuffer
+              backgroundColor:(simd_float4)backgroundColor
+                        error:(NSError * _Nullable * _Nullable)error;
+
+// Encodes a linear-filtered resize of `source` into `target` (target needs
+// MTLTextureUsageShaderWrite). Why: during interaction the 3D image is rendered at a
+// lower resolution and stretched to the view, like Horos' LOD.
+- (void)encodeUpscaleFromTexture:(id<MTLTexture>)source
+                       toTexture:(id<MTLTexture>)target
+                   commandBuffer:(id<MTLCommandBuffer>)commandBuffer;
 
 // For tests: size in bytes of the parameter block as the GPU compiler sees it, so
 // the CPU/GPU layouts can be checked to match.

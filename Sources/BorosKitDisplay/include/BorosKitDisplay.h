@@ -4,3 +4,4 @@
 #import "BKImageLayerRenderer.h"
 #import "BKOverlay.h"
 #import "BKImageView.h"
+#import "BKVolumeView.h"
