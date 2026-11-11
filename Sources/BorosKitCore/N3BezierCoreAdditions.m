@@ -35,6 +35,12 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Higher-level curve tools built on N3BezierCore: total length, points at equal spacing
+ * along the curve, the closest point on the curve to a position, tangents and normals,
+ * and intersections with planes - what the CPR operations need to sample along the arch.
+ */
+
 #import "N3BezierCoreAdditions.h"
 
 

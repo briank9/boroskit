@@ -35,6 +35,11 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Objective-C wrapper around N3BezierCore so the rest of the app can work with curves
+ * as objects (create, append, copy, transform, measure, iterate).
+ */
+
 #import "N3BezierPath.h"
 #import "N3Geometry.h"
 #import "N3BezierCore.h"

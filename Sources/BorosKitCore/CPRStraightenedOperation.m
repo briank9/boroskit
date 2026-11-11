@@ -35,6 +35,15 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Builds a "straightened" curved reformat: the curve drawn along the arch is sampled at
+ * equal steps, and at each step a line of pixels is taken perpendicular to the curve,
+ * so the curved jaw is laid out flat as a rectangle. With a slab, several parallel
+ * layers are sampled and then collapsed by CPRProjectionOperation (MIP, mean,
+ * radiograph...). The row filling itself is split into many small
+ * CPRHorizontalFillOperation jobs that run in parallel.
+ */
+
 #import "CPRStraightenedOperation.h"
 #import "CPRGeneratorRequest.h"
 #import "N3Geometry.h"

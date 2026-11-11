@@ -35,6 +35,13 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Builds a "stretched" curved reformat - the classic panoramic view. Unlike the
+ * straightened mode, it keeps the curve's true distances along a projection direction,
+ * so the image is unrolled without twisting the anatomy around the curve. Slab
+ * sampling, projection and parallel row filling work like the straightened operation.
+ */
+
 #import "CPRStretchedOperation.h"
 #import "CPRGeneratorRequest.h"
 #import "N3Geometry.h"

@@ -35,6 +35,12 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * A plain 16-bit pixel buffer used when exporting CPR images at full depth (e.g. 16-bit
+ * DICOM export of the panorex). In Horos it was an NSImageRep; in BorosKit it is a
+ * simple object so it also works on iPad.
+ */
+
 #import "CPRUnsignedInt16ImageRep.h"
 
 

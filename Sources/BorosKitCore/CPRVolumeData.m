@@ -35,6 +35,15 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * The engine's 3D image: a block of float values (CT numbers, usually HU) plus the
+ * transform from patient millimetres to voxel positions. Everything in the CPR engine
+ * reads the scan through this class. It supports interpolated lookups at any mm
+ * position, keeps track of readers so the data is not freed while in use, and can be
+ * built from raw floats + DICOM geometry (see the Orientation category) without any
+ * Mac-only code, so it also works on iPad.
+ */
+
 #import "CPRVolumeData.h"
 #import "CPRUnsignedInt16ImageRep.h"
 // BorosKit: <libkern/OSAtomic.h> is deprecated by Apple; replaced with C11

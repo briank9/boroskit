@@ -35,6 +35,12 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Base class for every CPR job that runs on the generator's background queue. It holds
+ * the request and the source volume, and subclasses (straightened, stretched, oblique)
+ * fill in the actual image-making work. The finished result is a new CPRVolumeData.
+ */
+
 #import "CPRGeneratorOperation.h"
 
 

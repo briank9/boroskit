@@ -35,6 +35,12 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Low-level, fast C implementation of 3D bezier paths (the curves drawn along the jaw):
+ * storing move/line/curve segments, iterating over them, flattening curves into short
+ * straight segments, and reference counting so paths can be shared between threads.
+ */
+
 #include "N3BezierCore.h"
 // BorosKit: imported explicitly; it used to arrive indirectly through the
 // macOS-only ApplicationServices umbrella header.

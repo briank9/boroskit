@@ -35,6 +35,16 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * The CPR "generator" is the front desk of the panorex engine. A view asks it for an
+ * image by handing it a CPRGeneratorRequest (what to make: straightened, stretched or a
+ * flat oblique slice, its size, slab thickness and projection mode). The generator turns
+ * that request into a background operation, runs it on a shared work queue so the
+ * interface never freezes, and tells its delegate when the finished image is ready.
+ * Requests can be synchronous (wait for the result) or asynchronous (newer requests
+ * replace older ones while the user is still dragging).
+ */
+
 #import "CPRGenerator.h"
 #import "CPRVolumeData.h"
 #import "CPRGeneratorRequest.h"

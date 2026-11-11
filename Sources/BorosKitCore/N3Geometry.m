@@ -35,6 +35,12 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Basic 3D maths used everywhere: vectors (add, scale, dot/cross product, normalize),
+ * lines, planes, and 4x4 affine transforms (rotate, scale, translate, invert, concat)
+ * in patient millimetres. "N3" stands for the Nitrogen 3D geometry library from OsiriX.
+ */
+
 #include "N3Geometry.h"
 // BorosKit: Foundation imported explicitly. On macOS it arrived indirectly through
 // ApplicationServices; on iOS nothing else brings it in.

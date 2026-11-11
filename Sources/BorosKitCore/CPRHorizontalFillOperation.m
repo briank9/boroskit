@@ -35,6 +35,12 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Fills a block of image rows by sampling the volume along straight lines between
+ * precomputed start points and direction vectors. The CPR operations cut each image
+ * into many of these small jobs so all CPU cores work at once.
+ */
+
 #import "CPRHorizontalFillOperation.h"
 #import "CPRVolumeData.h"
 #import "N3Geometry.h"

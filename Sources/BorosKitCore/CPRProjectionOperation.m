@@ -35,6 +35,12 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Collapses a slab (a stack of parallel sampled layers) into one image: maximum (MIP),
+ * minimum (MinIP), mean, or the simulated panoramic X-ray ("radiograph", Beer-Lambert
+ * absorption through the slab). Uses Apple's Accelerate (vDSP) for speed.
+ */
+
 #import "CPRProjectionOperation.h"
 #include <Accelerate/Accelerate.h>
 #import "CPRVolumeData.h"

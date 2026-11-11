@@ -35,6 +35,14 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * A CPRGeneratorRequest is the "order form" for one CPR image: the output size in
+ * pixels, the slab thickness and how many samples to take through it, the projection
+ * mode (MIP, MinIP, mean, radiograph), and the geometry - a curve (bezier path) for
+ * straightened/stretched images or a plane for oblique slices. Two requests that
+ * describe the same image compare equal, so repeated identical requests can be skipped.
+ */
+
 #import "CPRGeneratorRequest.h"
 #import "N3BezierPath.h"
 #import "CPRStraightenedOperation.h"

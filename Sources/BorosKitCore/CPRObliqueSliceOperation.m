@@ -35,6 +35,14 @@
      PURPOSE.
  ============================================================================*/
 
+/* BOROS OVERVIEW (plain language)
+ * Makes a flat slice (or slab) through the volume at any angle - used for the
+ * cross-sections perpendicular to the arch and for oblique planes. The plane is
+ * described by an origin and two directions in patient millimetres; pixels are sampled
+ * from the volume with the chosen interpolation and, for a slab, collapsed by
+ * CPRProjectionOperation.
+ */
+
 #import "CPRObliqueSliceOperation.h"
 #import "CPRHorizontalFillOperation.h"
 #import "CPRProjectionOperation.h"
