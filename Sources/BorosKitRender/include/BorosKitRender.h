@@ -5,3 +5,5 @@
 #import "BKTransferFunction.h"
 #import "BKVolumeTexture.h"
 #import "BKVolumeRenderer.h"
+#import "BKPreset.h"
+#import "BKPresetLoader.h"
