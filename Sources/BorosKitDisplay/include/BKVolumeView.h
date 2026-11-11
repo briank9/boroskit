@@ -50,6 +50,15 @@ NS_ASSUME_NONNULL_BEGIN
 // Seconds without interaction before the full-quality frame (default 0.25).
 @property (nonatomic) NSTimeInterval idleDelay;
 
+// YES (default): while the user moves the model, aim for one new picture per screen
+// refresh (8.3 ms on a 120 Hz screen) by setting scene.targetInteractiveFrameTime when
+// the view enters a window. Set NO to keep your own budget in the scene.
+@property (nonatomic) BOOL followsDisplayRefreshRate;
+
+// Diagnostic: when YES, logs frames per second, GPU time per frame and the quality level
+// about once a second while the view is drawing (default NO).
+@property (nonatomic) BOOL logsFrameTiming;
+
 // Convenience: loads a volume into the scene (fits the camera) and redraws.
 - (BOOL)setVolumeData:(CPRVolumeData *)volumeData error:(NSError * _Nullable * _Nullable)error;
 

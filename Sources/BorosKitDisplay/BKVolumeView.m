@@ -15,12 +15,47 @@
 #import "BKPreset.h"
 #import <QuartzCore/QuartzCore.h>
 
+// What: the display link's target; forwards each screen refresh to the view.
+// Why: a display link keeps a strong reference to its target. Pointing it at this small
+// object (which holds the view weakly) means the view can still be freed normally.
+@interface BKVolumeViewDisplayLinkProxy : NSObject
+@property (nonatomic, weak) BKVolumeView *view;
+@end
+
+@interface BKVolumeView ()
+- (void)displayLinkFired;
+@end
+
+@implementation BKVolumeViewDisplayLinkProxy
+// What: one screen refresh happened. Why: see -[BKVolumeView displayLinkFired].
+- (void)tick:(id)link
+{
+    [self.view displayLinkFired];
+}
+@end
+
+// Screen refreshes with nothing to draw before the display link is paused again.
+// Why: a running display link wakes the app 120 times a second; pausing it when the
+// picture is still costs nothing and it restarts on the next change.
+static const NSUInteger kBKIdleTicksBeforePause = 30;
+
 @implementation BKVolumeView {
     CAMetalLayer *_metalLayer;
-    BOOL _redrawScheduled;   // a frame is queued on the main queue
+    BOOL _redrawScheduled;   // a frame is queued on the main queue (fallback without display link)
     BOOL _frameInFlight;     // the GPU is still working on the previous frame
     BOOL _redrawPending;     // something changed while a frame was in flight
     BOOL _autoInteraction;   // interaction started by a move (ends after idleDelay)
+    // Frame pacing (see -setNeedsRedraw). Typed `id` because CADisplayLink exists on the
+    // Mac only from macOS 14, while the package still supports macOS 12.
+    id _displayLink;
+    BKVolumeViewDisplayLinkProxy *_displayLinkProxy;
+    BOOL _needsFrame;        // a change is waiting for the next screen refresh
+    NSUInteger _idleTicks;   // refreshes in a row with nothing to draw
+    // Timing log (logsFrameTiming): frames and GPU time summed over about one second.
+    CFTimeInterval _timingStart;
+    NSUInteger _timingFrames;
+    double _timingGPUSum;
+    NSInteger _timingWorstLevel;
 }
 
 #pragma mark - Setup
@@ -73,6 +108,7 @@
     self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
 #endif
     _idleDelay = 0.25;
+    _followsDisplayRefreshRate = YES;
     NSError *error = nil;
     _scene = [[BKVolumeScene alloc] initWithDevice:nil error:&error];
     if (!_scene)
@@ -126,6 +162,14 @@
     [super viewDidChangeBackingProperties];
     [self updateLayerGeometry];
 }
+
+// What: the view was put in (or taken out of) a window.
+// Why: the display link belongs to the screen the window is on, so it is made here.
+- (void)viewDidMoveToWindow
+{
+    [super viewDidMoveToWindow];
+    [self updateDisplayLink];
+}
 #else
 // What: UIKit layout pass.
 - (void)layoutSubviews
@@ -133,20 +177,134 @@
     [super layoutSubviews];
     [self updateLayerGeometry];
 }
+
+// What: the view was put in (or taken out of) a window. Why: see the macOS version.
+- (void)didMoveToWindow
+{
+    [super didMoveToWindow];
+    [self updateDisplayLink];
+}
 #endif
+
+#pragma mark - Frame pacing
+
+// What: the screen's top refresh rate (60 on most displays, 120 on ProMotion).
+- (NSInteger)screenMaximumFramesPerSecond
+{
+#if TARGET_OS_OSX
+    NSScreen *screen = self.window.screen ?: NSScreen.mainScreen;
+    NSInteger fps = screen.maximumFramesPerSecond;
+#else
+    NSInteger fps = (self.window.screen ?: UIScreen.mainScreen).maximumFramesPerSecond;
+#endif
+    return fps > 0 ? fps : 60;
+}
+
+// What: creates the display link when the view is in a window and removes it otherwise.
+// Also sets the time budget for a frame while the user moves the model to one screen
+// refresh (8.3 ms at 120 Hz), so the adaptive quality aims for a new picture at every
+// refresh instead of every second one.
+// Why (smoother rotation): before, a frame was drawn whenever a mouse event arrived.
+// Mouse events and screen refreshes do not line up, so some refreshes showed no new
+// picture and others had one ready too early, which looks like stutter. With a display
+// link, frames are drawn in step with the screen.
+// Without a display link (macOS 12-13) the older event-driven drawing is used.
+- (void)updateDisplayLink
+{
+    [_displayLink invalidate];
+    _displayLink = nil;
+    if (!self.window) return;
+
+    if (_followsDisplayRefreshRate)
+        _scene.targetInteractiveFrameTime = 1.0 / (double)[self screenMaximumFramesPerSecond];
+
+    if (!_displayLinkProxy) {
+        _displayLinkProxy = [[BKVolumeViewDisplayLinkProxy alloc] init];
+        _displayLinkProxy.view = self;
+    }
+    // All CADisplayLink use sits inside this check (macOS 14+ / iOS 15+); older systems
+    // keep _displayLink nil and use the event-driven drawing.
+    if (@available(macOS 14.0, iOS 15.0, *)) {
+#if TARGET_OS_OSX
+        CADisplayLink *link = [self displayLinkWithTarget:_displayLinkProxy selector:@selector(tick:)];
+#else
+        CADisplayLink *link = [CADisplayLink displayLinkWithTarget:_displayLinkProxy selector:@selector(tick:)];
+#endif
+        if (!link) return;
+        NSInteger fps = [self screenMaximumFramesPerSecond];
+        link.preferredFrameRateRange = CAFrameRateRangeMake(MIN(60, fps), fps, fps);
+        // Common modes: keep drawing while a menu is open or the mouse is held down.
+        [link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+        link.paused = !_needsFrame;
+        _displayLink = link;
+    }
+}
+
+// What: one screen refresh. Draws if something changed and the GPU has finished the
+// previous frame; pauses the link after a short time with nothing to draw.
+- (void)displayLinkFired
+{
+    if (_needsFrame && !_frameInFlight) {
+        _needsFrame = NO;
+        _idleTicks = 0;
+        [self renderFrame];
+    } else if (!_needsFrame && !_frameInFlight && ++_idleTicks > kBKIdleTicksBeforePause) {
+        [_displayLink setPaused:YES];
+    }
+}
+
+// What: stops the display link. Why: it would otherwise keep firing at the proxy.
+- (void)dealloc
+{
+    [_displayLink invalidate];
+}
 
 #pragma mark - Drawing
 
 // What: asks for a frame; many requests before it is drawn collapse into one.
 // Why: mouse events arrive faster than frames; drawing each would queue up latency.
+// With a display link the frame is drawn at the next screen refresh; otherwise on the
+// next turn of the main queue (the original behaviour).
 - (void)setNeedsRedraw
 {
+    if (_displayLink) {
+        _needsFrame = YES;
+        _idleTicks = 0;
+        [_displayLink setPaused:NO];
+        return;
+    }
     if (_redrawScheduled) return;
     _redrawScheduled = YES;
     dispatch_async(dispatch_get_main_queue(), ^{
         self->_redrawScheduled = NO;
         [self renderFrame];
     });
+}
+
+// What: adds one finished frame to the timing log and prints a line about once a second.
+// Why: to measure, on real scans, how many pictures per second the 3D view really shows
+// and how long the GPU needs for each, instead of judging smoothness by eye.
+- (void)recordFrameForTimingLog
+{
+    if (!_logsFrameTiming) return;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (_timingFrames == 0 || now - _timingStart > 2.0) {   // first frame, or after a pause
+        _timingStart = now;
+        _timingFrames = 0;
+        _timingGPUSum = 0;
+        _timingWorstLevel = 0;
+    }
+    _timingFrames++;
+    _timingGPUSum += _scene.lastFrameTime;
+    _timingWorstLevel = MAX(_timingWorstLevel, _scene.currentQualityLevel);
+    CFTimeInterval elapsed = now - _timingStart;
+    if (elapsed >= 1.0) {
+        NSLog(@"BKVolumeView timing: %.0f frames/s, GPU %.1f ms per frame, lowest quality level %ld of %lu, drawable %.0f x %.0f, %@",
+              _timingFrames / elapsed, 1000.0 * _timingGPUSum / _timingFrames, (long)_timingWorstLevel,
+              (unsigned long)_scene.qualityLevels.count - 1, _metalLayer.drawableSize.width, _metalLayer.drawableSize.height,
+              _scene.interacting ? @"moving" : @"still");
+        _timingFrames = 0;
+    }
 }
 
 // What: encodes one frame into the next drawable and presents it, without waiting.
@@ -175,6 +333,7 @@
             BKVolumeView *view = weakSelf;
             if (!view) return;
             view->_frameInFlight = NO;
+            [view recordFrameForTimingLog];
             if (view->_redrawPending) {
                 view->_redrawPending = NO;
                 [view setNeedsRedraw];
