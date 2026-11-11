@@ -124,6 +124,50 @@ saved as 16-bit DICOM).
 - Single volume only: no PET/CT fusion yet.
 - The lighting is simple (a light at the viewer). No shadows.
 
+### 3D presets (`BKPreset`, `BKPresetLoader`)
+
+**What it does:** reads the same 3D preset files the VR window uses, such as
+"Standard", "Bone + Skin", "Glossy" and "Vascular", and sets up the Metal engine to
+show the same look.
+
+**Why:** people know these looks. The new engine has to show the same image for the
+same preset, so the move away from VTK isn't noticed.
+
+**How:** a preset file names a colour table, an opacity table and a lighting setting.
+The loader looks these names up the way Horos does:
+- **Colour tables:** "<name>.plist" in the user's CLUTs folder first, then the app's
+  built-in CLUTs folder. You pass both folders to the loader.
+- **Opacity tables and lighting:** the built-in ones are generated with the same
+  formulas Horos uses. You can add the user's own from their settings.
+
+It then builds the colour/opacity rule exactly as `VRView` hands it to VTK:
+- **Simple presets:** a 256-colour table and an opacity curve stretched across the
+  window (WL/WW). Like VTK, colours 0–254 are spaced evenly across the window.
+- **Advanced (16-bit) presets:** colour and opacity points placed directly at HU
+  values. Opacity is the curve height squared, and it falls to 0 at the volume's
+  lowest and highest value.
+- **Lighting:** ambient, diffuse, specular and specular power from the named lighting
+  preset, or off.
+- **Projection:** parallel, or perspective at 30° or 60°.
+
+**Supported:** all 29 built-in presets load with every name resolved (they are in the
+tests). Also supported: the built-in and user colour tables (Red/Green/Blue
+plists), saved 16-bit CLUT files ("curves"/"colors"), the user's own opacity tables
+and lighting presets, and XML or binary plists. None of these need AppKit, so it works
+on iPad too.
+
+**Not supported yet:**
+- **The preset's background colour** is stored in the preset but not drawn. The
+  renderer outputs a transparent background, and the display draws the colour behind
+  it.
+- **Convolution filters** (e.g. "Basic Smooth 5x5", which Horos applies to the volume
+  before rendering) are stored by name but not applied.
+- **"Inverted polarity"** (a macOS display setting Horos checks) is ignored.
+- **Very old OsiriX presets** that stored archived NSColor objects can't be read.
+
+**If a name can't be found**, the loader falls back the way Horos does: "No CLUT",
+"Linear Table" or "Default" lighting. The preset's `warnings` list says what happened.
+
 ## The plan, step by step
 
 1. **Metal volume engine**: this package. Done: composite, MIP, MinIP and
