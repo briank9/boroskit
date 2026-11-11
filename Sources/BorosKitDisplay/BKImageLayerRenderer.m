@@ -1,5 +1,15 @@
 // BorosKitDisplay: BKImage + BKImageLayerRenderer implementation. See the header.
 
+/* BOROS OVERVIEW (plain language)
+ * This file does the heavy lifting that turns a CT slice into a picture on screen.
+ * It takes the grey-scale pixel numbers from the scan, sends them to the graphics
+ * chip (Metal), and applies the brightness and contrast setting (window/level), so
+ * bone, soft tissue and air look the way the clinician expects.
+ * It also keeps a private copy of the image, so the picture stays valid even when
+ * the app reuses its own memory while the user scrolls through slices.
+ * The image view asks this file to repaint every time the picture changes.
+ */
+
 #import "BKImageLayerRenderer.h"
 #import "BKDisplayShaderTypes.h"
 

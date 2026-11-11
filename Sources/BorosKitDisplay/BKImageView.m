@@ -1,5 +1,15 @@
 // BorosKitDisplay: BKImageView implementation (macOS NSView / iOS UIView). See header.
 
+/* BOROS OVERVIEW (plain language)
+ * This file is the on-screen panel that shows one 2D scan slice.
+ * It stacks two layers: the CT picture, painted by the graphics chip, and a thin
+ * layer of marks (measurements, curves, labels) drawn on top. Keeping them separate
+ * means moving a mark does not force the whole picture to be redrawn.
+ * It handles mouse, trackpad and touch input for pan, zoom, rotate, flip and
+ * brightness/contrast changes, and keeps the picture and marks lined up using the
+ * same view transform. It works on both the Mac and the iPad.
+ */
+
 #import "BKImageView.h"
 #import <QuartzCore/QuartzCore.h>
 #import <math.h>

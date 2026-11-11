@@ -1,5 +1,16 @@
 // BorosKitDisplay: BKVolumeView implementation (macOS NSView / iOS UIView). See header.
 
+/* BOROS OVERVIEW (plain language)
+ * This file is the on-screen 3D view of the scan, where the clinician sees the jaw
+ * and skull as a solid model that can be turned around, rather than as slices.
+ * The picture is redrawn by the graphics chip (Metal) whenever something changes.
+ * Gestures rotate, pan and zoom the model. The view can also switch between preset
+ * looks (different tissue emphasis), crop the volume, cut it with a clipping plane,
+ * and adjust brightness and contrast.
+ * While the user is moving the model it draws a fast, lower-detail picture, then a
+ * sharp full-quality frame once the movement stops, which keeps motion smooth.
+ */
+
 #import "BKVolumeView.h"
 #import "BKPreset.h"
 #import <QuartzCore/QuartzCore.h>

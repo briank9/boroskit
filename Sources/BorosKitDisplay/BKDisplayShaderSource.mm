@@ -5,6 +5,16 @@
 // source is embedded and compiled once per GPU with -[MTLDevice newLibraryWithSource:].
 // Objective-C++ only for the readable raw string literal.
 
+/* BOROS OVERVIEW (plain language)
+ * This file holds the small programs (called shaders) that run on the graphics chip
+ * to paint the 2D CT picture.
+ * They take each pixel's number, apply the brightness and contrast setting, look up
+ * its colour, and handle zoom, pan, rotation and flip. Running this on the graphics
+ * chip keeps scrolling and adjusting fast, instead of loading the processor.
+ * The code is stored as text inside this file and compiled on first use. The
+ * clinician never sees it directly; only the image renderer uses it.
+ */
+
 #import <Foundation/Foundation.h>
 #import "BKDisplayShaderTypes.h"
 

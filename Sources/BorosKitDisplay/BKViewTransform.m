@@ -1,5 +1,15 @@
 // BorosKitDisplay: BKViewTransform implementation. See the header for conventions.
 
+/* BOROS OVERVIEW (plain language)
+ * This file holds the rules that decide where each part of the scan appears on screen.
+ * It works out the starting view (the whole image fitted into the window), the
+ * largest zoom that still shows the whole image after it is rotated, and one
+ * combined recipe for placing image points on screen: centre, stretch for non-square
+ * pixels, flip, rotate, zoom, then pan.
+ * The picture, the marks and the mouse all use this same recipe, so a point the
+ * user clicks always matches the same anatomy on screen.
+ */
+
 #import "BKViewTransform.h"
 #import <math.h>
 

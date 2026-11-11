@@ -1,5 +1,15 @@
 // BorosKitDisplay: overlay items and CoreGraphics drawing. See BKOverlay.h.
 
+/* BOROS OVERVIEW (plain language)
+ * This file defines the marks a clinician places on the image and draws them.
+ * Each mark type (for example a line, a measurement, a curve or a text label) is a
+ * small object that knows its shape, colour and thickness, and how to draw itself
+ * using Core Graphics, Apple's 2D drawing system.
+ * It also contains the maths for "is the pointer close to this mark?", which lets
+ * the user grab and move an existing mark. Marks are drawn in a layer above the CT
+ * picture and stay in step with it when the image is zoomed, panned or rotated.
+ */
+
 #import "BKOverlay.h"
 #import "N3BezierPath.h"
 #import <CoreText/CoreText.h>
