@@ -136,6 +136,7 @@ static simd_float3 BKFloat3(N3Vector v)
     _diffuse = 0.8f;
     _specular = 0.2f;
     _specularPower = 10;
+    _missValue = NAN;                           // NAN = use the volume's outOfBoundsValue
     return self;
 }
 
@@ -274,7 +275,8 @@ static simd_float3 BKFloat3(N3Vector v)
     p->tfMax = tf.maximumValue;
     p->windowCenter = _windowCenter;
     p->windowWidth = _windowWidth;
-    p->outOfBoundsValue = vt.outOfBoundsValue;
+    // missValue (if set) overrides the volume's outside value, e.g. to match VTK's.
+    p->outOfBoundsValue = isnan(_missValue) ? vt.outOfBoundsValue : _missValue;
     p->ambient = _ambient;
     p->diffuse = _diffuse;
     p->specular = _specular;

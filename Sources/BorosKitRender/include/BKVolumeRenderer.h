@@ -116,6 +116,12 @@ typedef NS_ENUM(int32_t, BKProjection) {
 @property (nonatomic) float windowCenter;
 @property (nonatomic) float windowWidth;
 
+// Value written to floatData where a ray misses the volume (projection modes only).
+// NAN (the default) = use the volume's outOfBoundsValue (-1000 HU for CPR volumes).
+// Why: the MPR views compare against VTK, which reports the volume's minimum value
+// (e.g. -1024) outside the scan; setting this keeps the "outside" pixels identical.
+@property (nonatomic) float missValue;
+
 // Composite mode only. Defaults to a gray ramp over the volume's value range.
 @property (nonatomic, strong, nullable) BKTransferFunction *transferFunction;
 

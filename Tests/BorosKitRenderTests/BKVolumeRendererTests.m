@@ -203,6 +203,24 @@ static const NSUInteger kSize = 64;
     XCTAssertEqualWithAccuracy([r valueAtX:0 y:0], -372.5f, 0.5f);   // x = 63 is inside the box
 }
 
+// A custom missValue replaces the volume's outside value where rays miss (same
+// cropped setup as above), and NAN restores the default. Why: the Boros 6 MPR bridge
+// sets missValue to VTK's outside value so "outside the scan" pixels match exactly.
+- (void)testMissValueOverridesOutOfBounds
+{
+    if (![self requireGPU]) return;
+    _renderer.mode = BKRenderModeMIP;
+    _renderer.cropMin = N3VectorMake(50, 0, 0);
+    _renderer.cropMax = N3VectorMake(63, 63, 63);
+    _renderer.missValue = -1024.0f;
+    BKRenderResult *r = [self render];
+    XCTAssertEqual([r valueAtX:32 y:32], -1024.0f);                   // missed ray
+    XCTAssertEqualWithAccuracy([r valueAtX:0 y:0], -372.5f, 0.5f);   // hits: unchanged
+    _renderer.missValue = NAN;
+    r = [self render];
+    XCTAssertEqual([r valueAtX:32 y:32], _renderer.volumeTexture.outOfBoundsValue);
+}
+
 // Composite (3D) rendering: with an opacity ramp from 0 at 0 to 1 at 500 only the
 // sphere is visible. The centre ray must be (nearly) opaque and coloured; the
 // corner ray sees nothing.
