@@ -35,12 +35,15 @@
      PURPOSE.
  ============================================================================*/
 
-#import <Cocoa/Cocoa.h>
+// BorosKit: Cocoa replaced by Foundation + CoreGraphics so this engine file
+// builds on both macOS and iOS (no AppKit dependency).
+#import <Foundation/Foundation.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import "CPRGeneratorOperation.h"
 #import "CPRGeneratorRequest.h"
 
 @interface CPRStraightenedOperation : CPRGeneratorOperation {
-    volatile int32_t _outstandingFillOperationCount __attribute__ ((aligned (4)));
+    _Atomic int32_t _outstandingFillOperationCount __attribute__ ((aligned (4)));
     
     float *_floatBytes;
     NSMutableSet *_fillOperations;

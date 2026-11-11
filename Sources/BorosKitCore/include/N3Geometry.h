@@ -38,6 +38,11 @@
 #ifndef _N3GEOMETRY_H_
 #define _N3GEOMETRY_H_
 
+#include <TargetConditionals.h>
+#include <CoreGraphics/CoreGraphics.h>
+// BorosKit: CATransform3D is only a 4x4 matrix struct plus math functions. It is
+// available on macOS and iOS and has nothing to do with drawing, so it is kept to
+// keep the geometry math bit-for-bit identical to Horos.
 #include <QuartzCore/CATransform3D.h>
 
 #ifdef __OBJC__
@@ -157,8 +162,18 @@ void N3VectorApplyTransformToVectors(N3AffineTransform transform, N3VectorArray 
 void N3VectorCrossProductWithVectors(N3VectorArray vectors1, const N3VectorArray vectors2, CFIndex numVectors);
 void N3VectorNormalizeVectors(N3VectorArray vectors, CFIndex numVectors);
 
+// BorosKit: NSPoint only exists on macOS, so the NSPoint helpers are kept for the
+// Mac app but compiled out elsewhere. The CGPoint versions below work everywhere
+// (on macOS NSPoint and CGPoint are the same type).
+#if TARGET_OS_OSX && defined(__OBJC__)
+#import <Foundation/NSGeometry.h>
 CG_INLINE NSPoint NSPointFromN3Vector(N3Vector vector) {return NSMakePoint(vector.x, vector.y);}
 CG_INLINE N3Vector N3VectorMakeFromNSPoint(NSPoint point) {return N3VectorMake(point.x, point.y, 0);}
+#endif
+// Converts a 3D vector to a 2D point by dropping z (portable twin of NSPointFromN3Vector).
+CG_INLINE CGPoint CGPointFromN3Vector(N3Vector vector) {return CGPointMake(vector.x, vector.y);}
+// Converts a 2D point to a 3D vector with z = 0 (portable twin of N3VectorMakeFromNSPoint).
+CG_INLINE N3Vector N3VectorMakeFromCGPoint(CGPoint point) {return N3VectorMake(point.x, point.y, 0);}
 
 extern const N3AffineTransform N3AffineTransformIdentity;
 

@@ -44,7 +44,9 @@
 #import "CPRVolumeData.h"
 #import "CPRHorizontalFillOperation.h"
 #import "CPRProjectionOperation.h"
-#include <libkern/OSAtomic.h>
+// BorosKit: <libkern/OSAtomic.h> is deprecated by Apple; replaced with C11
+// <stdatomic.h>, which behaves the same and works on macOS and iOS.
+#include <stdatomic.h>
 
 static const NSUInteger FILL_HEIGHT = 40;
 static NSOperationQueue *_straightenedOperationFillQueue = nil;
@@ -306,7 +308,7 @@ static NSOperationQueue *_straightenedOperationFillQueue = nil;
             if ([operation isFinished]) {
                 [operation removeObserver:self forKeyPath:@"isFinished"];
                 [self autorelease]; // to balance the retain when we observe operations
-                oustandingFillOperationCount = OSAtomicDecrement32Barrier(&_outstandingFillOperationCount);
+                oustandingFillOperationCount = (atomic_fetch_sub(&_outstandingFillOperationCount, 1) - 1);
                 if (oustandingFillOperationCount == 0) { // done with the fill operations, now do the projection
                     volumeTransform = N3AffineTransformMakeScale(1.0/_sampleSpacing, 1.0/_sampleSpacing, 1.0/[self _slabSampleDistance]);
                     generatedVolume = [[CPRVolumeData alloc] initWithFloatBytesNoCopy:_floatBytes pixelsWide:self.request.pixelsWide pixelsHigh:self.request.pixelsHigh pixelsDeep:[self _pixelsDeep]

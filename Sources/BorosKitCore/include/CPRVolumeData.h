@@ -35,7 +35,10 @@
      PURPOSE.
  ============================================================================*/
 
-#import <Cocoa/Cocoa.h>
+// BorosKit: Cocoa replaced by Foundation + CoreGraphics so this engine file
+// builds on both macOS and iOS (no AppKit dependency).
+#import <Foundation/Foundation.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import "N3Geometry.h"
 
 @class CPRUnsignedInt16ImageRep;
@@ -67,7 +70,7 @@ typedef struct { // build one of these on the stack and then use -[CPRVolumeData
 
 // Interface to the data
 @interface CPRVolumeData : NSObject {
-    volatile int32_t _readerCount __attribute__ ((aligned (4)));
+    _Atomic int32_t _readerCount __attribute__ ((aligned (4)));
     volatile BOOL _isValid;
 
     const float *_floatBytes;
@@ -135,9 +138,23 @@ typedef struct { // build one of these on the stack and then use -[CPRVolumeData
 @end
 
 
-@interface CPRVolumeData (DCMPixAndVolume) // make a nice clean interface between the rest of of Horos that deals with pixlist and all their complications, and fill out our convenient data structure.
+// BorosKit: this category used to be "DCMPixAndVolume" and built the volume from
+// Horos' DCMPix slice objects. DCMPix is part of the Mac app (it pulls in AppKit,
+// DICOM parsing, ROIs...), so the shared engine now takes the plain numbers that
+// were read out of the first DCMPix instead. The Mac app keeps a tiny adapter
+// that reads those numbers from DCMPix and calls this initializer.
+@interface CPRVolumeData (Orientation)
 
-- (id) initWithWithPixList:(NSArray *)pixList volume:(NSData *)volume;
+// Builds a volume from a raw float buffer (no copy) plus its DICOM geometry.
+// origin      = position (mm, patient space) of the first voxel of the first slice (DCMPix originX/Y/Z)
+// orientation = 9 direction cosines: row direction, column direction, slice normal (DCMPix orientationDouble:)
+// spacingX/Y  = in-plane pixel size in mm; spacingZ = slice interval in mm
+// Same math as the old -initWithWithPixList:volume:, including the fallback to an
+// identity orientation when the cosines are degenerate and the -1000 HU outside value.
+- (id)initWithFloatBytesNoCopy:(const float *)floatBytes pixelsWide:(NSUInteger)pixelsWide pixelsHigh:(NSUInteger)pixelsHigh pixelsDeep:(NSUInteger)pixelsDeep
+                        origin:(N3Vector)origin orientation:(const double[9])orientation
+                      spacingX:(double)spacingX spacingY:(double)spacingY spacingZ:(double)spacingZ
+                  freeWhenDone:(BOOL)freeWhenDone;
 
 - (void)getOrientation:(float[6])orientation;
 - (void)getOrientationDouble:(double[6])orientation;

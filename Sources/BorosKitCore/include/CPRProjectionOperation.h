@@ -35,7 +35,10 @@
      PURPOSE.
  ============================================================================*/
 
-#import <Cocoa/Cocoa.h>
+// BorosKit: Cocoa replaced by Foundation + CoreGraphics so this engine file
+// builds on both macOS and iOS (no AppKit dependency).
+#import <Foundation/Foundation.h>
+#import <CoreGraphics/CoreGraphics.h>
 
 enum _CPRProjectionMode {
     CPRProjectionModeVR, // don't use this, it is not implemented

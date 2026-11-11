@@ -39,7 +39,8 @@
 #import "CPRVolumeData.h"
 #import "CPRGeneratorRequest.h"
 #import "CPRGeneratorOperation.h"
-#import "DCMPix.h"
+// BorosKit: the unused DCMPix import was removed; DCMPix belongs to the Horos
+// app layer and is not part of the shared engine.
 
 static NSOperationQueue *_synchronousRequestQueue = nil;
 NSString * const _CPRGeneratorRunLoopMode = @"_CPRGeneratorRunLoopMode";

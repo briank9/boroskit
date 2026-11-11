@@ -35,6 +35,8 @@
      PURPOSE.
  ============================================================================*/
 
+// BorosKit: Foundation imported explicitly (previously came in via Cocoa/ApplicationServices).
+#import <Foundation/Foundation.h>
 #import "N3Geometry.h"
 #import "N3BezierCore.h"
 #import "N3BezierCoreAdditions.h"

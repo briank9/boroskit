@@ -36,9 +36,12 @@
  ============================================================================*/
 
 #import "CPRVolumeData.h"
-#import "DCMPix.h"
 #import "CPRUnsignedInt16ImageRep.h"
-#include <libkern/OSAtomic.h>
+// BorosKit: <libkern/OSAtomic.h> is deprecated by Apple; replaced with C11
+// <stdatomic.h>, which behaves the same and works on macOS and iOS.
+#include <stdatomic.h>
+// BorosKit: vImage/vDSP used to arrive through Cocoa; imported directly now.
+#include <Accelerate/Accelerate.h>
 
 @interface CPRVolumeData ()
 
@@ -160,7 +163,7 @@
     assert(_freeWhenDone == NO); // you can't invalidate the data if it is owned by the CPRVolumeData 
         
     _isValid = NO;
-    OSMemoryBarrier(); // make sure that the _isValid was set
+    atomic_thread_fence(memory_order_seq_cst); // make sure that the _isValid was set (BorosKit: replaces deprecated OSMemoryBarrier, same full barrier)
     while (_readerCount > 0) { // spin until we no know that any readers that were reading before the _isValid was set would have exited
         nanosleep(&rqtp, &rmtp);
     }
@@ -189,13 +192,13 @@
     assert(z < _pixelsDeep);
     assert(x + length < _pixelsWide);
     
-    OSAtomicIncrement32Barrier(&_readerCount);
+    atomic_fetch_add(&_readerCount, 1);
     if (_isValid) {
         memcpy(buffer, &(_floatBytes[x + y*_pixelsWide + z*_pixelsWide*_pixelsHigh]), length * sizeof(float));
-        OSAtomicDecrement32Barrier(&_readerCount);
+        atomic_fetch_sub(&_readerCount, 1);
         return YES;
     } else {
-        OSAtomicDecrement32Barrier(&_readerCount);
+        atomic_fetch_sub(&_readerCount, 1);
         memset(buffer, 0, sizeof(float) * length);
         return NO;
     }
@@ -212,7 +215,7 @@
         return nil;
     }    
     
-    OSAtomicIncrement32Barrier(&_readerCount);
+    atomic_fetch_add(&_readerCount, 1);
     if (_isValid) {
         imageRep = [[CPRUnsignedInt16ImageRep alloc] initWithData:NULL pixelsWide:_pixelsWide pixelsHigh:_pixelsHigh];
         imageRep.pixelSpacingX = [self pixelSpacingX];
@@ -236,10 +239,10 @@
         imageRep.slope = 1;
         imageRep.offset = -1024;
         
-        OSAtomicDecrement32Barrier(&_readerCount);
+        atomic_fetch_sub(&_readerCount, 1);
         return [imageRep autorelease];
     } else {
-        OSAtomicDecrement32Barrier(&_readerCount);
+        atomic_fetch_sub(&_readerCount, 1);
         return nil;
     }    
 }
@@ -254,7 +257,7 @@
     childVolume = [[CPRVolumeData alloc] initWithFloatBytesNoCopy:_floatBytes + (_pixelsWide*_pixelsHigh*z) pixelsWide:_pixelsWide pixelsHigh:_pixelsHigh pixelsDeep:1
                                                   volumeTransform:childVolumeTransform outOfBoundsValue:_outOfBoundsValue freeWhenDone:NO];
     
-    OSAtomicIncrement32Barrier(&_readerCount);
+    atomic_fetch_add(&_readerCount, 1);
     if ([self isDataValid] == NO) {
         [childVolume invalidateData];
     }
@@ -267,7 +270,7 @@
             [_childSubvolumes setObject:childVolume forKey:[NSNumber numberWithInteger:z]];
         }
     }
-    OSAtomicDecrement32Barrier(&_readerCount);
+    atomic_fetch_sub(&_readerCount, 1);
     
     return [childVolume autorelease];
 }
@@ -483,7 +486,7 @@
         return NO;
     }
     
-    OSAtomicIncrement32Barrier(&_readerCount);
+    atomic_fetch_add(&_readerCount, 1);
     if (_isValid) {
         inlineBuffer->floatBytes = _floatBytes;
         inlineBuffer->outOfBoundsValue = _outOfBoundsValue;
@@ -494,7 +497,7 @@
         inlineBuffer->volumeTransform = _volumeTransform;
         return YES;
     } else {
-        OSAtomicDecrement32Barrier(&_readerCount);
+        atomic_fetch_sub(&_readerCount, 1);
         return NO;
     }
 }
@@ -502,7 +505,7 @@
 - (void)releaseInlineBuffer:(CPRVolumeDataInlineBuffer *)inlineBuffer
 {
     if (inlineBuffer->floatBytes != NULL) {
-        OSAtomicDecrement32Barrier(&_readerCount);
+        atomic_fetch_sub(&_readerCount, 1);
     }
     memset(inlineBuffer, 0, sizeof(CPRVolumeDataInlineBuffer));
 }
@@ -527,36 +530,26 @@
 
 @end
 
-@implementation CPRVolumeData (DCMPixAndVolume)
+@implementation CPRVolumeData (Orientation)
 
-- (id)initWithWithPixList:(NSArray *)pixList volume:(NSData *)volume
+// BorosKit: replaces -initWithWithPixList:volume:. The caller now passes the values
+// that used to be read from the first DCMPix (origin, orientation, spacings, sizes)
+// so this file no longer depends on the Horos app. The transform built here is
+// identical to the original: pixel -> DICOM is origin + orientation * spacing, and
+// the stored volumeTransform is its inverse (DICOM -> pixel).
+- (id)initWithFloatBytesNoCopy:(const float *)floatBytes pixelsWide:(NSUInteger)pixelsWide pixelsHigh:(NSUInteger)pixelsHigh pixelsDeep:(NSUInteger)pixelsDeep
+                        origin:(N3Vector)origin orientation:(const double[9])inOrientation
+                      spacingX:(double)spacingX spacingY:(double)spacingY spacingZ:(double)spacingZ
+                  freeWhenDone:(BOOL)freeWhenDone
 {
-    DCMPix *firstPix;
-    float sliceThickness;
     N3AffineTransform pixToDicomTransform;
-    double spacingX;
-    double spacingY;
-    double spacingZ;
     double orientation[9];
-	
-    firstPix = [pixList objectAtIndex:0];
-    
-    sliceThickness = [firstPix sliceInterval];
-	if(sliceThickness == 0)
-	{
-		NSLog(@"slice interval = slice thickness!");
-		sliceThickness = [firstPix sliceThickness];
-	}
-        
-    memset(orientation, 0, sizeof(double) * 9);
-    [firstPix orientationDouble:orientation];
-    spacingX = firstPix.pixelSpacingX;
-    spacingY = firstPix.pixelSpacingY;
-    if(sliceThickness == 0) { // if the slice thickness is still 0, make it the same as the average of the spacingX and spacingY
-        sliceThickness = (spacingX + spacingY)/2.0;
+
+    memcpy(orientation, inOrientation, sizeof(double) * 9);
+    if (spacingZ == 0) { // same fallback the DCMPix path used: average of the in-plane spacings
+        spacingZ = (spacingX + spacingY)/2.0;
     }
-    spacingZ = sliceThickness;
-    
+
     // test to make sure that orientation is initialized, when the volume is curved or something, it doesn't make sense to talk about orientation, and
     // so the orientation is really bogus
     // the test we will do is to make sure that orientation is 3 non-degenerate vectors
@@ -564,11 +557,11 @@
         memset(orientation, 0, sizeof(double)*9);
         orientation[0] = orientation[4] = orientation[8] = 1;
     }
-    
+
     pixToDicomTransform = N3AffineTransformIdentity;
-    pixToDicomTransform.m41 = firstPix.originX;
-    pixToDicomTransform.m42 = firstPix.originY;
-    pixToDicomTransform.m43 = firstPix.originZ;
+    pixToDicomTransform.m41 = origin.x;
+    pixToDicomTransform.m42 = origin.y;
+    pixToDicomTransform.m43 = origin.z;
     pixToDicomTransform.m11 = orientation[0]*spacingX;
     pixToDicomTransform.m12 = orientation[1]*spacingX;
     pixToDicomTransform.m13 = orientation[2]*spacingX;
@@ -578,9 +571,9 @@
     pixToDicomTransform.m31 = orientation[6]*spacingZ;
     pixToDicomTransform.m32 = orientation[7]*spacingZ;
     pixToDicomTransform.m33 = orientation[8]*spacingZ;
-    
-    self = [self initWithFloatBytesNoCopy:(const float *)[volume bytes] pixelsWide:[firstPix pwidth] pixelsHigh:[firstPix pheight] pixelsDeep:[pixList count]
-                          volumeTransform:N3AffineTransformInvert(pixToDicomTransform) outOfBoundsValue:-1000 freeWhenDone:NO];
+
+    self = [self initWithFloatBytesNoCopy:floatBytes pixelsWide:pixelsWide pixelsHigh:pixelsHigh pixelsDeep:pixelsDeep
+                          volumeTransform:N3AffineTransformInvert(pixToDicomTransform) outOfBoundsValue:-1000 freeWhenDone:freeWhenDone];
     return self;
 }
 

@@ -38,7 +38,9 @@
 #ifndef _N3BEZIERCORE_H_
 #define _N3BEZIERCORE_H_
 
-#include <ApplicationServices/ApplicationServices.h>
+// BorosKit: ApplicationServices is macOS-only; CoreGraphics provides the same
+// CGFloat/CF types on macOS and iOS.
+#include <CoreGraphics/CoreGraphics.h>
 
 #include "N3Geometry.h"
 

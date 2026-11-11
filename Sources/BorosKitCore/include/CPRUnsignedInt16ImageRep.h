@@ -35,11 +35,20 @@
      PURPOSE.
  ============================================================================*/
 
-#import <Cocoa/Cocoa.h>
+// BorosKit: Cocoa replaced by Foundation + CoreGraphics so this engine file
+// builds on both macOS and iOS (no AppKit dependency).
+#import <Foundation/Foundation.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import "N3Geometry.h"
 
-@interface CPRUnsignedInt16ImageRep : NSImageRep {
+// BorosKit: this used to subclass NSImageRep (AppKit, macOS only) although it was
+// never drawn (its -draw method just asserted). It is now a plain NSObject that
+// holds a 16-bit pixel buffer plus its geometry, so it works on macOS and iOS.
+// pixelsWide/pixelsHigh, previously inherited from NSImageRep, are declared here.
+@interface CPRUnsignedInt16ImageRep : NSObject {
     uint16_t *_unsignedInt16Data;
+    NSUInteger _pixelsWide;
+    NSUInteger _pixelsHigh;
     
     CGFloat _offset;
     CGFloat _slope;
@@ -55,13 +64,15 @@
     BOOL _freeWhenDone;
 }
 
-@property (nonatomic, readwrite, assign) CGFloat windowWidth; // these will affect how this rep will draw when part of an NSImage
+@property (nonatomic, readwrite, assign) CGFloat windowWidth; // display hints kept for compatibility; the engine itself never draws
 @property (nonatomic, readwrite, assign) CGFloat windowLevel;
 
 
 - (id)initWithData:(uint16_t *)data pixelsWide:(NSUInteger)pixelsWide pixelsHigh:(NSUInteger)pixelsHigh;
 
 - (uint16_t *)unsignedInt16Data;
+@property (nonatomic, readonly) NSUInteger pixelsWide; // BorosKit: was inherited from NSImageRep
+@property (nonatomic, readonly) NSUInteger pixelsHigh; // BorosKit: was inherited from NSImageRep
 @property (nonatomic, readwrite, assign) CGFloat offset;
 @property (nonatomic, readwrite, assign) CGFloat slope;
 @property (nonatomic, readwrite, assign) CGFloat pixelSpacingX;
@@ -72,7 +83,7 @@
 
 @end
 
-@interface CPRUnsignedInt16ImageRep (DCMPixAndVolume)
+@interface CPRUnsignedInt16ImageRep (Orientation) // BorosKit: renamed; it never used DCMPix
 
 - (void)getOrientation:(float[6])orientation;
 - (void)getOrientationDouble:(double[6])orientation;

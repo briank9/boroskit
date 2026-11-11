@@ -41,6 +41,8 @@
 @implementation CPRUnsignedInt16ImageRep
 
 @synthesize windowWidth = _windowWidth;
+@synthesize pixelsWide = _pixelsWide;
+@synthesize pixelsHigh = _pixelsHigh;
 @synthesize windowLevel = _windowLevel;
 
 @synthesize offset = _offset;
@@ -50,6 +52,9 @@
 @synthesize sliceThickness = _sliceThickness;
 @synthesize imageToDicomTransform = _imageToDicomTransform;
 
+// Wraps (or allocates, when data is NULL) a 16-bit buffer of pixelsWide x pixelsHigh.
+// BorosKit: stores the size in its own ivars instead of NSImageRep's
+// setPixelsWide:/setPixelsHigh:/setSize:, which do not exist outside AppKit.
 - (id)initWithData:(uint16_t *)data pixelsWide:(NSUInteger)pixelsWide pixelsHigh:(NSUInteger)pixelsHigh
 {
     if ( (self = [super init]) ) {
@@ -64,9 +69,8 @@
             _unsignedInt16Data = data;
         }
         
-        [self setPixelsWide:pixelsWide];
-        [self setPixelsHigh:pixelsHigh];
-        [self setSize:NSMakeSize(pixelsWide, pixelsHigh)];
+        _pixelsWide = pixelsWide;
+        _pixelsHigh = pixelsHigh;
         _offset = 0;
         _slope = 1;
         _imageToDicomTransform = N3AffineTransformIdentity;
@@ -84,12 +88,6 @@
     [super dealloc];
 }
 
--(BOOL)draw
-{
-    assert(false); // one day it would be cool if this could actually be used as an image rep in an NSImage
-    return NO;
-}
-
 - (uint16_t *)unsignedInt16Data
 {
     return _unsignedInt16Data;
@@ -98,7 +96,7 @@
 @end
 
 
-@implementation CPRUnsignedInt16ImageRep (DCMPixAndVolume)
+@implementation CPRUnsignedInt16ImageRep (Orientation)
 
 - (void)getOrientation:(float[6])orientation
 {

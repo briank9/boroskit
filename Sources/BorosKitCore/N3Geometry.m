@@ -36,7 +36,12 @@
  ============================================================================*/
 
 #include "N3Geometry.h"
-#include <ApplicationServices/ApplicationServices.h>
+// BorosKit: Foundation imported explicitly. On macOS it arrived indirectly through
+// ApplicationServices; on iOS nothing else brings it in.
+#import <Foundation/Foundation.h>
+// BorosKit: ApplicationServices is macOS-only; CoreGraphics provides the same
+// CGFloat/CF types on macOS and iOS.
+#include <CoreGraphics/CoreGraphics.h>
 #include <math.h>
 #include <Accelerate/Accelerate.h>
 
