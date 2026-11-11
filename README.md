@@ -20,6 +20,9 @@ BorosKit is split into three layers. The first two live in this package.
    thick or thin slabs (the MPR slices). It replaces the old VTK + OpenGL
    rendering step by step. So far it renders off-screen into pixel buffers; the
    on-screen views come in later steps.
+   **Display (`BorosKitDisplay`)**: started. The 2D viewer layer: Metal draws
+   a slice or slab image on screen and Core Graphics draws the ROIs, curves and
+   measurements on top. It replaces the old OpenGL drawing in Horos' image views.
 3. **App screens**: kept separately for each device. Windows, toolbars, mouse
    handling, touch and Apple Pencil stay in each app, because a Mac and an iPad
    should feel different.
@@ -124,13 +127,62 @@ saved as 16-bit DICOM).
 - Single volume only: no PET/CT fusion yet.
 - The lighting is simple (a light at the viewer). No shadows.
 
+## The 2D display (`BorosKitDisplay`)
+
+### What it does, in plain terms
+
+This is the start of the new image viewer that Boros 6 (and later the iPad app)
+will use instead of Horos' OpenGL viewer. It has three parts:
+
+- **The image** (`BKImageLayerRenderer`): the graphics chip draws the slice or
+  slab with window/level, an optional colour table, invert, zoom, pan, rotation,
+  flips, and blocky (nearest) or smooth (linear) pixels. The real CT values are
+  kept at full precision on the chip, so window/level works on the actual
+  Hounsfield units, not on a pre-made 8-bit picture.
+- **The drawings on top** (`BKOverlay`): lines, polygons, smooth curves (the
+  panorex curve comes straight from the CPR engine's curve), handles, rectangles,
+  ellipses, text labels and a scale bar. They are drawn with Apple's standard 2D
+  drawing (Core Graphics), which looks crisp and works the same on Mac and iPad.
+  Line widths and text sizes stay the same on screen at any zoom.
+- **The view** (`BKImageView`): the on-screen box that holds both, an `NSView`
+  on the Mac and a `UIView` on iPad with the same functions. It offers actions
+  such as pan, zoom around a point, rotate, window/level drag and reset, but it
+  does not decide which mouse button or finger gesture triggers them: the Mac and
+  iPad apps each wire up their own.
+
+### Why overlays can't drift off the anatomy
+
+One description of "where the image sits on screen" (`BKViewTransform`: zoom,
+pan, rotation, flips, non-square pixels) is used by the image drawing, by every
+overlay and by the mouse/touch conversion. In Horos these were separate pieces of
+math in several places. Tests check that every combination converts back and
+forth exactly.
+
+### Conventions
+
+- Image coordinates are pixels with the origin at the top-left, y down; pixel
+  (i, j) has its centre at (i + 0.5, j + 0.5).
+- View coordinates are points with the origin at the top-left, y down, on both
+  platforms (the Mac view is "flipped" to match).
+- Window/level: values at or below `center - width/2` are black, at or above
+  `center + width/2` white, linear in between (the same rule as Horos).
+
+### Limits for now
+
+- One grayscale (float) image per view; no colour (RGB) images and no fusion
+  overlay of a second series yet.
+- Drawing happens on the main thread when asked (`setNeedsRedraw`); there is no
+  animation loop, which is fine for a viewer that only changes on user input.
+- Not yet used by Boros 6: adopting it in the app's image view is the next part
+  of step 3 (see below).
+
 ## The plan, step by step
 
 1. **Metal volume engine**: this package. Done: composite, MIP, MinIP and
    average, slabs, both cameras, cropping, transfer functions, tests.
 2. **Switch the MPR views and the CPR slab to it**, removing the hidden VTK
    renderers (the source of past crashes), in Boros 6.
-3. **New 2D image display**: Metal draws the image (with window/level and colour
+3. **New 2D image display** (started: `BorosKitDisplay`): Metal draws the image (with window/level and colour
    tables); overlays (ROIs, the panorex curve, crosshairs, measurements) are
    drawn with Apple's standard 2D drawing (Core Graphics), which works with
    touch and Apple Pencil on iPad.
