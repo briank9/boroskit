@@ -2,6 +2,8 @@
 // BorosKit: the shared imaging engine for Boros on macOS and iOS/iPadOS.
 // BorosKitCore is plain Objective-C/C (no AppKit, UIKit or OpenGL) so the same
 // code can run in the Mac app and a future iPad app.
+// BorosKitRender is the GPU layer on Apple's Metal (the replacement for VTK + OpenGL),
+// also shared by macOS and iOS.
 import PackageDescription
 
 let package = Package(
@@ -9,6 +11,7 @@ let package = Package(
     platforms: [.macOS(.v12), .iOS(.v16)],
     products: [
         .library(name: "BorosKitCore", targets: ["BorosKitCore"]),
+        .library(name: "BorosKitRender", targets: ["BorosKitRender"]),
     ],
     targets: [
         .target(
@@ -26,6 +29,31 @@ let package = Package(
                 .linkedFramework("QuartzCore"),
                 .linkedFramework("Accelerate"),
             ]
+        ),
+        .target(
+            name: "BorosKitRender",
+            dependencies: ["BorosKitCore"],
+            path: "Sources/BorosKitRender",
+            publicHeadersPath: "include",
+            cSettings: [
+                // New code: automatic reference counting (unlike the Horos-derived core).
+                .unsafeFlags(["-fobjc-arc"]),
+            ],
+            cxxSettings: [
+                .unsafeFlags(["-fobjc-arc"]),
+            ],
+            linkerSettings: [
+                .linkedFramework("Metal"),
+                .linkedFramework("Foundation"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("Accelerate"),
+            ]
+        ),
+        .testTarget(
+            name: "BorosKitRenderTests",
+            dependencies: ["BorosKitRender", "BorosKitCore"],
+            path: "Tests/BorosKitRenderTests",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
         .testTarget(
             name: "BorosKitCoreTests",
