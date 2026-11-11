@@ -12,6 +12,8 @@ let package = Package(
     products: [
         .library(name: "BorosKitCore", targets: ["BorosKitCore"]),
         .library(name: "BorosKitRender", targets: ["BorosKitRender"]),
+        // BorosKitDisplay (2D image display: Metal image + CoreGraphics overlays)
+        .library(name: "BorosKitDisplay", targets: ["BorosKitDisplay"]),
     ],
     targets: [
         .target(
@@ -62,5 +64,36 @@ let package = Package(
             dependencies: ["BorosKitCore"],
             path: "Tests/BorosKitCoreTests"
         ),
+        // --- BorosKitDisplay: 2D image display for Mac and iPad (replaces OpenGL DCMView drawing) ---
+        .target(
+            name: "BorosKitDisplay",
+            // Only Core is needed (N3 geometry, N3BezierPath for curve overlays).
+            dependencies: ["BorosKitCore"],
+            path: "Sources/BorosKitDisplay",
+            publicHeadersPath: "include",
+            cSettings: [
+                // New code: automatic reference counting.
+                .unsafeFlags(["-fobjc-arc"]),
+            ],
+            cxxSettings: [
+                .unsafeFlags(["-fobjc-arc"]),
+            ],
+            linkerSettings: [
+                .linkedFramework("Metal"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("CoreText"),
+                .linkedFramework("Foundation"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
+                .linkedFramework("UIKit", .when(platforms: [.iOS])),
+            ]
+        ),
+        .testTarget(
+            name: "BorosKitDisplayTests",
+            dependencies: ["BorosKitDisplay", "BorosKitCore"],
+            path: "Tests/BorosKitDisplayTests",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])]
+        ),
+        // --- end BorosKitDisplay ---
     ]
 )
