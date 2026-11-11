@@ -53,6 +53,8 @@ let package = Package(
             name: "BorosKitRenderTests",
             dependencies: ["BorosKitRender", "BorosKitCore"],
             path: "Tests/BorosKitRenderTests",
+            // Real Horos/Boros 3D presets and colour tables, used to check the preset loader.
+            resources: [.copy("Fixtures")],
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
         .testTarget(

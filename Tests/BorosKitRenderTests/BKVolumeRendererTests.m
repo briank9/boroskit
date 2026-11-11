@@ -279,7 +279,8 @@ static const NSUInteger kSize = 64;
     float rgba[4];
     [tf getRGBA:rgba atValue:-256];  XCTAssertEqualWithAccuracy(rgba[0], 0.0f, 1e-4); XCTAssertEqual(rgba[3], 0.0f);
     [tf getRGBA:rgba atValue:0];     XCTAssertEqualWithAccuracy(rgba[3], 0.5f, 1e-4);  // x = 128 -> value 0
-    [tf getRGBA:rgba atValue:256];   XCTAssertEqualWithAccuracy(rgba[0], 1.0f, 1e-4); XCTAssertEqual(rgba[3], 1.0f);
+    // VTK uses table entries 0..254 only, so the window end gets entry 254 (254/255), not 255.
+    [tf getRGBA:rgba atValue:256];   XCTAssertEqualWithAccuracy(rgba[0], 254.0f / 255.0f, 1e-4); XCTAssertEqual(rgba[3], 1.0f);
     [tf getRGBA:rgba atValue:-128];  XCTAssertEqualWithAccuracy(rgba[3], 0.0f, 1e-4);  // x = 64, opacity 0
 }
 

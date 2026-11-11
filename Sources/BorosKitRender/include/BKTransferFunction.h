@@ -55,6 +55,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Builds a function the way Horos' -[VRView setCLUT:::] + -[VRView setOpacity:] do:
 //  - red/green/blue: 256-entry colour table (0..255) spread over [wl - ww/2, wl + ww/2]
+//    (like VTK, only entries 0..254 are used: entry 254 lands on the window end)
 //  - opacityPoints: Horos opacity curve points with x in 0..256 across the window
 //    (Horos stores them as strings with x offset by +1000; pass x with that 1000
 //    already removed) and y = opacity 0..1. May be NULL/0 for "linear ramp".

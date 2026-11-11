@@ -133,10 +133,13 @@ static void BKEvaluate(const BKTFPoint *p, NSUInteger count, float value, float 
     float start = windowCenter - windowWidth / 2.0f;
     float end = windowCenter + windowWidth / 2.0f;
 
-    // Colour: the 256 table entries are spread evenly over the window, like
-    // vtkColorTransferFunction::BuildFunctionFromTable(start, end, 255, table).
-    for (int i = 0; i < 256; i++) {
-        float value = start + (end - start) * (float)i / 255.0f;
+    // Colour: exactly like vtkColorTransferFunction::BuildFunctionFromTable(start, end, 255, table)
+    // as called by -[VRView setCLUT:::]: VTK takes the FIRST 255 entries (0..254) and spaces
+    // them (end - start) / 254 apart, so entry 254 sits on the window end and entry 255 is
+    // never used. (Fix: this used to spread all 256 entries over /255, which shifted the
+    // colours by up to 0.4% of the window compared with the Horos VR window.)
+    for (int i = 0; i < 255; i++) {
+        float value = start + (end - start) * (float)i / 254.0f;
         [tf addColorPointAtValue:value red:red[i] / 255.0f green:green[i] / 255.0f blue:blue[i] / 255.0f];
     }
 
