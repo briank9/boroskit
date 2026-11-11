@@ -1,5 +1,14 @@
 // BorosKitRender: BKVolumeRenderer implementation (see the header for what it does).
 
+/* BOROS OVERVIEW (plain language)
+ * This is the main engine that draws the 3D picture of a scan on the computer's
+ * graphics chip (GPU), which is much faster than the CPU for this kind of work.
+ * It combines the uploaded scan, the colour and opacity rules, the camera and the
+ * quality settings, runs the drawing program (the shader) that follows a ray through
+ * the scan for each pixel, and returns the finished image.
+ * Other parts of the viewer call this each time the 3D picture needs redrawing.
+ */
+
 #import "BKVolumeRenderer.h"
 #import "BKVolumeTexture.h"
 #import "BKTransferFunction.h"

@@ -1,5 +1,14 @@
 // BorosKitRender: BKTransferFunction implementation (see the header for the why).
 
+/* BOROS OVERVIEW (plain language)
+ * The transfer function is the rule that says how each tissue density in the scan is
+ * coloured and how see-through it is. For example, dense bone can be made white and
+ * solid while soft tissue is dim and transparent.
+ * This file stores those colour and opacity points in order, and it makes copies so a
+ * picture already being drawn is not changed by later edits. The renderer turns these
+ * points into a lookup table the graphics chip reads for every sample.
+ */
+
 #import "BKTransferFunction.h"
 
 // One control point: a CT value and up to four components (r,g,b for colour points,

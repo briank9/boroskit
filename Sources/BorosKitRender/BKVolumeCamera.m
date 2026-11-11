@@ -1,5 +1,14 @@
 // BorosKitRender: BKVolumeCamera implementation (see the header for what it does).
 
+/* BOROS OVERVIEW (plain language)
+ * The camera is the virtual eye that looks at the 3D model of the scan. It records
+ * where the eye stands, which way it faces, how far away it is, and whether the view
+ * is flat or has natural perspective.
+ * This file keeps those settings, works out the eye position, and performs the turns,
+ * tilts and rolls used when the user rotates the model. The renderer uses the camera
+ * to decide the viewpoint for each picture.
+ */
+
 #import "BKVolumeCamera.h"
 #import <math.h>
 

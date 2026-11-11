@@ -1,5 +1,13 @@
 // BorosKitRender: BKPresetLoader implementation (see BKPresetLoader.h for the why).
 
+/* BOROS OVERVIEW (plain language)
+ * Horos ships with named 3D looks (presets). This file reads those preset definitions
+ * and turns them into the preset objects the renderer uses.
+ * It also rebuilds the small lookup tables and lighting presets that the full Mac app
+ * normally supplies, so the built-in looks work on their own. Problems are reported
+ * as plain-language error messages.
+ */
+
 #import "BKPresetLoader.h"
 #import "BKPreset.h"
 

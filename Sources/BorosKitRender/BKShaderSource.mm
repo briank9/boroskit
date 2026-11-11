@@ -10,6 +10,15 @@
 // This file is Objective-C++ only so the shader can be written as a readable C++ raw
 // string literal (R"( ... )") with real line numbers in compiler messages.
 
+/* BOROS OVERVIEW (plain language)
+ * This file holds the drawing program for the graphics chip. The program is a set of
+ * instructions that works out the colour of each pixel in the 3D picture by following
+ * an imaginary ray through the scan and combining what it passes through.
+ * The program is stored as text inside this file and compiled the first time a
+ * renderer starts, which works the same on Mac and iPad. The text must be edited
+ * with care because it is code, even though it sits inside a string.
+ */
+
 #import <Foundation/Foundation.h>
 #import "BKShaderTypes.h"
 

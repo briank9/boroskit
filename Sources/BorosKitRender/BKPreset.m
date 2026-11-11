@@ -1,5 +1,13 @@
 // BorosKitRender: BKPreset implementation (see BKPreset.h for the why).
 
+/* BOROS OVERVIEW (plain language)
+ * A "preset" is a saved look for the 3D view, such as a bone view or a soft-tissue
+ * view. It records the colours, see-through settings, lighting and window brightness
+ * and contrast that go with that look.
+ * This file fills in those settings for one preset and lets a copy be edited without
+ * changing the original. The renderer reads presets to decide how the 3D picture looks.
+ */
+
 #import "BKPreset.h"
 #import "BKTransferFunction.h"
 #import "BKVolumeTexture.h"

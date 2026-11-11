@@ -1,5 +1,14 @@
 // BorosKitRender: BKVolumeTexture implementation (see the header for the storage choice).
 
+/* BOROS OVERVIEW (plain language)
+ * This file copies the CT scan from the computer's memory into the graphics chip's
+ * memory, arranged as a 3D block the renderer can read quickly. Without this step
+ * there is no volume to draw.
+ * Before copying, it checks that the scan is not empty and fits the chip's size limit.
+ * It converts the values to a compact form that keeps whole-number CT values exact,
+ * and copies them in chunks so the extra memory use stays low even for large scans.
+ */
+
 #import "BKVolumeTexture.h"
 #import "CPRVolumeData.h"
 #import <Accelerate/Accelerate.h>

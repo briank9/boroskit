@@ -1,5 +1,13 @@
 // BorosKitRender: BKVolumeScene implementation (see the header for what it does).
 
+/* BOROS OVERVIEW (plain language)
+ * The scene is the 3D view as a whole. It decides how sharp the picture should be.
+ * While the user is dragging or rotating the model, it draws a rougher, faster image
+ * so the motion stays smooth, then returns to full sharpness when they stop.
+ * It uses the timing of recent frames to pick a quality level from a fixed set of
+ * steps, which keeps the view responsive on slower computers.
+ */
+
 #import "BKVolumeScene.h"
 #import "BKVolumeTexture.h"
 #import "BKPreset.h"
