@@ -48,10 +48,12 @@ vertex BKVertexOut bk_display_vertex(uint vid [[vertex_id]])
 
 // Reads one image pixel; coordinates are clamped to the edge (used by bilinear sampling
 // at the image border, so edge pixels are not blended with the background).
-static float bk_read(texture2d<float, access::read> image, int2 c, constant BKDisplayParams &p)
+// Reads one image pixel (clamped to the edge). Returns all four channels: a grey (R32Float)
+// image has its value in .r, a colour (RGBA8) image its colour in .rgb.
+static float4 bk_read(texture2d<float, access::read> image, int2 c, constant BKDisplayParams &p)
 {
     c = clamp(c, int2(0), int2(int(p.imageWidth) - 1, int(p.imageHeight) - 1));
-    return image.read(uint2(c)).r;
+    return image.read(uint2(c));
 }
 
 // One fragment = one device pixel of the view. Find the image point under it with the
@@ -71,21 +73,27 @@ fragment float4 bk_display_fragment(BKVertexOut in [[stage_in]],
     if (img.x < 0.0 || img.y < 0.0 || img.x >= p.imageWidth || img.y >= p.imageHeight)
         return background;
 
-    float value;
+    float4 sample;
     if (p.interpolation == 1) {
         // Pixel centres are at i + 0.5.
         float2 f = img - 0.5;
         float2 base = floor(f);
         float2 w = f - base;
         int2 b = int2(base);
-        float v00 = bk_read(image, b,              p);
-        float v10 = bk_read(image, b + int2(1, 0), p);
-        float v01 = bk_read(image, b + int2(0, 1), p);
-        float v11 = bk_read(image, b + int2(1, 1), p);
-        value = mix(mix(v00, v10, w.x), mix(v01, v11, w.x), w.y);
+        float4 v00 = bk_read(image, b,              p);
+        float4 v10 = bk_read(image, b + int2(1, 0), p);
+        float4 v01 = bk_read(image, b + int2(0, 1), p);
+        float4 v11 = bk_read(image, b + int2(1, 1), p);
+        sample = mix(mix(v00, v10, w.x), mix(v01, v11, w.x), w.y);
     } else {
-        value = bk_read(image, int2(floor(img)), p);
+        sample = bk_read(image, int2(floor(img)), p);
     }
+
+    // Finished colour picture: shown as is (no window/level, colour table or invert).
+    if (p.colorImage != 0)
+        return float4(sample.rgb, 1.0);
+
+    float value = sample.r;
 
     float t = (p.windowWidth > 0.0) ? (value - p.windowLower) / p.windowWidth
                                      : (value >= p.windowLower ? 1.0 : 0.0);

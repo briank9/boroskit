@@ -220,6 +220,34 @@ static BKImage *BKRampImage(void)
     BKPixel(out, 256, 100, 0, px); XCTAssertEqualWithAccuracy(px[0], 100, 1); XCTAssertEqualWithAccuracy(px[1], 155, 1);
 }
 
+// A finished colour picture (RGBA8) is shown as is: window/level, colour table and
+// invert must not change it (Boros 6 uses this for images Horos has already coloured).
+- (void)testColorImageShownUnchanged
+{
+    BKImageLayerRenderer *r = [self rendererOrSkip];
+    if (!r) return;
+    uint8_t rgba[256 * 2 * 4];
+    for (int y = 0; y < 2; y++)
+        for (int x = 0; x < 256; x++) {
+            uint8_t *q = rgba + (y * 256 + x) * 4;
+            q[0] = x; q[1] = 255 - x; q[2] = 77; q[3] = 255;
+        }
+    r.image = [[BKImage alloc] initWithRGBA8Data:[NSData dataWithBytes:rgba length:sizeof(rgba)] width:256 height:2
+                                   pixelSpacingX:1 pixelSpacingY:1];
+    XCTAssertTrue(r.image.isColor);
+    r.viewTransform = BKOneToOne(256, 2);
+    r.windowCenter = 10;   // would turn a grey image almost white
+    r.windowWidth = 5;
+    r.invert = YES;
+    uint8_t lut[768];
+    memset(lut, 0, sizeof(lut));
+    r.colorTable = [NSData dataWithBytes:lut length:768]; // would turn a grey image black
+    NSData *out = [r renderRGBA8WithWidth:256 height:2 scale:1 error:NULL];
+    uint8_t px[4];
+    BKPixel(out, 256, 0, 0, px);   XCTAssertEqual(px[0], 0);   XCTAssertEqual(px[1], 255); XCTAssertEqual(px[2], 77); XCTAssertEqual(px[3], 255);
+    BKPixel(out, 256, 200, 1, px); XCTAssertEqual(px[0], 200); XCTAssertEqual(px[1], 55);  XCTAssertEqual(px[2], 77);
+}
+
 // Invert swaps black and white.
 - (void)testInvert
 {

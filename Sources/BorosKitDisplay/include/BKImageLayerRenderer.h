@@ -32,6 +32,16 @@ NS_ASSUME_NONNULL_BEGIN
 - (instancetype)initWithFloatData:(NSData *)data width:(NSUInteger)width height:(NSUInteger)height
                     pixelSpacingX:(double)spacingX pixelSpacingY:(double)spacingY;
 
+// Colour picture, already finished (RGBA, 8 bits per channel, row 0 = top, alpha ignored).
+// The renderer only places it on screen (zoom, pan, rotate, flip, smoothing); window/level,
+// colour table and invert are NOT applied.
+// Why (Boros 6): colour photos, screen captures and the other special images that Horos
+// already turns into a finished picture can then be shown by Metal instead of OpenGL.
+// floatData is empty for such an image and -valueAtX:y: returns 0.
+- (instancetype)initWithRGBA8Data:(NSData *)data width:(NSUInteger)width height:(NSUInteger)height
+                    pixelSpacingX:(double)spacingX pixelSpacingY:(double)spacingY;
+@property (nonatomic, readonly) BOOL isColor;            // YES = made with -initWithRGBA8Data:...
+@property (nonatomic, readonly, nullable) NSData *rgbaData; // the RGBA8 bytes of a colour image
 @property (nonatomic, readonly) NSData *floatData;
 @property (nonatomic, readonly) NSUInteger width;
 @property (nonatomic, readonly) NSUInteger height;

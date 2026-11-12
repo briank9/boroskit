@@ -56,9 +56,26 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
 }
 
 // What: reads one pixel value. Why: pixel-value readout under the cursor and tests.
+// What: makes a colour image from finished RGBA8 bytes (see the header). The bytes are
+// copied, like the float pixels, so the caller may reuse its buffer straight away.
+- (instancetype)initWithRGBA8Data:(NSData *)data width:(NSUInteger)width height:(NSUInteger)height
+                    pixelSpacingX:(double)spacingX pixelSpacingY:(double)spacingY
+{
+    NSParameterAssert(data.length >= 4 * width * height);
+    if ((self = [self initWithFloatData:[NSData data] width:0 height:0 pixelSpacingX:spacingX pixelSpacingY:spacingY])) {
+        _rgbaData = [data copy];
+        _isColor = YES;
+        _width = width;
+        _height = height;
+    }
+    return self;
+}
+
 - (float)valueAtX:(NSUInteger)x y:(NSUInteger)y
 {
     NSParameterAssert(x < _width && y < _height);
+    if (_isColor)
+        return 0; // colour pictures carry no measurable values
     return ((const float *)_floatData.bytes)[y * _width + x];
 }
 
@@ -142,7 +159,8 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
     _imageTexture = nil;
     if (!image || image.width == 0 || image.height == 0)
         return;
-    MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float
+    // Grey images: one float per pixel. Colour pictures: RGBA, 8 bits per channel.
+    MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:image.isColor ? MTLPixelFormatRGBA8Unorm : MTLPixelFormatR32Float
                                                                                     width:image.width
                                                                                    height:image.height
                                                                                 mipmapped:NO];
@@ -157,8 +175,8 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
     id<MTLTexture> texture = [_device newTextureWithDescriptor:desc];
     [texture replaceRegion:MTLRegionMake2D(0, 0, image.width, image.height)
                mipmapLevel:0
-                 withBytes:image.floatData.bytes
-               bytesPerRow:sizeof(float) * image.width];
+                 withBytes:image.isColor ? image.rgbaData.bytes : image.floatData.bytes
+               bytesPerRow:(image.isColor ? 4 : sizeof(float)) * image.width];
     _imageTexture = texture;
 
     BKViewTransform t = _viewTransform;
@@ -234,6 +252,7 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
     p.interpolation = _interpolation;
     p.useColorTable = _colorTable != nil;
     p.invert = _invert;
+    p.colorImage = (_image && _image.isColor) ? 1 : 0;
     p.bgR = _backgroundColor.red; p.bgG = _backgroundColor.green; p.bgB = _backgroundColor.blue; p.bgA = _backgroundColor.alpha;
     return p;
 }

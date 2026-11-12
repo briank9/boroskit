@@ -15,6 +15,7 @@
     float windowLower; float windowWidth; /* window/level as lower bound + width */ \
     int interpolation;               /* 0 nearest, 1 linear */ \
     int useColorTable; int invert; \
+    int colorImage;                  /* 1 = image texture is a finished RGBA picture */ \
     float bgR; float bgG; float bgB; float bgA;
 
 typedef struct BKDisplayParams { BK_DISPLAY_PARAMS_FIELDS } BKDisplayParams;
