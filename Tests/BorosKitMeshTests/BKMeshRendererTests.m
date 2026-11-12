@@ -372,4 +372,148 @@ static void BKExpectedAxes(BKStandardView view, simd_float3 *right, simd_float3 
     XCTAssertGreaterThan(centre[1], 200);                // centre: the bone-coloured box
 }
 
+#pragma mark - Lines, own lighting, viewport (added 2026-11-12 for the VTK scene mirror)
+
+// What: an orthographic front-view camera, 100 mm square image, centred on the origin.
+- (void)setFrontCamera:(BKMeshRenderer *)r
+{
+    BKVolumeCamera *camera = [[BKVolumeCamera alloc] init];
+    camera.focalPoint = N3VectorZero;
+    camera.parallelScale = 50;
+    [camera showStandardView:BKStandardViewAnterior];
+    [r setCameraFromVolumeCamera:camera aspectRatio:1];
+}
+
+// A horizontal line at height z = +19.5 mm across the front view is centred on image
+// row 30 (100 px image, 1 px per mm, up = smaller row; row 30's centre is 19.5 mm above
+// the middle), covers exactly rows 29-31 for a 3 px width, and has no gaps.
+- (void)testLineAppearsAtExpectedPixelsWithWidth
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    [self setFrontCamera:r];
+    simd_float3 pts[2] = { simd_make_float3(-40, 0, 19.5f), simd_make_float3(40, 0, 19.5f) };
+    BKLineObject *line = [[BKLineObject alloc] initWithPoints:pts count:2];
+    line.lineWidth = 3;
+    line.color = simd_make_float3(0, 1, 0);
+    r.lineObjects = @[line];
+    BKRenderResult *res = [self render:r size:100];
+    for (NSUInteger x = 15; x <= 85; x += 5)
+        XCTAssertTrue([self isCoveredAtX:x y:30 in:res], @"gap at x=%lu", (unsigned long)x);
+    XCTAssertTrue([self isCoveredAtX:50 y:29 in:res]);
+    XCTAssertTrue([self isCoveredAtX:50 y:31 in:res]);
+    XCTAssertFalse([self isCoveredAtX:50 y:28 in:res]);
+    XCTAssertFalse([self isCoveredAtX:50 y:32 in:res]);
+    XCTAssertFalse([self isCoveredAtX:5 y:30 in:res]);    // beyond the end points
+    uint8_t px[4];
+    [res getRGBA8:px atX:50 y:30];
+    XCTAssertEqual(px[0], 0);
+    XCTAssertEqual(px[1], 255);                           // plain (unlit) green
+    BKCoverage c = BKCoverageOf(res);
+    XCTAssertEqualWithAccuracy(c.count, 80.0 * 3.0, 30.0);
+}
+
+// The same line placed BEHIND a solid box is hidden where the box covers it and
+// visible beside it; placed in FRONT it stays visible over the box.
+- (void)testLineHiddenBySurfaceInFront
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    [self setFrontCamera:r];
+    // Front view looks along +y: smaller y = nearer the viewer.
+    BKMeshObject *box = [[BKMeshObject alloc] initWithMesh:[BKMesh boxMeshWithMin:simd_make_float3(-10, -10, -10) max:simd_make_float3(10, 10, 10)]];
+    box.color = simd_make_float3(1, 0, 0);
+    r.objects = @[box];
+    simd_float3 behind[2] = { simd_make_float3(-40, 30, 0), simd_make_float3(40, 30, 0) };
+    BKLineObject *line = [[BKLineObject alloc] initWithPoints:behind count:2];
+    line.color = simd_make_float3(0, 0, 1);
+    line.lineWidth = 2;
+    r.lineObjects = @[line];
+    BKRenderResult *res = [self render:r size:100];
+    uint8_t px[4];
+    [res getRGBA8:px atX:50 y:50];
+    XCTAssertGreaterThan(px[0], 200);   // the red box, not the blue line
+    XCTAssertLessThan(px[2], 100);      // (blue only from the white highlight, 0.2 * 255)
+    [res getRGBA8:px atX:20 y:50];
+    XCTAssertGreaterThan(px[2], 200);   // the blue line beside the box
+
+    simd_float3 front[2] = { simd_make_float3(-40, -30, 0), simd_make_float3(40, -30, 0) };
+    [line setPoints:front count:2];
+    res = [self render:r size:100];
+    [res getRGBA8:px atX:50 y:50];
+    XCTAssertGreaterThan(px[2], 200);   // the line is now in front of the box
+    XCTAssertLessThan(px[0], 10);       // unlit pure blue
+}
+
+// Perspective: a line from in front of the eye to behind it is cut at the near
+// distance instead of flipping across the screen; a line entirely behind is not drawn.
+- (void)testPerspectiveLineBehindEye
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    BKVolumeCamera *camera = [[BKVolumeCamera alloc] init];
+    camera.focalPoint = N3VectorZero;
+    camera.distance = 100;
+    camera.projection = BKProjectionPerspective;
+    camera.viewAngle = 30;
+    [camera showStandardView:BKStandardViewAnterior];   // eye at y = -100, looking along +y
+    [r setCameraFromVolumeCamera:camera aspectRatio:1];
+    BKMeshObject *box = [[BKMeshObject alloc] initWithMesh:[BKMesh boxMeshWithMin:simd_make_float3(-5, -5, -5) max:simd_make_float3(5, 5, 5)]];
+    r.objects = @[box];   // gives the scene a depth range
+    simd_float3 behindOnly[2] = { simd_make_float3(0, -150, 0), simd_make_float3(0, -200, 10) };
+    BKLineObject *line = [[BKLineObject alloc] initWithPoints:behindOnly count:2];
+    r.lineObjects = @[line];
+    BKRenderResult *withLine = [self render:r size:100];
+    r.lineObjects = @[];
+    BKRenderResult *without = [self render:r size:100];
+    XCTAssertEqual(BKCoverageOf(withLine).count, BKCoverageOf(without).count);   // nothing extra drawn
+}
+
+// Unlit objects keep their exact colour; own material overrides the renderer's lighting.
+- (void)testUnlitAndOwnMaterial
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    [self setFrontCamera:r];
+    BKMeshObject *box = [[BKMeshObject alloc] initWithMesh:[BKMesh boxMeshWithMin:simd_make_float3(-10, -10, -10) max:simd_make_float3(10, 10, 10)]];
+    box.color = simd_make_float3(0.4f, 0.6f, 0.2f);
+    box.lit = NO;
+    r.objects = @[box];
+    uint8_t px[4];
+    [[self render:r size:100] getRGBA8:px atX:50 y:50];
+    XCTAssertEqualWithAccuracy(px[0], 102, 1);
+    XCTAssertEqualWithAccuracy(px[1], 153, 1);
+    XCTAssertEqualWithAccuracy(px[2], 51, 1);
+
+    box.lit = YES;
+    box.color = simd_make_float3(1, 1, 1);
+    box.usesOwnMaterial = YES;
+    box.ambient = 0.1f; box.diffuse = 0.5f; box.specular = 0; box.specularPower = 1;
+    [[self render:r size:100] getRGBA8:px atX:50 y:50];
+    XCTAssertEqualWithAccuracy(px[0], 153, 2);   // (0.1 + 0.5 * 1) * 255, face looks straight at us
+}
+
+// A viewport draws only inside its rectangle, with the camera fitted to that rectangle,
+// and leaves the rest of the picture alone when clear is NO.
+- (void)testViewportDrawsIntoCornerOnly
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    BKMeshObject *box = [[BKMeshObject alloc] initWithMesh:[BKMesh boxMeshWithMin:simd_make_float3(-40, -40, -40) max:simd_make_float3(40, 40, 40)]];
+    r.objects = @[box];
+    BKVolumeCamera *camera = [[BKVolumeCamera alloc] init];
+    camera.focalPoint = N3VectorZero;
+    camera.parallelScale = 50;
+    [camera showStandardView:BKStandardViewAnterior];
+    [r setCameraFromVolumeCamera:camera aspectRatio:1];   // the corner is square too
+    r.viewport = CGRectMake(70, 0, 30, 30);               // top-right corner
+    BKRenderResult *res = [self render:r size:100];
+    BKCoverage c = BKCoverageOf(res);
+    XCTAssertEqualWithAccuracy(c.cx, 85, 0.6);            // the box fills 80 % of the corner, centred
+    XCTAssertEqualWithAccuracy(c.cy, 15, 0.6);
+    XCTAssertEqualWithAccuracy(c.count, 24.0 * 24.0, 60.0);
+    XCTAssertFalse([self isCoveredAtX:50 y:50 in:res]);
+    XCTAssertFalse([self isCoveredAtX:60 y:15 in:res]);
+}
+
 @end

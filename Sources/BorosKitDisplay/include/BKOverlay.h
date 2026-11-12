@@ -83,6 +83,21 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 // A text label anchored to an image point; stays upright and fixed-size on screen.
+// Where the text sits relative to its anchor (after `offset`). Why: labels copied from
+// another program (e.g. the 3D views' orientation letters, centred at the bottom edge or
+// right-aligned at the right edge) must keep their placement rules.
+typedef NS_ENUM(NSInteger, BKTextHorizontalAlignment) {
+    BKTextAlignLeft = 0,     // anchor at the left end (default)
+    BKTextAlignCenter = 1,
+    BKTextAlignRight = 2,
+};
+typedef NS_ENUM(NSInteger, BKTextVerticalAlignment) {
+    BKTextAlignBaseline = 0, // anchor on the baseline (default)
+    BKTextAlignTop = 1,      // anchor at the top of the letters (ascent)
+    BKTextAlignMiddle = 2,
+    BKTextAlignBottom = 3,   // anchor at the bottom of the letters (descent)
+};
+
 @interface BKOverlayText : BKOverlayItem
 + (instancetype)text:(NSString *)text at:(CGPoint)anchor;
 @property (nonatomic, copy) NSString *text;
@@ -90,6 +105,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) CGFloat fontSize;        // view points, default 12
 @property (nonatomic) CGPoint offset;          // view points added after transforming (e.g. 6, -6)
 @property (nonatomic) BOOL drawsBackground;    // dark box behind the text for legibility
+@property (nonatomic) BKTextHorizontalAlignment horizontalAlignment;   // default left
+@property (nonatomic) BKTextVerticalAlignment verticalAlignment;       // default baseline
+@property (nonatomic) BOOL bold;               // default NO
+@property (nonatomic) BOOL shadow;             // dark copy 1 point down-right behind the text, default NO
 @end
 
 // A scale bar in a view corner showing a round length in mm (like Horos' ruler).

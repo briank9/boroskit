@@ -72,6 +72,45 @@ NS_ASSUME_NONNULL_BEGIN
 // through `transform`).
 - (void)getPatientBoundsMin:(simd_float3 *)min max:(simd_float3 *)max;
 
+// --- Own lighting (optional) ----------------------------------------------------------
+// Why: in a scene copied from another program (e.g. VTK), each object has its own
+// material: a shiny bone surface next to a matt orientation cube. NO (default) = use the
+// renderer's ambient/diffuse/specular/specularPower; YES = use the four values below.
+@property (nonatomic) BOOL usesOwnMaterial;
+@property (nonatomic) float ambient;        // default 0.2
+@property (nonatomic) float diffuse;        // default 0.8
+@property (nonatomic) float specular;       // default 0.2
+@property (nonatomic) float specularPower;  // default 10
+
+// NO = drawn in its plain colour without any lighting (labels, letters). Default YES.
+@property (nonatomic, getter=isLit) BOOL lit;
+
+@end
+
+// Straight line segments drawn in 3D (outline boxes, wireframes, measurement lines).
+// Why: an outline box around the scan, or a wireframe, is a set of lines, not a surface.
+// Lines have a fixed width in PIXELS (they don't get thicker when you zoom in) and are
+// hidden by surfaces in front of them, like everything else in the 3D scene.
+@interface BKLineObject : NSObject
+
+// `points` holds 2 points per segment (start, end), in mm; `count` = number of points
+// (must be even; an odd last point is ignored).
+- (instancetype)initWithPoints:(const simd_float3 *)points count:(NSUInteger)count;
+
+// Replaces the segments (same layout as the initializer). Re-uploaded automatically.
+- (void)setPoints:(const simd_float3 *)points count:(NSUInteger)count;
+@property (nonatomic, readonly) NSUInteger segmentCount;
+@property (nonatomic, readonly) const simd_float3 *points;   // 2 * segmentCount points
+
+@property (nonatomic) simd_float3 color;     // RGB 0..1, default white
+@property (nonatomic) float opacity;         // default 1
+@property (nonatomic) CGFloat lineWidth;     // pixels of the output image, default 1
+@property (nonatomic, getter=isVisible) BOOL visible;   // default YES
+@property (nonatomic) simd_float4x4 transform;          // placement, like BKMeshObject (default identity)
+
+// Bounding box of the placed segments in patient mm.
+- (void)getPatientBoundsMin:(simd_float3 *)min max:(simd_float3 *)max;
+
 @end
 
 @interface BKMeshRenderer : NSObject
@@ -87,6 +126,17 @@ NS_ASSUME_NONNULL_BEGIN
 // What to draw, in order (order only matters between see-through objects at the same
 // distance).
 @property (nonatomic, copy) NSArray<BKMeshObject *> *objects;
+
+// Line segments to draw with the objects (solid ones with the solid objects, see-through
+// ones after them). Default empty.
+@property (nonatomic, copy) NSArray<BKLineObject *> *lineObjects;
+
+// Part of the output image to draw into, in pixels, origin top-left (CGRectZero = the
+// whole image, the default). Why: a small orientation cube in a corner of a 3D view is
+// a second scene with its own camera drawn into a corner of the same picture. The camera
+// aspect ratio given to -setCameraFromVolumeCamera:aspectRatio: should then be the
+// viewport's width / height. Nothing outside the viewport is changed (except by `clear`).
+@property (nonatomic) CGRect viewport;
 
 // --- Camera: same meaning as BKVolumeRenderer's (patient mm) --------------------------
 @property (nonatomic) BKProjection projection;

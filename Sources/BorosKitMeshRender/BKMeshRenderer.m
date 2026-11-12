@@ -63,6 +63,12 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         _visible = YES;
         _useVertexColors = YES;
         _transform = matrix_identity_float4x4;
+        // Own lighting (only used when usesOwnMaterial is YES): the renderer's defaults.
+        _ambient = 0.2f;
+        _diffuse = 0.8f;
+        _specular = 0.2f;
+        _specularPower = 10;
+        _lit = YES;
     }
     return self;
 }
@@ -125,11 +131,99 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 
 @end
 
+#pragma mark - BKLineObject
+
+// Renderer-only part of BKLineObject: the GPU copy of its points.
+@interface BKLineObject ()
+- (BOOL)prepareBufferOnDevice:(id<MTLDevice>)device;
+- (id<MTLBuffer>)pointBuffer;
+@end
+
+@implementation BKLineObject {
+    NSData *_pointData;                // 2 * segmentCount simd_float3
+    NSUInteger _version;               // goes up when the points change
+    id<MTLBuffer> _buffer;             // GPU copy (packed float3, 12 bytes per point)
+    NSUInteger _uploadedVersion;
+    __weak id<MTLDevice> _uploadedDevice;
+}
+
+- (instancetype)initWithPoints:(const simd_float3 *)points count:(NSUInteger)count
+{
+    if ((self = [super init])) {
+        _color = simd_make_float3(1, 1, 1);
+        _opacity = 1;
+        _lineWidth = 1;
+        _visible = YES;
+        _transform = matrix_identity_float4x4;
+        [self setPoints:points count:count];
+    }
+    return self;
+}
+
+- (instancetype)init
+{
+    return [self initWithPoints:NULL count:0];
+}
+
+// What: copies the segment end points (an odd last point is dropped).
+- (void)setPoints:(const simd_float3 *)points count:(NSUInteger)count
+{
+    NSUInteger even = (points ? count : 0) & ~(NSUInteger)1;
+    _pointData = [NSData dataWithBytes:points length:even * sizeof(simd_float3)];
+    _segmentCount = even / 2;
+    _version++;
+}
+
+- (const simd_float3 *)points
+{
+    return (const simd_float3 *)_pointData.bytes;
+}
+
+// What: box around all end points, pushed through `transform`.
+- (void)getPatientBoundsMin:(simd_float3 *)outMin max:(simd_float3 *)outMax
+{
+    simd_float3 mn = simd_make_float3(INFINITY, INFINITY, INFINITY), mx = -mn;
+    const simd_float3 *p = self.points;
+    for (NSUInteger i = 0; i < 2 * _segmentCount; i++) {
+        simd_float4 q = simd_mul(_transform, simd_make_float4(p[i], 1));
+        if (q.w != 0 && q.w != 1) q /= q.w;
+        mn = simd_min(mn, q.xyz);
+        mx = simd_max(mx, q.xyz);
+    }
+    if (outMin) *outMin = mn;
+    if (outMax) *outMax = mx;
+}
+
+// What: makes sure the GPU holds the current points (packed, 3 floats each).
+// Why: same as meshes: upload only when something changed.
+- (BOOL)prepareBufferOnDevice:(id<MTLDevice>)device
+{
+    if (_segmentCount == 0) return NO;
+    if (_buffer && _uploadedVersion == _version && _uploadedDevice == device) return YES;
+    NSUInteger n = 2 * _segmentCount;
+    id<MTLBuffer> buffer = [device newBufferWithLength:n * 3 * sizeof(float) options:MTLResourceStorageModeShared];
+    if (!buffer) return NO;
+    float *out = (float *)buffer.contents;
+    const simd_float3 *p = self.points;
+    for (NSUInteger i = 0; i < n; i++) {
+        out[3 * i] = p[i].x; out[3 * i + 1] = p[i].y; out[3 * i + 2] = p[i].z;
+    }
+    _buffer = buffer;
+    _uploadedVersion = _version;
+    _uploadedDevice = device;
+    return YES;
+}
+
+- (id<MTLBuffer>)pointBuffer { return _buffer; }
+
+@end
+
 #pragma mark - BKMeshRenderer
 
 // What the draw loop needs per visible object.
 @interface BKMeshDrawItem : NSObject
-@property (nonatomic, strong) BKMeshObject *object;
+@property (nonatomic, strong) BKMeshObject *object;      // a mesh, or
+@property (nonatomic, strong) BKLineObject *lineObject;  // a set of lines
 @property (nonatomic) float sortDistance;   // along the view direction, for back-to-front order
 @end
 @implementation BKMeshDrawItem
@@ -185,6 +279,8 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     _transparentDepthState = [_device newDepthStencilStateWithDescriptor:depth];
 
     _objects = @[];
+    _lineObjects = @[];
+    _viewport = CGRectZero;
     // Defaults: the same as BKVolumeRenderer (front view, head up, 100 mm, its lighting).
     _projection = BKProjectionOrthographic;
     _cameraPosition = N3VectorZero;
@@ -270,6 +366,32 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     MTLRenderPipelineDescriptor *d = [[MTLRenderPipelineDescriptor alloc] init];
     d.vertexFunction = [_library newFunctionWithName:@"bk_mesh_vertex"];
     d.fragmentFunction = [_library newFunctionWithName:withDistance ? @"bk_mesh_fragment_distance" : @"bk_mesh_fragment"];
+    [self configurePipeline:d colorFormat:format withDistance:withDistance transparent:transparent];
+    pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
+    if (pipeline) _pipelines[key] = pipeline;
+    return pipeline;
+}
+
+// What: the same as above for lines (screen-aligned rectangles, flat colour).
+- (id<MTLRenderPipelineState>)linePipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance
+                                             transparent:(BOOL)transparent error:(NSError **)error
+{
+    NSString *key = [NSString stringWithFormat:@"line-%lu-%d-%d", (unsigned long)format, withDistance, transparent];
+    id<MTLRenderPipelineState> pipeline = _pipelines[key];
+    if (pipeline) return pipeline;
+    MTLRenderPipelineDescriptor *d = [[MTLRenderPipelineDescriptor alloc] init];
+    d.vertexFunction = [_library newFunctionWithName:@"bk_line_vertex"];
+    d.fragmentFunction = [_library newFunctionWithName:withDistance ? @"bk_line_fragment_distance" : @"bk_line_fragment"];
+    [self configurePipeline:d colorFormat:format withDistance:withDistance transparent:transparent];
+    pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
+    if (pipeline) _pipelines[key] = pipeline;
+    return pipeline;
+}
+
+// What: the blending/attachment settings shared by the mesh and line pipelines.
+- (void)configurePipeline:(MTLRenderPipelineDescriptor *)d colorFormat:(MTLPixelFormat)format
+             withDistance:(BOOL)withDistance transparent:(BOOL)transparent
+{
     d.colorAttachments[0].pixelFormat = format;
     // Premultiplied "over" blending: result = colour + (1 - alpha) * what is behind.
     // For solid objects (alpha 1) this simply replaces what is behind.
@@ -284,9 +406,6 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         d.colorAttachments[1].writeMask = transparent ? MTLColorWriteMaskNone : MTLColorWriteMaskAll;
     }
     d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-    pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
-    if (pipeline) _pipelines[key] = pipeline;
-    return pipeline;
 }
 
 // What: a depth buffer of the given size, kept between frames. Why: the depth test
@@ -321,6 +440,13 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         if (error) *error = BKMeshRenderError(34, @"The ray-distance texture must be R32Float and the same size as the colour texture.");
         return NO;
     }
+    // Drawing area: the viewport (clipped to the image), or the whole image.
+    CGRect area = CGRectMake(0, 0, width, height);
+    if (!CGRectIsEmpty(_viewport)) area = CGRectIntersection(CGRectIntegral(_viewport), area);
+    if (CGRectIsEmpty(area)) {
+        if (error) *error = BKMeshRenderError(39, @"The viewport lies outside the output image.");
+        return NO;
+    }
     simd_float3 right, up, forward;
     if (![self getCameraRight:&right up:&up forward:&forward error:error]) return NO;
     simd_float3 camera = BKMeshFloat3(_cameraPosition);
@@ -345,6 +471,24 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         item.sortDistance = simd_dot((lo + hi) * 0.5f - camera, forward);
         [(object.opacity >= 1 ? opaque : transparent) addObject:item];
     }
+    // Lines: same depth extent bookkeeping; solid ones go with the solid pass.
+    NSMutableArray<BKMeshDrawItem *> *opaqueLines = [NSMutableArray array];
+    for (BKLineObject *lines in _lineObjects) {
+        if (!lines.visible || !(lines.opacity > 0) || !(lines.lineWidth > 0)) continue;
+        if (![lines prepareBufferOnDevice:_device]) continue;
+        simd_float3 lo, hi;
+        [lines getPatientBoundsMin:&lo max:&hi];
+        for (int i = 0; i < 8; i++) {
+            simd_float3 c = simd_make_float3((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
+            float z = simd_dot(c - camera, forward);
+            nearest = MIN(nearest, z);
+            farthest = MAX(farthest, z);
+        }
+        BKMeshDrawItem *item = [[BKMeshDrawItem alloc] init];
+        item.lineObject = lines;
+        item.sortDistance = simd_dot((lo + hi) * 0.5f - camera, forward);
+        [(lines.opacity >= 1 ? opaqueLines : transparent) addObject:item];
+    }
     // See-through objects: farthest first, so nearer ones are blended over farther ones.
     [transparent sortUsingComparator:^NSComparisonResult(BKMeshDrawItem *a, BKMeshDrawItem *b) {
         return a.sortDistance > b.sortDistance ? NSOrderedAscending : (a.sortDistance < b.sortDistance ? NSOrderedDescending : NSOrderedSame);
@@ -358,7 +502,7 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         farDistance = MAX(farDistance, 1e-3f);
         nearDistance = MAX(nearDistance, farDistance * 1e-4f);
     }
-    BOOL anything = (opaque.count + transparent.count) > 0 && isfinite(nearDistance) && isfinite(farDistance) && farDistance > nearDistance;
+    BOOL anything = (opaque.count + opaqueLines.count + transparent.count) > 0 && isfinite(nearDistance) && isfinite(farDistance) && farDistance > nearDistance;
 
     // 3. The render pass: colour (+ ray distance) + depth.
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -379,7 +523,9 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 
     id<MTLRenderPipelineState> opaquePipeline = [self pipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO error:error];
     id<MTLRenderPipelineState> transparentPipeline = [self pipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES error:error];
-    if (!opaquePipeline || !transparentPipeline) return NO;
+    id<MTLRenderPipelineState> opaqueLinePipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO error:error];
+    id<MTLRenderPipelineState> transparentLinePipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES error:error];
+    if (!opaquePipeline || !transparentPipeline || !opaqueLinePipeline || !transparentLinePipeline) return NO;
 
     id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     if (!enc) {
@@ -389,6 +535,10 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     enc.label = @"BKMeshRenderer";
     // Both sides of every triangle are drawn: mesh files often have mixed-up sides.
     [enc setCullMode:MTLCullModeNone];
+    // Only the drawing area (whole image unless a viewport was set).
+    [enc setViewport:(MTLViewport){area.origin.x, area.origin.y, area.size.width, area.size.height, 0.0, 1.0}];
+    [enc setScissorRect:(MTLScissorRect){(NSUInteger)area.origin.x, (NSUInteger)area.origin.y,
+                                         (NSUInteger)area.size.width, (NSUInteger)area.size.height}];
 
     if (anything) {
         // Shared camera part of the uniforms.
@@ -398,7 +548,7 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         base.cameraRight = simd_make_float4(right, 0);
         base.cameraUp = simd_make_float4(up, 0);
         base.cameraForward = simd_make_float4(forward, 0);
-        float aspect = (float)width / (float)height;
+        float aspect = (float)area.size.width / (float)area.size.height;
         if (perspective) {
             // Same as the volume renderer: vertical angle given, horizontal follows the image.
             base.halfHeight = tanf(0.5f * (float)_fieldOfView * (float)M_PI / 180.0f);
@@ -419,13 +569,33 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         base.specular = _specular;
         base.specularPower = _specularPower;
         base.projection = _projection;
+        base.lit = 1;
+        base.viewportWidth = (float)area.size.width;
+        base.viewportHeight = (float)area.size.height;
 
-        NSArray *passes = @[opaque, transparent];
-        for (NSUInteger p = 0; p < 2; p++) {
-            BOOL see = (p == 1);
-            [enc setRenderPipelineState:see ? transparentPipeline : opaquePipeline];
+        // Pass 0: solid meshes; pass 1: solid lines; pass 2: everything see-through,
+        // farthest first (meshes and lines mixed, so they blend in the right order).
+        NSArray *passes = @[opaque, opaqueLines, transparent];
+        for (NSUInteger p = 0; p < 3; p++) {
+            BOOL see = (p == 2);
             [enc setDepthStencilState:see ? _transparentDepthState : _opaqueDepthState];
             for (BKMeshDrawItem *item in passes[p]) {
+                if (item.lineObject) {
+                    BKLineObject *l = item.lineObject;
+                    BKMeshUniforms u = base;
+                    u.model = l.transform;
+                    u.normalMatrix = matrix_identity_float4x4;
+                    u.color = simd_make_float4(l.color, MIN(MAX(l.opacity, 0.0f), 1.0f));
+                    u.lit = 0;
+                    u.lineHalfWidth = (float)(0.5 * l.lineWidth);
+                    [enc setRenderPipelineState:see ? transparentLinePipeline : opaqueLinePipeline];
+                    [enc setVertexBuffer:[l pointBuffer] offset:0 atIndex:0];
+                    [enc setVertexBytes:&u length:sizeof u atIndex:1];
+                    [enc setFragmentBytes:&u length:sizeof u atIndex:1];
+                    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:l.segmentCount * 6];
+                    continue;
+                }
+                [enc setRenderPipelineState:see ? transparentPipeline : opaquePipeline];
                 BKMeshObject *o = item.object;
                 BKMesh *mesh = o.mesh;
                 BKMeshUniforms u = base;
@@ -437,6 +607,13 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                 u.color = simd_make_float4(o.color, MIN(MAX(o.opacity, 0.0f), 1.0f));
                 u.useVertexColors = (o.useVertexColors && mesh.colors) ? 1 : 0;
                 u.hasNormals = mesh.normals ? 1 : 0;
+                u.lit = o.lit ? 1 : 0;
+                if (o.usesOwnMaterial) {
+                    u.ambient = o.ambient;
+                    u.diffuse = o.diffuse;
+                    u.specular = o.specular;
+                    u.specularPower = o.specularPower;
+                }
                 [enc setVertexBuffer:[o vertexBuffer] offset:0 atIndex:0];
                 [enc setVertexBytes:&u length:sizeof u atIndex:1];
                 [enc setFragmentBytes:&u length:sizeof u atIndex:1];

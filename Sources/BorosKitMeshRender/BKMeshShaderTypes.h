@@ -36,7 +36,11 @@ typedef simd_float4x4 bk_mesh_float4x4;
     int32_t projection;            /* BKProjection: 0 orthographic, 1 perspective */ \
     int32_t useVertexColors;       /* 1 = take the colour from the mesh's vertices */ \
     int32_t hasNormals;            /* 0 = no vertex normals: shade each triangle flat */ \
-    int32_t paddingForAlignment;
+    int32_t lit;                   /* 0 = flat colour, no lighting (labels, lines) */ \
+    float viewportWidth;           /* size of the drawing area in pixels (lines are sized in pixels) */ \
+    float viewportHeight; \
+    float lineHalfWidth;           /* lines: half the line width in pixels */ \
+    float paddingForAlignment;
 
 typedef struct BKMeshUniforms {
     BK_MESH_UNIFORM_FIELDS

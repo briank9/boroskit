@@ -585,4 +585,55 @@ static CGContextRef BKTestContext(uint8_t *buffer)
     XCTAssertEqualWithAccuracy(px[0], 100, 1); XCTAssertEqualWithAccuracy(px[1], 100, 1);
 }
 
+// Text alignment (added 2026-11-12): right/top alignment puts the whole text to the left
+// of and below the anchor; centre/middle puts it around the anchor; shadow adds dark
+// pixels one point down-right of the letters.
+- (void)testTextAlignmentAndShadow
+{
+    BKViewTransform t = BKViewTransformMakeFit(100, 100, 100, 100);   // 1:1
+    // Bounding box of the drawn (non-transparent) pixels.
+    void (^bounds)(const uint8_t *, int *, int *, int *, int *) = ^(const uint8_t *b, int *x0, int *y0, int *x1, int *y1) {
+        *x0 = 1000; *y0 = 1000; *x1 = -1; *y1 = -1;
+        for (int y = 0; y < 100; y++)
+            for (int x = 0; x < 100; x++)
+                if (b[(y * 100 + x) * 4 + 3] > 0) { *x0 = MIN(*x0, x); *y0 = MIN(*y0, y); *x1 = MAX(*x1, x); *y1 = MAX(*y1, y); }
+    };
+    uint8_t buffer[100 * 100 * 4];
+    int x0, y0, x1, y1;
+
+    BKOverlayText *text = [BKOverlayText text:@"WWW" at:CGPointMake(60, 40)];
+    text.offset = CGPointZero;
+    text.fontSize = 14;
+    text.strokeColor = BKColorMake(1, 1, 1, 1);
+    text.horizontalAlignment = BKTextAlignRight;
+    text.verticalAlignment = BKTextAlignTop;
+    CGContextRef ctx = BKTestContext(buffer);
+    BKDrawOverlays(ctx, @[text], t);
+    CGContextRelease(ctx);
+    bounds(buffer, &x0, &y0, &x1, &y1);
+    XCTAssertLessThanOrEqual(x1, 60);       // ends at the anchor
+    XCTAssertGreaterThan(x1, 55);
+    XCTAssertGreaterThanOrEqual(y0, 40);    // starts below the anchor (y down)
+    XCTAssertLessThanOrEqual(y0, 46);   // letter tops sit a little below the font ascent
+
+    text.horizontalAlignment = BKTextAlignCenter;
+    text.verticalAlignment = BKTextAlignMiddle;
+    ctx = BKTestContext(buffer);
+    BKDrawOverlays(ctx, @[text], t);
+    CGContextRelease(ctx);
+    bounds(buffer, &x0, &y0, &x1, &y1);
+    XCTAssertEqualWithAccuracy((x0 + x1) / 2.0, 60, 2);
+    XCTAssertEqualWithAccuracy((y0 + y1) / 2.0, 40, 3);
+
+    text.shadow = YES;
+    text.strokeColor = BKColorMake(1, 0, 0, 1);
+    ctx = BKTestContext(buffer);
+    BKDrawOverlays(ctx, @[text], t);
+    CGContextRelease(ctx);
+    int dark = 0;
+    for (int i = 0; i < 100 * 100; i++)
+        if (buffer[i * 4 + 3] > 200 && buffer[i * 4] < 30) dark++;   // opaque black = shadow
+    XCTAssertGreaterThan(dark, 5);
+}
+
 @end

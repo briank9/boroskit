@@ -421,15 +421,36 @@ static void BKPathDistanceApplier(void *info, const CGPathElement *element)
 
 #pragma mark - Text
 
+// Text style options beyond size and colour (see BKOverlayText).
+typedef struct {
+    BKTextHorizontalAlignment horizontal;
+    BKTextVerticalAlignment vertical;
+    BOOL bold;
+    BOOL shadow;
+} BKTextStyle;
+
+static CGSize BKDrawTextStyled(CGContextRef ctx, NSString *text, CGFloat fontSize, BKColor color,
+                               CGFloat x, CGFloat y, BOOL background, BKTextStyle style);
+
 // What: draws one line of text with its baseline-left corner at (x, y) in a y-down context.
 // Why: CoreText assumes y-up; flipping the text matrix makes glyphs upright in our
 // top-left-origin view space, on both Mac and iPad. Returns the drawn size.
 static CGSize BKDrawText(CGContextRef ctx, NSString *text, CGFloat fontSize, BKColor color,
                          CGFloat x, CGFloat y, BOOL background)
 {
-    CTFontRef font = CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, fontSize, NULL);
+    BKTextStyle plain = { BKTextAlignLeft, BKTextAlignBaseline, NO, NO };
+    return BKDrawTextStyled(ctx, text, fontSize, color, x, y, background, plain);
+}
+
+// What: the same with alignment around (x, y), bold and a drop shadow.
+// Why (2026-11-12): the 3D views' letters and labels (copied from VTK text actors) are
+// bold, shadowed and centred/right-aligned at the view edges.
+static CGSize BKDrawTextStyled(CGContextRef ctx, NSString *text, CGFloat fontSize, BKColor color,
+                               CGFloat x, CGFloat y, BOOL background, BKTextStyle style)
+{
+    CTFontRef font = CTFontCreateUIFontForLanguage(style.bold ? kCTFontUIFontEmphasizedSystem : kCTFontUIFontSystem, fontSize, NULL);
     if (!font)
-        font = CTFontCreateWithName(CFSTR("Helvetica"), fontSize, NULL);
+        font = CTFontCreateWithName(style.bold ? CFSTR("Helvetica-Bold") : CFSTR("Helvetica"), fontSize, NULL);
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
     CGFloat comps[4] = { color.red, color.green, color.blue, color.alpha };
     CGColorRef cgColor = CGColorCreate(space, comps);
@@ -439,6 +460,32 @@ static CGSize BKDrawText(CGContextRef ctx, NSString *text, CGFloat fontSize, BKC
     CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)string);
     CGFloat ascent = 0, descent = 0;
     double width = CTLineGetTypographicBounds(line, &ascent, &descent, NULL);
+
+    // Alignment: move the baseline-left corner so the anchor lands where asked (y down).
+    if (style.horizontal == BKTextAlignCenter) x -= 0.5 * width;
+    else if (style.horizontal == BKTextAlignRight) x -= width;
+    if (style.vertical == BKTextAlignTop) y += ascent;
+    else if (style.vertical == BKTextAlignMiddle) y += 0.5 * (ascent - descent);
+    else if (style.vertical == BKTextAlignBottom) y -= descent;
+
+    if (style.shadow) {
+        // A black copy one point down-right, drawn first (like VTK's text shadow).
+        CGColorSpaceRef shadowSpace = CGColorSpaceCreateDeviceRGB();
+        CGFloat black[4] = { 0, 0, 0, color.alpha };
+        CGColorRef shadowColor = CGColorCreate(shadowSpace, black);
+        NSDictionary *shadowAttrs = @{ (__bridge id)kCTFontAttributeName: (__bridge id)font,
+                                       (__bridge id)kCTForegroundColorAttributeName: (__bridge id)shadowColor };
+        NSAttributedString *shadowString = [[NSAttributedString alloc] initWithString:text attributes:shadowAttrs];
+        CTLineRef shadowLine = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)shadowString);
+        CGContextSaveGState(ctx);
+        CGContextSetTextMatrix(ctx, CGAffineTransformMakeScale(1, -1));
+        CGContextSetTextPosition(ctx, x + 1, y + 1);
+        CTLineDraw(shadowLine, ctx);
+        CGContextRestoreGState(ctx);
+        CFRelease(shadowLine);
+        CGColorRelease(shadowColor);
+        CGColorSpaceRelease(shadowSpace);
+    }
 
     if (background) {
         CGContextSetRGBFillColor(ctx, 0, 0, 0, 0.6);
@@ -478,7 +525,8 @@ static CGSize BKDrawText(CGContextRef ctx, NSString *text, CGFloat fontSize, BKC
     if (_text.length == 0)
         return;
     CGPoint p = BKViewTransformImagePointToView(transform, _anchor);
-    BKDrawText(context, _text, _fontSize, self.strokeColor, p.x + _offset.x, p.y + _offset.y, _drawsBackground);
+    BKTextStyle style = { _horizontalAlignment, _verticalAlignment, _bold, _shadow };
+    BKDrawTextStyled(context, _text, _fontSize, self.strokeColor, p.x + _offset.x, p.y + _offset.y, _drawsBackground, style);
 }
 
 // What: distance to the anchor point (labels are selected via their anchor).
