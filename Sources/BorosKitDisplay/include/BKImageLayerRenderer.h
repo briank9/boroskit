@@ -32,7 +32,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (instancetype)initWithFloatData:(NSData *)data width:(NSUInteger)width height:(NSUInteger)height
                     pixelSpacingX:(double)spacingX pixelSpacingY:(double)spacingY;
 
-// Colour picture, already finished (RGBA, 8 bits per channel, row 0 = top, alpha ignored).
+// Colour picture, already finished (RGBA, 8 bits per channel, row 0 = top; alpha ignored
+// unless the renderer's usesImageAlpha is YES).
 // The renderer only places it on screen (zoom, pan, rotate, flip, smoothing); window/level,
 // colour table and invert are NOT applied.
 // Why (Boros 6): colour photos, screen captures and the other special images that Horos
@@ -96,6 +97,25 @@ static inline BKColor BKColorMake(float r, float g, float b, float a) { BKColor 
 // Where the image sits in the view. Its imageWidth/Height are kept in sync with `image`
 // by the renderer when an image is set (the rest is up to the caller).
 @property (nonatomic) BKViewTransform viewTransform;
+
+// --- Overlay layer (fusion) ---------------------------------------------------------
+// What: an optional second renderer whose image is drawn ON TOP of this one, in the same
+// pass, blended with the overlay image's own alpha (result = overlay * a + below * (1 - a);
+// the result keeps the alpha of what is below). The overlay keeps its own image,
+// window/level, colour table, interpolation and view transform, so the two images can
+// have different sizes and positions. Outside the overlay image nothing is drawn (its
+// background is ignored). An overlay's own overlay is ignored.
+// Why (Boros 6): Horos "fusion" lays a second series (for example a coloured PET or a
+// second CT) over the first with an adjustable transparency. Horos makes that second
+// series into a finished colour picture whose alpha holds the per-pixel transparency;
+// with this, Metal can show it without OpenGL.
+// The overlay must use the same Metal device as this renderer.
+@property (nonatomic, strong, nullable) BKImageLayerRenderer *overlay;
+
+// YES = a colour image (-[BKImage initWithRGBA8Data:...]) keeps its alpha channel instead
+// of being treated as opaque. Set it on an overlay renderer whose picture carries
+// transparency. Default NO (alpha ignored, as before).
+@property (nonatomic) BOOL usesImageAlpha;
 
 // Encodes drawing into `texture` (e.g. a CAMetalLayer drawable texture). `scale` is
 // device pixels per view point (the layer's contentsScale). Clears to the background.

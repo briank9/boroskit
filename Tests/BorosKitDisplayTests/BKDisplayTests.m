@@ -520,4 +520,69 @@ static CGContextRef BKTestContext(uint8_t *buffer)
     XCTAssertGreaterThan(painted, 100u);
 }
 
+#pragma mark - Fusion overlay (Boros 6)
+
+// Boros 6 fusion: a half-transparent red picture, half as wide as the view and centred,
+// is mixed over a grey ramp with its own alpha (like OpenGL's SRC_ALPHA blending in Horos);
+// outside the overlay, and where its alpha is 0, the ramp is untouched; the result stays
+// opaque. With usesImageAlpha off the overlay is opaque.
+- (void)testFusionOverlayBlendsWithImageAlpha
+{
+    BKImageLayerRenderer *r = [self rendererOrSkip];
+    if (!r) return;
+    r.image = BKRampImage();
+    r.viewTransform = BKOneToOne(256, 2);
+    r.windowCenter = 127.5;
+    r.windowWidth = 255;
+
+    // 128 x 2 overlay: red with alpha 128, except column 0 (alpha 0 = fully see-through).
+    uint8_t rgba[128 * 2 * 4];
+    for (int i = 0; i < 128 * 2; i++) {
+        rgba[i * 4 + 0] = 255; rgba[i * 4 + 1] = 0; rgba[i * 4 + 2] = 0;
+        rgba[i * 4 + 3] = (i % 128 == 0) ? 0 : 128;
+    }
+    NSError *error = nil;
+    BKImageLayerRenderer *o = [[BKImageLayerRenderer alloc] initWithDevice:r.device error:&error];
+    XCTAssertNotNil(o, @"%@", error);
+    o.image = [[BKImage alloc] initWithRGBA8Data:[NSData dataWithBytes:rgba length:sizeof(rgba)] width:128 height:2
+                                    pixelSpacingX:1 pixelSpacingY:1];
+    BKViewTransform t = BKViewTransformMakeFit(128, 2, 256, 2);
+    t.zoom = 1;                       // 1:1, centred -> covers view columns 64..191
+    o.viewTransform = t;
+    o.usesImageAlpha = YES;
+    o.backgroundColor = BKColorMake(0, 0, 1, 1); // must be ignored for an overlay
+    r.overlay = o;
+
+    NSData *out = [r renderRGBA8WithWidth:256 height:2 scale:1 error:&error];
+    XCTAssertNotNil(out, @"%@", error);
+    uint8_t px[4];
+    double a = 128.0 / 255.0;
+    // Outside the overlay: plain ramp.
+    BKPixel(out, 256, 10, 0, px);
+    XCTAssertEqualWithAccuracy(px[0], 10, 1); XCTAssertEqualWithAccuracy(px[2], 10, 1); XCTAssertEqual(px[3], 255);
+    BKPixel(out, 256, 220, 1, px);
+    XCTAssertEqualWithAccuracy(px[0], 220, 1); XCTAssertEqualWithAccuracy(px[2], 220, 1);
+    // Overlay column 0 (view column 64) has alpha 0: plain ramp.
+    BKPixel(out, 256, 64, 0, px);
+    XCTAssertEqualWithAccuracy(px[0], 64, 1); XCTAssertEqualWithAccuracy(px[1], 64, 1);
+    // Inside: red mixed half and half with the grey value 100.
+    BKPixel(out, 256, 100, 0, px);
+    XCTAssertEqualWithAccuracy(px[0], 255 * a + 100 * (1 - a), 2);
+    XCTAssertEqualWithAccuracy(px[1], 100 * (1 - a), 2);
+    XCTAssertEqualWithAccuracy(px[2], 100 * (1 - a), 2);
+    XCTAssertEqual(px[3], 255);
+
+    // Alpha ignored -> opaque red inside the overlay.
+    o.usesImageAlpha = NO;
+    out = [r renderRGBA8WithWidth:256 height:2 scale:1 error:NULL];
+    BKPixel(out, 256, 100, 1, px);
+    XCTAssertEqual(px[0], 255); XCTAssertEqual(px[1], 0); XCTAssertEqual(px[3], 255);
+
+    // No overlay -> back to the plain ramp.
+    r.overlay = nil;
+    out = [r renderRGBA8WithWidth:256 height:2 scale:1 error:NULL];
+    BKPixel(out, 256, 100, 0, px);
+    XCTAssertEqualWithAccuracy(px[0], 100, 1); XCTAssertEqualWithAccuracy(px[1], 100, 1);
+}
+
 @end

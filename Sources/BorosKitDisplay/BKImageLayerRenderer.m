@@ -86,6 +86,7 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
 @implementation BKImageLayerRenderer {
     id<MTLLibrary> _library;
     NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *_pipelines; // per pixel format
+    NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *_blendPipelines; // same, alpha-blended (overlay)
     id<MTLTexture> _imageTexture;
     id<MTLTexture> _lutTexture;      // 256 x 1 RGBA8, always valid (identity gray if no table)
 }
@@ -122,6 +123,7 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
             return nil;
         _commandQueue = [_device newCommandQueue];
         _pipelines = [NSMutableDictionary dictionary];
+        _blendPipelines = [NSMutableDictionary dictionary];
         _windowCenter = 40;
         _windowWidth = 400;
         _interpolation = BKImageInterpolationNearest;
@@ -135,18 +137,33 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
 // What: returns (and caches) the render pipeline for a target pixel format.
 // Why: a CAMetalLayer uses BGRA8 while offscreen tests use RGBA8; Metal needs one
 // pipeline per format.
-- (nullable id<MTLRenderPipelineState>)pipelineForPixelFormat:(MTLPixelFormat)format error:(NSError **)error
+// `blended` (Boros 6, fusion overlay): the pipeline mixes the fragment over what is already
+// in the target with the fragment's alpha (colour = src * a + dst * (1 - a), the same as
+// OpenGL's GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA that Horos uses for fusion) and leaves the
+// target's alpha unchanged, so the finished picture stays opaque.
+- (nullable id<MTLRenderPipelineState>)pipelineForPixelFormat:(MTLPixelFormat)format blended:(BOOL)blended error:(NSError **)error
 {
-    id<MTLRenderPipelineState> pipeline = _pipelines[@(format)];
+    NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *cache = blended ? _blendPipelines : _pipelines;
+    id<MTLRenderPipelineState> pipeline = cache[@(format)];
     if (pipeline)
         return pipeline;
     MTLRenderPipelineDescriptor *desc = [[MTLRenderPipelineDescriptor alloc] init];
     desc.vertexFunction = [_library newFunctionWithName:@"bk_display_vertex"];
     desc.fragmentFunction = [_library newFunctionWithName:@"bk_display_fragment"];
     desc.colorAttachments[0].pixelFormat = format;
+    if (blended) {
+        MTLRenderPipelineColorAttachmentDescriptor *c = desc.colorAttachments[0];
+        c.blendingEnabled = YES;
+        c.rgbBlendOperation = MTLBlendOperationAdd;
+        c.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+        c.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        c.alphaBlendOperation = MTLBlendOperationAdd;
+        c.sourceAlphaBlendFactor = MTLBlendFactorZero;
+        c.destinationAlphaBlendFactor = MTLBlendFactorOne;
+    }
     pipeline = [_device newRenderPipelineStateWithDescriptor:desc error:error];
     if (pipeline)
-        _pipelines[@(format)] = pipeline;
+        cache[@(format)] = pipeline;
     return pipeline;
 }
 
@@ -253,6 +270,7 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
     p.useColorTable = _colorTable != nil;
     p.invert = _invert;
     p.colorImage = (_image && _image.isColor) ? 1 : 0;
+    p.useImageAlpha = _usesImageAlpha ? 1 : 0;
     p.bgR = _backgroundColor.red; p.bgG = _backgroundColor.green; p.bgB = _backgroundColor.blue; p.bgA = _backgroundColor.alpha;
     return p;
 }
@@ -273,20 +291,36 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
         if (error) *error = BKDisplayError(2, @"Could not create a render encoder");
         return NO;
     }
-    if (_imageTexture) {
-        id<MTLRenderPipelineState> pipeline = [self pipelineForPixelFormat:texture.pixelFormat error:error];
-        if (!pipeline) {
-            [encoder endEncoding];
-            return NO;
-        }
-        BKDisplayParams params = [self paramsWithScale:scale];
-        [encoder setRenderPipelineState:pipeline];
-        [encoder setFragmentTexture:_imageTexture atIndex:0];
-        [encoder setFragmentTexture:_lutTexture atIndex:1];
-        [encoder setFragmentBytes:&params length:sizeof(params) atIndex:0];
-        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-    }
+    BOOL ok = [self encodeImageWithEncoder:encoder pixelFormat:texture.pixelFormat scale:scale blended:NO error:error];
+    // Boros 6: the fusion overlay, drawn over this image in the same pass.
+    if (ok && _overlay)
+        ok = [_overlay encodeImageWithEncoder:encoder pixelFormat:texture.pixelFormat scale:scale blended:YES error:error];
     [encoder endEncoding];
+    return ok;
+}
+
+// What: draws this renderer's image into an open render pass (nothing if no image).
+// `blended` = draw as an overlay: mixed over what is there by the image's alpha, with a
+// fully transparent background so the area outside the image stays untouched.
+// Why: shared by the base image and the fusion overlay, so both use the very same
+// sampling, window/level and placement code.
+- (BOOL)encodeImageWithEncoder:(id<MTLRenderCommandEncoder>)encoder pixelFormat:(MTLPixelFormat)format
+                         scale:(CGFloat)scale blended:(BOOL)blended error:(NSError **)error
+{
+    if (!_imageTexture)
+        return YES;
+    id<MTLRenderPipelineState> pipeline = [self pipelineForPixelFormat:format blended:blended error:error];
+    if (!pipeline)
+        return NO;
+    BKDisplayParams params = [self paramsWithScale:scale];
+    if (blended) {
+        params.bgR = params.bgG = params.bgB = params.bgA = 0; // outside the overlay: no change
+    }
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setFragmentTexture:_imageTexture atIndex:0];
+    [encoder setFragmentTexture:_lutTexture atIndex:1];
+    [encoder setFragmentBytes:&params length:sizeof(params) atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     return YES;
 }
 

@@ -16,6 +16,7 @@
     int interpolation;               /* 0 nearest, 1 linear */ \
     int useColorTable; int invert; \
     int colorImage;                  /* 1 = image texture is a finished RGBA picture */ \
+    int useImageAlpha;               /* 1 = keep a colour picture's own alpha (see-through overlay layer) */ \
     float bgR; float bgG; float bgB; float bgA;
 
 typedef struct BKDisplayParams { BK_DISPLAY_PARAMS_FIELDS } BKDisplayParams;

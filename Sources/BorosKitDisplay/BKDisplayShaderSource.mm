@@ -90,8 +90,10 @@ fragment float4 bk_display_fragment(BKVertexOut in [[stage_in]],
     }
 
     // Finished colour picture: shown as is (no window/level, colour table or invert).
+    // An overlay layer (fusion) keeps the picture's own alpha so it is see-through; the
+    // pipeline then blends it over the image below.
     if (p.colorImage != 0)
-        return float4(sample.rgb, 1.0);
+        return float4(sample.rgb, p.useImageAlpha != 0 ? sample.a : 1.0);
 
     float value = sample.r;
 
