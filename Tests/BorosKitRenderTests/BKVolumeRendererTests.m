@@ -203,6 +203,112 @@ static const NSUInteger kSize = 64;
     XCTAssertEqualWithAccuracy([r valueAtX:0 y:0], -372.5f, 0.5f);   // x = 63 is inside the box
 }
 
+// What: 6 planes of a box centred at voxel (31, 31, cz), half-sizes (hx, hy, hz), rotated by
+// `angleZ` degrees about z and then `angleX` degrees about x (patient mm = voxel here).
+// Normals point out of the box (BorosKit cuts the normal side).
+static void BKBoxPlanes(double cz, double hx, double hy, double hz, double angleZ, double angleX, N3Plane out[6])
+{
+    double az = angleZ * M_PI / 180, ax = angleX * M_PI / 180;
+    N3AffineTransform rot = N3AffineTransformConcat(N3AffineTransformMakeRotation(az, 0, 0, 1),
+                                                    N3AffineTransformMakeRotation(ax, 1, 0, 0));
+    N3Vector c = N3VectorMake(31, 31, cz);
+    N3Vector axes[3] = {N3VectorMake(1, 0, 0), N3VectorMake(0, 1, 0), N3VectorMake(0, 0, 1)};
+    double h[3] = {hx, hy, hz};
+    for (int a = 0; a < 3; a++) {
+        N3Vector u = N3VectorApplyTransformToDirectionalVector(axes[a], rot);
+        out[2 * a]     = N3PlaneMake(N3VectorAdd(c, N3VectorScalarMultiply(u, h[a])), u);
+        out[2 * a + 1] = N3PlaneMake(N3VectorSubtract(c, N3VectorScalarMultiply(u, h[a])), N3VectorInvert(u));
+    }
+}
+
+// Rotated cropping box (6 planes, rotated 45 degrees about the viewing axis): every pixel
+// ray (one voxel column, x = 63 - i, y = 63 - j) must hit exactly when its column lies
+// inside the rotated square, and miss otherwise. Columns within half a voxel of an edge
+// are not checked (sampling there is legitimately either way).
+- (void)testRotatedBoxCropsTheRightVoxels
+{
+    if (![self requireGPU]) return;
+    _renderer.mode = BKRenderModeMIP;
+    N3Plane planes[6];
+    BKBoxPlanes(31, 8, 8, 40, 45, 0, planes);
+    [_renderer setClipPlanes:planes count:6];
+    XCTAssertEqual(_renderer.clipPlaneCount, 6u);
+    BKRenderResult *r = [self render];
+    float miss = _renderer.volumeTexture.outOfBoundsValue;
+    double c = cos(M_PI / 4), s = sin(M_PI / 4);
+    NSUInteger checked = 0, kept = 0;
+    for (NSUInteger j = 0; j < kSize; j++)
+        for (NSUInteger i = 0; i < kSize; i++) {
+            double x = 63.0 - i - 31, y = 63.0 - j - 31;
+            double u = c * x + s * y, v = -s * x + c * y;   // box-local coordinates
+            double margin = MAX(fabs(u), fabs(v)) - 8;
+            if (fabs(margin) < 0.75) continue;
+            float value = [r valueAtX:i y:j];
+            checked++;
+            if (margin < 0) { kept++; XCTAssertNotEqual(value, miss, @"column (%g, %g) should be kept", x + 31, y + 31); }
+            else XCTAssertEqual(value, miss, @"column (%g, %g) should be cut", x + 31, y + 31);
+        }
+    XCTAssertGreaterThan(kept, 100u);
+    XCTAssertGreaterThan(checked, 3000u);
+    // Distinguishes rotated from axis-aligned: column (38, 38) is inside an axis-aligned
+    // 8-voxel box (and inside the sphere) but outside the rotated one.
+    XCTAssertEqual([r valueAtX:63 - 38 y:63 - 38], miss);
+    // Column (40, 31) is outside an axis-aligned box but inside the rotated one, and its ray
+    // passes through the sphere.
+    XCTAssertEqualWithAccuracy([r valueAtX:63 - 40 y:63 - 31], 1000.0f, 0.5f);
+    // Clearing the planes restores the full picture.
+    [_renderer setClipPlanes:NULL count:0];
+    r = [self render];
+    XCTAssertEqualWithAccuracy([r valueAtX:63 - 38 y:63 - 38], 1000.0f, 0.5f);
+}
+
+// Box tilted about x (so the planes cut each ray at an angle) with its top inside the
+// volume: where a column's ray does not meet the sphere, the MIP of the z-gradient
+// background (-1000 + 10 z) equals the value at the highest kept z, which a CPU march
+// through the same planes gives. Tolerance: one sample step (0.5 mm -> 5 HU) plus margin.
+- (void)testTiltedBoxLimitsEachRay
+{
+    if (![self requireGPU]) return;
+    _renderer.mode = BKRenderModeMIP;
+    N3Plane planes[6];
+    BKBoxPlanes(30, 20, 20, 12, 10, 25, planes);
+    [_renderer setClipPlanes:planes count:6];
+    BKRenderResult *r = [self render];
+    float miss = _renderer.volumeTexture.outOfBoundsValue;
+    NSUInteger compared = 0;
+    for (NSUInteger j = 0; j < kSize; j += 3)
+        for (NSUInteger i = 0; i < kSize; i += 3) {
+            double x = 63.0 - i, y = 63.0 - j;
+            if ((x - 31) * (x - 31) + (y - 31) * (y - 31) <= 121) continue;   // sphere column
+            double zTop = -1, zBottom = -1;
+            for (double z = 0; z <= 63; z += 0.01)
+                if (BKClipPlanesKeepPoint(planes, 6, N3VectorMake(x, y, z))) { if (zBottom < 0) zBottom = z; zTop = z; }
+            float value = [r valueAtX:i y:j];
+            if (zTop < 0) { XCTAssertEqual(value, miss); continue; }
+            if (zTop - zBottom < 2) continue;   // grazing ray: too few samples to compare
+            XCTAssertEqualWithAccuracy(value, -1000.0f + 10.0f * (float)zTop, 6.0f, @"column (%g, %g)", x, y);
+            compared++;
+        }
+    XCTAssertGreaterThan(compared, 50u);
+}
+
+// The planes add to the axis-aligned crop box: a box column that the crop removes stays removed.
+- (void)testClipPlanesCombineWithCropBox
+{
+    if (![self requireGPU]) return;
+    _renderer.mode = BKRenderModeMIP;
+    N3Plane planes[6];
+    BKBoxPlanes(31, 20, 20, 40, 0, 0, planes);
+    [_renderer setClipPlanes:planes count:6];
+    _renderer.cropMin = N3VectorMake(32, 0, 0);
+    _renderer.cropMax = N3VectorMake(63, 63, 63);
+    BKRenderResult *r = [self render];
+    float miss = _renderer.volumeTexture.outOfBoundsValue;
+    XCTAssertEqual([r valueAtX:63 - 25 y:32], miss);   // x = 25: cut by the crop box
+    XCTAssertNotEqual([r valueAtX:63 - 40 y:32], miss); // x = 40: inside both
+    XCTAssertEqual([r valueAtX:63 - 55 y:32], miss);   // x = 55: cut by the planes
+}
+
 // A custom missValue replaces the volume's outside value where rays miss (same
 // cropped setup as above), and NAN restores the default. Why: the Boros 6 MPR bridge
 // sets missValue to VTK's outside value so "outside the scan" pixels match exactly.

@@ -508,4 +508,12 @@ static const NSUInteger kBKIdleTicksBeforePause = 30;
     [self setNeedsRedraw];
 }
 
+// What: sets/clears the extra clipping planes (rotated crop box) and redraws.
+// Why: lets the Boros 3D window show VTK's (rotatable) cropping box result in Metal.
+- (void)setClipPlanes:(const N3Plane *)planes count:(NSUInteger)count
+{
+    [_scene.renderer setClipPlanes:planes count:count];
+    [self setNeedsRedraw];
+}
+
 @end

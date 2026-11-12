@@ -89,6 +89,9 @@ NS_ASSUME_NONNULL_BEGIN
 // --- Cropping and clipping (patient mm for the plane, voxel indices for the box) -------
 - (void)setCropMin:(N3Vector)cropMin max:(N3Vector)cropMax;
 - (void)setClipPlane:(N3Plane)plane enabled:(BOOL)enabled;
+// Up to 6 extra planes (patient mm, normal side cut away), e.g. a rotated crop box.
+// count 0 removes them. See -[BKVolumeRenderer setClipPlanes:count:].
+- (void)setClipPlanes:(const N3Plane *)planes count:(NSUInteger)count;
 
 @end
 

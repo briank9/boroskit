@@ -16,8 +16,10 @@
 
 #include <simd/simd.h>
 #include <stdint.h>
+#include "BKClipPlanes.h"   // BK_MAX_CLIP_PLANES (shared with the plain-C plane math)
 
 typedef simd_float3   bk_float3;
+typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment on both sides, like float3
 typedef simd_float3x3 bk_float3x3;
 
 // Field list (order matters: 16-byte vectors first, then 4-byte scalars, so there is
@@ -37,6 +39,7 @@ typedef simd_float3x3 bk_float3x3;
     bk_float3 clipPoint;          /* a point on the clipping ("scissors") plane, patient mm */ \
     bk_float3 clipNormal;         /* unit normal; the side it points to is cut away */ \
     bk_float3 brickGrid;          /* empty-space skipping: number of bricks along x, y, z */ \
+    bk_float4 clipPlanes[BK_MAX_CLIP_PLANES]; /* extra clip planes (e.g. a rotated crop box): (nx,ny,nz,w), patient mm; cut where dot(n,x)+w > 0 (see BKClipPlanesPack) */ \
     float viewWidth;              /* ortho: image width in mm; perspective: 2*tan(hfov/2) */ \
     float viewHeight;             /* ortho: image height in mm; perspective: 2*tan(vfov/2) */ \
     float stepSize;               /* requested distance between samples along a ray, mm */ \
@@ -60,7 +63,8 @@ typedef simd_float3x3 bk_float3x3;
     int32_t useSlab;              /* 1 = limit rays to the slab */ \
     int32_t shading;              /* 1 = gradient shading in composite mode */ \
     int32_t useClip;              /* 1 = cut away the half-space in front of the clipping plane */ \
-    int32_t skipEmptySpace;       /* 1 = jump over bricks that cannot change the picture (see BK_BRICK_SIZE) */
+    int32_t skipEmptySpace;       /* 1 = jump over bricks that cannot change the picture (see BK_BRICK_SIZE) */ \
+    int32_t clipPlaneCount;       /* number of valid entries in clipPlanes (0..BK_MAX_CLIP_PLANES) */
 
 // Empty-space skipping (plain language): the volume is divided into small cubes
 // ("bricks") of BK_BRICK_SIZE voxels per side. For every brick the lowest and highest

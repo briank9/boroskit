@@ -35,13 +35,15 @@ extern "C" NSString *BKVolumeShaderSource(void)
 #include <metal_stdlib>
 using namespace metal;
 typedef float3   bk_float3;
+typedef float4   bk_float4;
 typedef float3x3 bk_float3x3;
 )METAL";
 
         const char *params = "struct BKRenderParams { " BK_STRINGIFY(BK_RENDER_PARAMS_FIELDS) " };\n"
                              // Brick size and lookup-table size, from the same header as the CPU side.
                              "constant int BKBrickSize = " BK_STRINGIFY(BK_BRICK_SIZE) ";\n"
-                             "constant int BKTransferFunctionEntries = " BK_STRINGIFY(BK_TRANSFER_FUNCTION_ENTRIES) ";\n";
+                             "constant int BKTransferFunctionEntries = " BK_STRINGIFY(BK_TRANSFER_FUNCTION_ENTRIES) ";\n"
+                             "constant int BKMaxClipPlanes = " BK_STRINGIFY(BK_MAX_CLIP_PLANES) ";\n";
 
         const char *kernels = R"METAL(
 // Render modes / projections (must match BKRenderMode / BKProjection in BKVolumeRenderer.h).
@@ -209,6 +211,24 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
             tHi = min(tHi, -c0 / cn);                    // ray moves into the cut side
         } else {
             tLo = max(tLo, -c0 / cn);                    // ray comes out of the cut side
+        }
+    }
+
+    // Extra clipping planes (e.g. the 6 faces of a rotated cropping box), same rule as the
+    // single plane above: cut where dot(n, x) + w > 0. What: shortens [tLo, tHi] to the part
+    // of the ray inside all planes. Why: the 3D window's crop box can be rotated, so an
+    // axis-aligned voxel box is not enough. Plain loop over a fixed-size array (maps 1:1 to
+    // a Vulkan/SPIR-V uniform buffer).
+    for (int i = 0; i < p.clipPlaneCount && i < BKMaxClipPlanes; i++) {
+        float3 n = p.clipPlanes[i].xyz;
+        float c0 = dot(origin, n) + p.clipPlanes[i].w;
+        float cn = dot(dir, n);
+        if (fabs(cn) < 1e-6f) {
+            if (c0 > 0.0f) tHi = -INFINITY;
+        } else if (cn > 0.0f) {
+            tHi = min(tHi, -c0 / cn);
+        } else {
+            tLo = max(tLo, -c0 / cn);
         }
     }
 
