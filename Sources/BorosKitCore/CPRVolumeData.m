@@ -199,7 +199,10 @@
     assert(x < _pixelsWide);
     assert(y < _pixelsHigh);
     assert(z < _pixelsDeep);
-    assert(x + length < _pixelsWide);
+    // BorosKit fix: was "x + length < _pixelsWide", which wrongly refused a run that ends
+    // exactly on the last pixel of a row (e.g. reading a whole row). The run covers pixels
+    // x .. x+length-1, so x + length == _pixelsWide is still inside the row.
+    assert(x + length <= _pixelsWide);
     
     atomic_fetch_add(&_readerCount, 1);
     if (_isValid) {
