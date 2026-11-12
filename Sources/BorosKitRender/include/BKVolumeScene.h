@@ -71,6 +71,10 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
 // Rendering mode passthrough (3D, MIP, MinIP, mean).
 @property (nonatomic) BKRenderMode mode;
 
+// Empty-space skipping passthrough (default YES): same picture, drawn faster.
+// See BKVolumeRenderer.skipsEmptySpace.
+@property (nonatomic) BOOL skipsEmptySpace;
+
 // --- Preset & window/level ------------------------------------------------------------
 // Applies a preset like the VR window: colours/opacity, WL/WW, lighting, projection and
 // background. Keeps the camera direction and zoom.

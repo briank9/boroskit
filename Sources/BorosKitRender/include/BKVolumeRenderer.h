@@ -145,6 +145,18 @@ typedef NS_ENUM(int32_t, BKProjection) {
 @property (nonatomic) float specular;
 @property (nonatomic) float specularPower;
 
+// --- Speed ----------------------------------------------------------------------------
+// Empty-space skipping (default YES). Rays jump over small blocks of the volume that
+// cannot change the picture: in 3D mode, blocks whose values are all fully
+// transparent under the current colour/opacity rule (e.g. the air around the head
+// with a bone preset); in MIP / MinIP, blocks that cannot beat the brightest / darkest
+// value already found on that ray. Samples after a jump land exactly where they would
+// have anyway, so the picture is the same (checked by the image-equality tests); it
+// only takes less time. The average mode never skips. Set NO to switch it off, e.g.
+// from an app preference, to compare or to rule it out when chasing a problem.
+// The first render of a new volume spends a few milliseconds measuring the blocks.
+@property (nonatomic) BOOL skipsEmptySpace;
+
 // Renders one image of width x height pixels and waits for the GPU to finish.
 // Returns nil + error if no volume is set or the GPU work fails.
 - (nullable BKRenderResult *)renderWithWidth:(NSUInteger)width

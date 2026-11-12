@@ -10,6 +10,7 @@
  */
 
 #import "BKVolumeTexture.h"
+#import "BKVolumeTexture+Bricks.h"   // so the brick-range slot gets its storage here
 #import "CPRVolumeData.h"
 #import <Accelerate/Accelerate.h>
 

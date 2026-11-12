@@ -183,6 +183,18 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
     [self applyWindow];
 }
 
+// Empty-space skipping lives in the renderer; the scene just passes it through so the
+// app can switch it from one place (see BKVolumeRenderer.skipsEmptySpace).
+- (BOOL)skipsEmptySpace
+{
+    return _renderer.skipsEmptySpace;
+}
+
+- (void)setSkipsEmptySpace:(BOOL)skipsEmptySpace
+{
+    _renderer.skipsEmptySpace = skipsEmptySpace;
+}
+
 #pragma mark - Preset and window/level
 
 // What: applies the whole preset (see header). Why: same looks as the VR window.

@@ -11,6 +11,7 @@
 
 #import "BKVolumeRenderer.h"
 #import "BKVolumeTexture.h"
+#import "BKVolumeTexture+Bricks.h"
 #import "BKTransferFunction.h"
 #import "BKShaderTypes.h"
 #import "CPRVolumeData.h"
@@ -19,7 +20,7 @@ NSString *BKVolumeShaderSource(void); // BKShaderSource.mm
 
 // Number of entries in the transfer-function lookup texture. 4096 gives < 1 HU per
 // entry over a typical 4000 HU CT range, so the GPU lookup is as fine as the data.
-static const NSUInteger kTransferFunctionEntries = 4096;
+static const NSUInteger kTransferFunctionEntries = BK_TRANSFER_FUNCTION_ENTRIES;
 
 // Makes an NSError in the BorosKitRender domain with a plain-language message.
 static NSError *BKRendererError(NSInteger code, NSString *message)
@@ -92,6 +93,15 @@ static simd_float3 BKFloat3(N3Vector v)
     id<MTLTexture> _tfTexture;            // baked transfer function (4096 x 1, RGBA float)
     BKTransferFunction *_bakedTransferFunction; // which function _tfTexture currently holds
     BKTransferFunction *_defaultTransferFunction; // gray ramp used when none is set
+
+    // --- Empty-space skipping (see BK_BRICK_SIZE in BKShaderTypes.h) ---
+    id<MTLComputePipelineState> _brickRangePipeline;    // bk_brick_ranges (once per volume)
+    id<MTLComputePipelineState> _classifyPipeline;      // bk_classify_bricks (per transfer function)
+    id<MTLBuffer> _alphaCountBuffer;    // running count of non-see-through table entries, per bake
+    id<MTLBuffer> _brickEmptyBuffer;    // 1 byte per brick: 1 = fully see-through
+    id<MTLBuffer> _classifiedAlphaCount;            // which table _brickEmptyBuffer was made for
+    __weak BKVolumeTexture *_classifiedVolume;      // ...and which volume
+    id<MTLBuffer> _placeholderBuffer;   // bound instead when skipping is off (the GPU wants something there)
 }
 
 // Both accessors are custom (they copy), so the backing variable must be declared explicitly.
@@ -129,7 +139,11 @@ static simd_float3 BKFloat3(N3Vector v)
     _sizePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_params_size"] error:error];
     _texturePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_raycast_texture"] error:error];
     _upscalePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_upscale"] error:error];
-    if (!_raycastPipeline || !_sizePipeline || !_texturePipeline || !_upscalePipeline) return nil;
+    _brickRangePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_brick_ranges"] error:error];
+    _classifyPipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_classify_bricks"] error:error];
+    if (!_raycastPipeline || !_sizePipeline || !_texturePipeline || !_upscalePipeline
+        || !_brickRangePipeline || !_classifyPipeline) return nil;
+    _placeholderBuffer = [_device newBufferWithLength:16 options:MTLResourceStorageModeShared];
     _queue = [_device newCommandQueue];
 
     // Defaults (documented in the header).
@@ -151,6 +165,7 @@ static simd_float3 BKFloat3(N3Vector v)
     _specularPower = 10;
     _missValue = NAN;                           // NAN = use the volume's outOfBoundsValue
     _clipPlane = N3PlaneMake(N3VectorZero, N3VectorMake(0, 0, 1));
+    _skipsEmptySpace = YES;   // same picture, only faster (proven by the image-equality tests)
     return self;
 }
 
@@ -204,6 +219,17 @@ static simd_float3 BKFloat3(N3Vector v)
     [tf bakeIntoRGBA:rgba count:kTransferFunctionEntries];
     [_tfTexture replaceRegion:MTLRegionMake2D(0, 0, kTransferFunctionEntries, 1) mipmapLevel:0
                     withBytes:rgba bytesPerRow:kTransferFunctionEntries * 4 * sizeof(float)];
+
+    // For empty-space skipping: count[k] = how many of the first k entries have any
+    // opacity at all (the shader skips only where the ray would find opacity exactly 0).
+    // A NEW buffer every time, so a frame still being drawn on the GPU keeps reading
+    // the old one undisturbed.
+    _alphaCountBuffer = [_device newBufferWithLength:(kTransferFunctionEntries + 1) * sizeof(uint32_t)
+                                             options:MTLResourceStorageModeShared];
+    uint32_t *count = _alphaCountBuffer.contents;
+    count[0] = 0;
+    for (NSUInteger i = 0; i < kTransferFunctionEntries; i++)
+        count[i + 1] = count[i] + (rgba[4 * i + 3] > 0.0f ? 1 : 0);
     free(rgba);
     _bakedTransferFunction = tf;
 }
@@ -308,6 +334,97 @@ static simd_float3 BKFloat3(N3Vector v)
     return YES;
 }
 
+#pragma mark - Empty-space skipping
+
+// Number of bricks along each axis of `vt` (a partial brick at the end counts).
+static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
+{
+    return simd_make_float3((vt.pixelsWide + BK_BRICK_SIZE - 1) / BK_BRICK_SIZE,
+                            (vt.pixelsHigh + BK_BRICK_SIZE - 1) / BK_BRICK_SIZE,
+                            (vt.pixelsDeep + BK_BRICK_SIZE - 1) / BK_BRICK_SIZE);
+}
+
+// What: makes sure the volume's per-brick (lowest, highest) list exists; builds it on
+// the GPU the first time and waits for it.
+// Why wait: it is done once per volume (a few milliseconds), and waiting means every
+// renderer sharing the volume can use the list at once without any ordering worries.
+- (id<MTLBuffer>)brickRangesForVolume:(BKVolumeTexture *)vt
+{
+    @synchronized (vt) {
+        if (vt.brickRangeBuffer) return vt.brickRangeBuffer;
+        simd_float3 g = BKBrickGrid(vt);
+        simd_uint3 grid = simd_make_uint3((uint32_t)g.x, (uint32_t)g.y, (uint32_t)g.z);
+        NSUInteger bricks = (NSUInteger)grid.x * grid.y * grid.z;
+        id<MTLBuffer> ranges = [_device newBufferWithLength:bricks * 2 * sizeof(uint16_t) options:MTLResourceStorageModePrivate];
+        if (!ranges) return nil;
+        id<MTLCommandBuffer> cb = [_queue commandBuffer];
+        id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+        [enc setComputePipelineState:_brickRangePipeline];
+        [enc setTexture:vt.texture atIndex:0];
+        [enc setBuffer:ranges offset:0 atIndex:0];
+        [enc setBytes:&grid length:sizeof(grid) atIndex:1];
+        [enc dispatchThreadgroups:MTLSizeMake((grid.x + 3) / 4, (grid.y + 3) / 4, (grid.z + 3) / 4)
+            threadsPerThreadgroup:MTLSizeMake(4, 4, 4)];
+        [enc endEncoding];
+        [cb commit];
+        [cb waitUntilCompleted];
+        if (cb.status == MTLCommandBufferStatusError) return nil;
+        vt.brickRangeBuffer = ranges;
+        return ranges;
+    }
+}
+
+// What: prepares empty-space skipping for one render and tells the shader whether to
+// use it (params->skipEmptySpace). In 3D (composite) mode it also re-decides which
+// bricks are fully see-through whenever the transfer function or volume changed,
+// encoded into `commandBuffer` ahead of the ray casting.
+// Returns the two per-brick lists to bind (placeholders when skipping is off).
+// Why it can never change the picture: see the shader; skipped samples are exactly the
+// ones whose contribution would have been thrown away.
+- (void)prepareSkippingForParams:(BKRenderParams *)params
+                   commandBuffer:(id<MTLCommandBuffer>)commandBuffer
+                      brickEmpty:(id<MTLBuffer> __strong *)brickEmpty
+                      brickRange:(id<MTLBuffer> __strong *)brickRange
+{
+    *brickEmpty = _placeholderBuffer;
+    *brickRange = _placeholderBuffer;
+    params->skipEmptySpace = 0;
+    // The average along the ray needs every sample, so nothing to skip there.
+    if (!_skipsEmptySpace || _mode == BKRenderModeAverage) return;
+
+    BKVolumeTexture *vt = _volumeTexture;
+    id<MTLBuffer> ranges = [self brickRangesForVolume:vt];
+    if (!ranges) return;   // could not build the list: just render without skipping
+    params->brickGrid = BKBrickGrid(vt);
+
+    if (_mode == BKRenderModeComposite) {
+        if (_classifiedAlphaCount != _alphaCountBuffer || _classifiedVolume != vt || !_brickEmptyBuffer) {
+            NSUInteger bricks = (NSUInteger)params->brickGrid.x * (NSUInteger)params->brickGrid.y * (NSUInteger)params->brickGrid.z;
+            // A new list each time (rare: only when the colours/opacity change), so a
+            // frame still in flight keeps the list it started with.
+            id<MTLBuffer> empty = [_device newBufferWithLength:bricks options:MTLResourceStorageModePrivate];
+            if (!empty) return;
+            id<MTLComputeCommandEncoder> enc = [commandBuffer computeCommandEncoder];
+            [enc setComputePipelineState:_classifyPipeline];
+            [enc setBuffer:ranges offset:0 atIndex:0];
+            [enc setBuffer:_alphaCountBuffer offset:0 atIndex:1];
+            [enc setBuffer:empty offset:0 atIndex:2];
+            [enc setBytes:params length:sizeof(*params) atIndex:3];
+            [enc dispatchThreadgroups:MTLSizeMake(((NSUInteger)params->brickGrid.x + 3) / 4,
+                                                  ((NSUInteger)params->brickGrid.y + 3) / 4,
+                                                  ((NSUInteger)params->brickGrid.z + 3) / 4)
+                threadsPerThreadgroup:MTLSizeMake(4, 4, 4)];
+            [enc endEncoding];
+            _brickEmptyBuffer = empty;
+            _classifiedAlphaCount = _alphaCountBuffer;
+            _classifiedVolume = vt;
+        }
+        *brickEmpty = _brickEmptyBuffer;
+    }
+    *brickRange = ranges;
+    params->skipEmptySpace = 1;
+}
+
 - (BKRenderResult *)renderWithWidth:(NSUInteger)width height:(NSUInteger)height error:(NSError **)error
 {
     if (!_volumeTexture) {
@@ -334,6 +451,8 @@ static simd_float3 BKFloat3(N3Vector v)
     }
 
     id<MTLCommandBuffer> cb = [_queue commandBuffer];
+    id<MTLBuffer> brickEmpty, brickRange;
+    [self prepareSkippingForParams:&params commandBuffer:cb brickEmpty:&brickEmpty brickRange:&brickRange];
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
     [enc setComputePipelineState:_raycastPipeline];
     [enc setTexture:_volumeTexture.texture atIndex:0];
@@ -341,6 +460,8 @@ static simd_float3 BKFloat3(N3Vector v)
     [enc setBytes:&params length:sizeof(params) atIndex:0];
     [enc setBuffer:colorBuffer offset:0 atIndex:1];
     [enc setBuffer:valueBuffer offset:0 atIndex:2];
+    [enc setBuffer:brickEmpty offset:0 atIndex:3];
+    [enc setBuffer:brickRange offset:0 atIndex:4];
     // 8x8 tiles: neighbouring rays read neighbouring voxels, which keeps the texture
     // cache warm. Thread groups are dispatched to cover the image; the kernel skips
     // threads that fall outside it.
@@ -390,6 +511,8 @@ static simd_float3 BKFloat3(N3Vector v)
     BKRenderParams params;
     if (![self fillParams:&params width:width height:height tf:tf error:error]) return NO;
 
+    id<MTLBuffer> brickEmpty, brickRange;
+    [self prepareSkippingForParams:&params commandBuffer:commandBuffer brickEmpty:&brickEmpty brickRange:&brickRange];
     id<MTLComputeCommandEncoder> enc = [commandBuffer computeCommandEncoder];
     [enc setComputePipelineState:_texturePipeline];
     [enc setTexture:_volumeTexture.texture atIndex:0];
@@ -397,6 +520,8 @@ static simd_float3 BKFloat3(N3Vector v)
     [enc setTexture:texture atIndex:2];
     [enc setBytes:&params length:sizeof(params) atIndex:0];
     [enc setBytes:&backgroundColor length:sizeof(backgroundColor) atIndex:1];
+    [enc setBuffer:brickEmpty offset:0 atIndex:2];
+    [enc setBuffer:brickRange offset:0 atIndex:3];
     [enc dispatchThreadgroups:MTLSizeMake((width + 7) / 8, (height + 7) / 8, 1)
         threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
     [enc endEncoding];

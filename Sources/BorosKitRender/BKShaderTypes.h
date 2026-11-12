@@ -36,6 +36,7 @@ typedef simd_float3x3 bk_float3x3;
     bk_float3 slabNormal;         /* unit normal of the slab's centre plane */ \
     bk_float3 clipPoint;          /* a point on the clipping ("scissors") plane, patient mm */ \
     bk_float3 clipNormal;         /* unit normal; the side it points to is cut away */ \
+    bk_float3 brickGrid;          /* empty-space skipping: number of bricks along x, y, z */ \
     float viewWidth;              /* ortho: image width in mm; perspective: 2*tan(hfov/2) */ \
     float viewHeight;             /* ortho: image height in mm; perspective: 2*tan(vfov/2) */ \
     float stepSize;               /* requested distance between samples along a ray, mm */ \
@@ -59,7 +60,21 @@ typedef simd_float3x3 bk_float3x3;
     int32_t useSlab;              /* 1 = limit rays to the slab */ \
     int32_t shading;              /* 1 = gradient shading in composite mode */ \
     int32_t useClip;              /* 1 = cut away the half-space in front of the clipping plane */ \
-    int32_t paddingForAlignment;  /* keeps the scalar tail a multiple of 8 bytes */
+    int32_t skipEmptySpace;       /* 1 = jump over bricks that cannot change the picture (see BK_BRICK_SIZE) */
+
+// Empty-space skipping (plain language): the volume is divided into small cubes
+// ("bricks") of BK_BRICK_SIZE voxels per side. For every brick the lowest and highest
+// stored value is remembered once per volume. A ray that enters a brick which cannot
+// show anything (all its values are fully transparent in 3D mode, or cannot beat the
+// brightest value found so far in MIP) jumps straight to where it leaves the brick,
+// and then carries on sampling at exactly the same spots it would have used anyway.
+// So the picture is the same, it is just found faster. 8 is a good size: small enough
+// to fit tightly around bone and teeth, large enough that jumping saves real work.
+#define BK_BRICK_SIZE 8
+
+// Number of entries in the transfer-function lookup table (shared with the shader so
+// the "is this brick see-through?" test reads the table exactly as the ray does).
+#define BK_TRANSFER_FUNCTION_ENTRIES 4096
 
 typedef struct BKRenderParams {
     BK_RENDER_PARAMS_FIELDS
