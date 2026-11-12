@@ -102,6 +102,10 @@ static simd_float3 BKFloat3(N3Vector v)
     id<MTLBuffer> _classifiedAlphaCount;            // which table _brickEmptyBuffer was made for
     __weak BKVolumeTexture *_classifiedVolume;      // ...and which volume
     id<MTLBuffer> _placeholderBuffer;   // bound instead when skipping is off (the GPU wants something there)
+
+    // --- Extra clipping planes (see -setClipPlanes:count:) ---
+    N3Plane _clipPlanes[BK_MAX_CLIP_PLANES];
+    NSUInteger _clipPlaneCount;
 }
 
 // Both accessors are custom (they copy), so the backing variable must be declared explicitly.
@@ -186,6 +190,30 @@ static simd_float3 BKFloat3(N3Vector v)
     _cropMin = N3VectorZero;
     if (volumeTexture)
         _cropMax = N3VectorMake(volumeTexture.pixelsWide - 1, volumeTexture.pixelsHigh - 1, volumeTexture.pixelsDeep - 1);
+    // Why: same reason as the crop box above - planes from a previous study must not cut the new one.
+    _clipPlaneCount = 0;
+}
+
+// What: stores up to BK_MAX_CLIP_PLANES clipping planes (patient mm, normal side cut away).
+// Why: the 3D window's cropping box can be rotated, which an axis-aligned voxel crop box
+// cannot express; 6 arbitrary planes can. Extra planes beyond the maximum are ignored.
+- (void)setClipPlanes:(const N3Plane *)planes count:(NSUInteger)count
+{
+    _clipPlaneCount = 0;
+    for (NSUInteger i = 0; planes && i < count && _clipPlaneCount < BK_MAX_CLIP_PLANES; i++)
+        _clipPlanes[_clipPlaneCount++] = planes[i];
+}
+
+// What: number of planes stored by -setClipPlanes:count:.
+- (NSUInteger)clipPlaneCount
+{
+    return _clipPlaneCount;
+}
+
+// What: one stored plane (index < clipPlaneCount), for callers that compare before re-setting.
+- (N3Plane)clipPlaneAtIndex:(NSUInteger)index
+{
+    return index < _clipPlaneCount ? _clipPlanes[index] : N3PlaneMake(N3VectorZero, N3VectorZero);
 }
 
 // Re-bakes the transfer function into the GPU lookup texture only when it changed,
@@ -310,6 +338,13 @@ static simd_float3 BKFloat3(N3Vector v)
     simd_float3 clipNormal = BKFloat3(_clipPlane.normal);
     p->clipNormal = simd_length(clipNormal) > 1e-6f ? simd_normalize(clipNormal) : simd_make_float3(0, 0, 1);
     p->useClip = _clipPlaneEnabled ? 1 : 0;
+
+    // Extra planes: packed as plain float4s by the backend-neutral helper (BKClipPlanes.h).
+    float packed[4 * BK_MAX_CLIP_PLANES];
+    NSUInteger planeCount = BKClipPlanesPack(_clipPlanes, _clipPlaneCount, packed);
+    for (NSUInteger i = 0; i < planeCount; i++)
+        p->clipPlanes[i] = simd_make_float4(packed[4 * i], packed[4 * i + 1], packed[4 * i + 2], packed[4 * i + 3]);
+    p->clipPlaneCount = (int32_t)planeCount;
 
     p->stepSize = _sampleSpacing > 0 ? (float)_sampleSpacing : (float)(0.5 * vt.minPixelSpacing);
     if (!(p->stepSize > 0)) p->stepSize = 0.5f;

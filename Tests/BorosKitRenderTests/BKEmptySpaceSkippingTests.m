@@ -404,7 +404,20 @@ static float BKTestNoise(uint32_t *state, float amplitude)
     r.slabThickness = 9;
     [self differenceForRenderer:r width:150 height:120 label:@"crop + clip + slab"];
 
+    // Rotated crop box as 6 extra planes (the VR window's crop box in Metal).
     r.slabEnabled = NO;
+    r.clipPlaneEnabled = NO;
+    N3Plane box[6] = {
+        N3PlaneMake(N3VectorMake(60, 40, 30), N3VectorNormalize(N3VectorMake(1, 0.3, 0.1))),
+        N3PlaneMake(N3VectorMake(15, 30, 30), N3VectorNormalize(N3VectorMake(-1, -0.3, -0.1))),
+        N3PlaneMake(N3VectorMake(40, 60, 30), N3VectorNormalize(N3VectorMake(-0.3, 1, 0.2))),
+        N3PlaneMake(N3VectorMake(40, 12, 30), N3VectorNormalize(N3VectorMake(0.3, -1, -0.2))),
+        N3PlaneMake(N3VectorMake(40, 40, 50), N3VectorMake(0, 0, 1)),
+        N3PlaneMake(N3VectorMake(40, 40, 8), N3VectorMake(0, 0, -1)) };
+    [r setClipPlanes:box count:6];
+    [self differenceForRenderer:r width:150 height:120 label:@"crop + rotated box planes"];
+    [r setClipPlanes:NULL count:0];
+
     r.clipPlaneEnabled = NO;
     r.sampleSpacing = 0.07;   // many samples per voxel
     [self differenceForRenderer:r width:150 height:120 label:@"fine step"];

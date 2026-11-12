@@ -23,6 +23,7 @@
 #import <Metal/Metal.h>
 #import <simd/simd.h>
 #import "N3Geometry.h"
+#import "BKClipPlanes.h"
 
 @class CPRVolumeData, BKTransferFunction, BKVolumeTexture;
 
@@ -117,6 +118,16 @@ typedef NS_ENUM(int32_t, BKProjection) {
 // the volume to look inside; one plane is the building block for those.
 @property (nonatomic) BOOL clipPlaneEnabled;
 @property (nonatomic) N3Plane clipPlane;
+
+// --- Extra clipping planes (e.g. a rotated cropping box) --------------------------
+// Up to BK_MAX_CLIP_PLANES (6) planes, patient mm, same rule as clipPlane: the side each
+// normal points to is cut away (a point is kept only if it is inside all of them).
+// They add to the crop box and the clip plane above. count 0 (or planes NULL) = none.
+// Why: the VR window's cropping box can be rotated; 6 planes describe it exactly.
+// BKClipPlanesFromVTK (BorosKitCore) converts VTK planes into this form.
+- (void)setClipPlanes:(const N3Plane *)planes count:(NSUInteger)count;
+@property (nonatomic, readonly) NSUInteger clipPlaneCount;
+- (N3Plane)clipPlaneAtIndex:(NSUInteger)index;
 
 // --- Appearance ------------------------------------------------------------------
 // Grayscale window for MIP / MinIP / Average output (rgba8Data). floatData is never
