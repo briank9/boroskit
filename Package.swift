@@ -14,6 +14,8 @@ let package = Package(
         .library(name: "BorosKitRender", targets: ["BorosKitRender"]),
         // BorosKitDisplay (2D image display: Metal image + CoreGraphics overlays)
         .library(name: "BorosKitDisplay", targets: ["BorosKitDisplay"]),
+        // BorosKitMesh (surface meshes + STL/PLY/OBJ files)
+        .library(name: "BorosKitMesh", targets: ["BorosKitMesh"]),
     ],
     targets: [
         .target(
@@ -97,5 +99,23 @@ let package = Package(
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
         // --- end BorosKitDisplay ---
+        // --- BorosKitMesh: surface meshes (bone surfaces, intraoral scans, implants) ---
+        .target(
+            name: "BorosKitMesh",
+            // Core: N3 geometry (patient mm transforms). No GPU code here.
+            dependencies: ["BorosKitCore"],
+            path: "Sources/BorosKitMesh",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc"])],
+            linkerSettings: [.linkedFramework("Foundation")]
+        ),
+        .testTarget(
+            name: "BorosKitMeshTests",
+            dependencies: ["BorosKitMesh", "BorosKitCore"],
+            path: "Tests/BorosKitMeshTests",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])]
+        ),
+        // --- end BorosKitMesh ---
     ]
 )
