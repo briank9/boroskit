@@ -14,6 +14,9 @@ let package = Package(
         .library(name: "BorosKitRender", targets: ["BorosKitRender"]),
         // BorosKitDisplay (2D image display: Metal image + CoreGraphics overlays)
         .library(name: "BorosKitDisplay", targets: ["BorosKitDisplay"]),
+        // BorosKitMesh (surface meshes + STL/PLY/OBJ files) and BorosKitMeshRender (Metal mesh drawing)
+        .library(name: "BorosKitMesh", targets: ["BorosKitMesh"]),
+        .library(name: "BorosKitMeshRender", targets: ["BorosKitMeshRender"]),
     ],
     targets: [
         .target(
@@ -106,5 +109,33 @@ let package = Package(
             path: "Tests/BorosKitAccuracyTests",
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
+        // --- BorosKitMesh: surface meshes (bone surfaces, intraoral scans, implants) ---
+        .target(
+            name: "BorosKitMesh",
+            // Core: N3 geometry (patient mm transforms). No GPU code here.
+            dependencies: ["BorosKitCore"],
+            path: "Sources/BorosKitMesh",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc"])],
+            linkerSettings: [.linkedFramework("Foundation")]
+        ),
+        .target(
+            name: "BorosKitMeshRender",
+            // Render: BKVolumeCamera / BKRenderResult, so meshes use the volume's camera.
+            dependencies: ["BorosKitMesh", "BorosKitRender", "BorosKitCore"],
+            path: "Sources/BorosKitMeshRender",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc"])],
+            linkerSettings: [.linkedFramework("Metal"), .linkedFramework("Foundation")]
+        ),
+        .testTarget(
+            name: "BorosKitMeshTests",
+            dependencies: ["BorosKitMesh", "BorosKitMeshRender", "BorosKitRender", "BorosKitCore"],
+            path: "Tests/BorosKitMeshTests",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])]
+        ),
+        // --- end BorosKitMesh ---
     ]
 )
