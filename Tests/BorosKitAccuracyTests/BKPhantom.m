@@ -169,19 +169,29 @@ static BKPhantomMarker *MakeMarker(NSString *name, N3Vector centre, float value,
     N3Vector q = Sub(p, _centre);
     double best = 0;   // 0..(peak - background) above the background
 
-    double dl = Len(Sub(q, V(12, 0, 0)));
-    if (dl < 3.5) best = fmax(best, 2000.0 * Clamp01(3.5 - dl));        // left sphere, 1000
-    double da = Len(Sub(q, V(0, -12, 0)));
-    if (da < 3.5) best = fmax(best, 1500.0 * Clamp01(3.5 - da));        // anterior sphere, 500
-    // rod: distance to the segment z = 8..18 on the axis
-    double zc = fmin(fmax(q.z, 8.0), 18.0);
-    double dr = Len(Sub(q, V(0, 0, zc)));
-    if (dr < 2.0) best = fmax(best, 1200.0 * Clamp01(2.0 - dr));        // rod, 200
+    // Each marker is only evaluated when q is inside its bounding box: most of the scan
+    // is empty air, and this keeps building the phantom fast.
+    if (fabs(q.x - 12) < 3.5 && fabs(q.y) < 3.5 && fabs(q.z) < 3.5) {
+        double dl = Len(Sub(q, V(12, 0, 0)));
+        best = fmax(best, 2000.0 * Clamp01(3.5 - dl));                    // left sphere, 1000
+    }
+    if (fabs(q.x) < 3.5 && fabs(q.y + 12) < 3.5 && fabs(q.z) < 3.5) {
+        double da = Len(Sub(q, V(0, -12, 0)));
+        best = fmax(best, 1500.0 * Clamp01(3.5 - da));                    // anterior sphere, 500
+    }
+    if (fabs(q.x) < 2.0 && fabs(q.y) < 2.0 && q.z > 6.0 && q.z < 20.0) {
+        // rod: distance to the segment z = 8..18 on the axis
+        double zc = fmin(fmax(q.z, 8.0), 18.0);
+        double dr = Len(Sub(q, V(0, 0, zc)));
+        best = fmax(best, 1200.0 * Clamp01(2.0 - dr));                    // rod, 200
+    }
     for (int i = 0; i < 4; i++) {
-        double dd = Len(Sub(q, _relDot[i]));
-        if (dd < 4.0) {
+        N3Vector r = Sub(q, _relDot[i]);
+        if (fabs(r.x) >= 4.0 || fabs(r.y) >= 4.0 || fabs(r.z) >= 4.0) continue;
+        double dd2 = Dot(r, r);
+        if (dd2 < 16.0) {
             double peak = (i < 2 ? 2000.0 : 1500.0) - kBackground;
-            best = fmax(best, peak * exp(-dd * dd / (2.0 * kDotSigma * kDotSigma)));
+            best = fmax(best, peak * exp(-dd2 / (2.0 * kDotSigma * kDotSigma)));
         }
     }
     return (float)(kBackground + best);
