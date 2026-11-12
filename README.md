@@ -284,6 +284,38 @@ The decision is two small functions (`BKInitialInteractiveQualityLevel`,
   picking on the surface, and no movie/turntable export yet.
 - Volumes larger than 2048 voxels per side can't be loaded onto the GPU.
 
+## Surface meshes (`BorosKitMesh`, `BorosKitMeshRender`)
+
+### What it does, in plain terms
+A mesh is a 3D shape described by its skin: corner points and the triangles
+between them. Bone surfaces, intraoral scans, implants and surgical guides are
+all meshes.
+
+- **`BKMesh`** (in `BorosKitMesh`, no GPU code) holds one mesh in patient
+  millimetres, with optional normals and per-vertex colours. It can move it
+  (4x4 matrix or `N3AffineTransform`), compute smooth or flat normals, merge
+  repeated corners ("weld"), and check it: is the surface closed (watertight)
+  and clean (manifold, consistently oriented), its area and its volume.
+- **`BKMeshIO`** reads STL (binary and text), PLY (text and binary, with
+  colours) and OBJ, and writes binary STL, PLY and OBJ. A damaged file gives an
+  error message, never a crash.
+- **`BKMeshRenderer`** (in `BorosKitMeshRender`) draws meshes with Metal: each
+  with its own colour and see-through-ness, with the same light as the 3D
+  volume picture, and with **the same camera** as the volume (it can take over a
+  `BKVolumeCamera` directly), so a mesh lands on exactly the same pixels as the
+  bone it was made from. The tests check this against the volume renderer.
+
+### Limits for now
+- Meshes and the volume are not yet blended into one picture with correct
+  hiding (bone in front of an implant). The mesh renderer already outputs, per
+  pixel, how far along the viewing ray the nearest solid surface is, measured
+  the way the volume ray caster measures; the volume shader still has to learn
+  to stop its rays there. Meshes can already be drawn on top of a volume image.
+- No smoothing of the edges (antialiasing) yet; triangles inside one
+  see-through mesh are not sorted.
+- No decimation, smoothing, boolean (cut/merge) operations or surface
+  extraction from CT (marching cubes) yet.
+
 ## The plan, step by step
 
 1. **Metal volume engine**: this package. Done: composite, MIP, MinIP and
@@ -296,8 +328,8 @@ The decision is two small functions (`BKInitialInteractiveQualityLevel`,
    touch and Apple Pencil on iPad.
 4. **3D window on Metal** (started: `BKVolumeView`) in Boros 6, behind a switch, so it can be compared
    side by side with the old VTK version.
-5. **Meshes**: bone surfaces, intraoral scans (STL/PLY) and implant models,
-   drawn with Metal. This is the base for the CMF workspace and implant
+5. **Meshes** (started: `BorosKitMesh`, `BorosKitMeshRender`): bone surfaces,
+   intraoral scans (STL/PLY) and implant models, drawn with Metal. This is the base for the CMF workspace and implant
    planning.
 6. **Housekeeping**: VTK 9 and ITK 5.4 kept only for math (meshes, segmentation,
    registration), and the movie export moved from QTKit to AVFoundation.
