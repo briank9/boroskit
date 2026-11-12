@@ -516,4 +516,45 @@ static void BKExpectedAxes(BKStandardView view, simd_float3 *right, simd_float3 
     XCTAssertFalse([self isCoveredAtX:60 y:15 in:res]);
 }
 
+#pragma mark - Picking (added 2026-11-12)
+
+// Clicking on a solid box gives the point on the box's front face under the mouse, in both
+// projections; clicking beside it gives nothing.
+- (void)testPickPointOnSurface
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    // Box from (-10,-10,-10) to (10,10,10); front view looks along +y, so the front face is y = -10.
+    r.objects = @[[[BKMeshObject alloc] initWithMesh:[BKMesh boxMeshWithMin:simd_make_float3(-10, -10, -10) max:simd_make_float3(10, 10, 10)]]];
+    for (int perspective = 0; perspective < 2; perspective++) {
+        BKVolumeCamera *camera = [[BKVolumeCamera alloc] init];
+        camera.focalPoint = N3VectorZero;
+        camera.parallelScale = 50;
+        camera.distance = 200;
+        camera.projection = perspective ? BKProjectionPerspective : BKProjectionOrthographic;
+        [camera showStandardView:BKStandardViewAnterior];
+        [r setCameraFromVolumeCamera:camera aspectRatio:1];
+        simd_float3 p;
+        NSError *error = nil;
+        // Image centre (pixel 50,50 has its centre at 50.5 -> a hair off the axis).
+        XCTAssertTrue([r pickPatientPoint:&p atPixelX:50 y:50 width:100 height:100 error:&error], @"%@", error);
+        XCTAssertEqualWithAccuracy(p.y, -10, 0.05, @"front face, projection %d", perspective);
+        XCTAssertEqualWithAccuracy(p.x, 0, 1.0);
+        XCTAssertEqualWithAccuracy(p.z, 0, 1.0);
+        XCTAssertFalse([r pickPatientPoint:&p atPixelX:2 y:2 width:100 height:100 error:&error]);   // background
+    }
+    // Orthographic, 1 mm per pixel: pixel (55, 45) -> 5.5 mm to the image's right and up from
+    // the centre. Front view: image right = patient's left (+x), image up = head (+z).
+    BKVolumeCamera *camera = [[BKVolumeCamera alloc] init];
+    camera.focalPoint = N3VectorZero;
+    camera.parallelScale = 50;
+    [camera showStandardView:BKStandardViewAnterior];
+    [r setCameraFromVolumeCamera:camera aspectRatio:1];
+    simd_float3 p;
+    XCTAssertTrue([r pickPatientPoint:&p atPixelX:55 y:45 width:100 height:100 error:NULL]);
+    XCTAssertEqualWithAccuracy(p.x, 5.5, 0.01);
+    XCTAssertEqualWithAccuracy(p.z, 4.5, 0.01);
+    XCTAssertEqualWithAccuracy(p.y, -10, 0.05);
+}
+
 @end

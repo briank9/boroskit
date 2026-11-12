@@ -669,6 +669,53 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                                           floats:[NSData dataWithBytes:distanceOut.contents length:width * height * sizeof(float)]];
 }
 
+#pragma mark Picking
+
+simd_float3 BKMeshUnprojectPixel(BKProjection projection, simd_float3 position, simd_float3 right,
+                                 simd_float3 up, simd_float3 forward, float halfWidth, float halfHeight,
+                                 float ndcX, float ndcY, float rayDistance)
+{
+    if (projection == BKProjectionPerspective) {
+        // The pixel's ray from the eye (same as the vertex shader's projection, inverted).
+        simd_float3 dir = simd_normalize(forward + right * (ndcX * halfWidth) + up * (ndcY * halfHeight));
+        return position + dir * rayDistance;
+    }
+    return position + right * (ndcX * halfWidth) + up * (ndcY * halfHeight) + forward * rayDistance;
+}
+
+// What: see the header. One offscreen render with the ray-distance output, one pixel read.
+- (BOOL)pickPatientPoint:(simd_float3 *)point atPixelX:(double)x y:(double)y
+                   width:(NSUInteger)width height:(NSUInteger)height error:(NSError **)error
+{
+    if (point == NULL || !(x >= 0) || !(y >= 0) || x >= width || y >= height) return NO;
+    BKRenderResult *result = [self renderWithWidth:width height:height error:error];
+    if (result == nil) return NO;
+    NSUInteger px = (NSUInteger)floor(x), py = (NSUInteger)floor(y);
+    float distance = [result valueAtX:px y:py];
+    if (!isfinite(distance)) return NO;   // background or only see-through surfaces
+
+    // Drawing area and camera exactly as -encodeRenderToColorTexture: uses them.
+    CGRect area = CGRectMake(0, 0, width, height);
+    if (!CGRectIsEmpty(_viewport)) area = CGRectIntersection(CGRectIntegral(_viewport), area);
+    if (CGRectIsEmpty(area)) return NO;
+    simd_float3 right, up, forward;
+    if (![self getCameraRight:&right up:&up forward:&forward error:error]) return NO;
+    float halfWidth, halfHeight;
+    if (_projection == BKProjectionPerspective) {
+        halfHeight = tanf(0.5f * (float)_fieldOfView * (float)M_PI / 180.0f);
+        halfWidth = halfHeight * (float)(area.size.width / area.size.height);
+    } else {
+        halfWidth = 0.5f * (float)_viewWidth;
+        halfHeight = 0.5f * (float)_viewHeight;
+    }
+    // Pixel centre -> -1..1 inside the drawing area (y up).
+    float ndcX = (float)(((px + 0.5) - area.origin.x) / area.size.width * 2.0 - 1.0);
+    float ndcY = (float)(1.0 - ((py + 0.5) - area.origin.y) / area.size.height * 2.0);
+    *point = BKMeshUnprojectPixel(_projection, BKMeshFloat3(_cameraPosition), right, up, forward,
+                                  halfWidth, halfHeight, ndcX, ndcY, distance);
+    return YES;
+}
+
 #pragma mark Tests
 
 - (NSUInteger)gpuUniformBlockSize

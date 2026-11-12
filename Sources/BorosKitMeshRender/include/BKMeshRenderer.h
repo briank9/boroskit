@@ -182,10 +182,33 @@ NS_ASSUME_NONNULL_BEGIN
                         clearColor:(simd_float4)clearColor
                              error:(NSError * _Nullable * _Nullable)error;
 
+// --- Picking ---------------------------------------------------------------------------
+// What 3D point (patient mm) is under a pixel: renders the scene at width x height (with the
+// current camera and viewport), reads the ray distance of the nearest SOLID surface or line
+// at pixel (x, y) (pixels from the top-left, fractions allowed) and turns it back into a
+// point with the same camera maths as the drawing. Returns NO when nothing solid is under
+// the pixel (or on GPU failure).
+// Why: placing points / centring on a click needs "where is the bone under the mouse".
+// The old VTK views read OpenGL's depth buffer for that; Metal gives the exact distance.
+- (BOOL)pickPatientPoint:(simd_float3 *)point atPixelX:(double)x y:(double)y
+                   width:(NSUInteger)width height:(NSUInteger)height
+                   error:(NSError * _Nullable * _Nullable)error;
+
 // For tests: the uniform block size as the GPU / CPU compilers see it (must match).
 - (NSUInteger)gpuUniformBlockSize;
 + (NSUInteger)cpuUniformBlockSize;
 
 @end
+
+// The pixel -> point maths used by -pickPatientPoint:..., as a plain C function (no GPU, so
+// a Vulkan backend can share it). (ndcX, ndcY): position in the drawing area from -1 (left /
+// bottom) to +1 (right / top); rayDistance: as written by the renderer (orthographic: along
+// the view direction from the image plane; perspective: from the eye along the pixel's ray).
+// halfWidth / halfHeight: orthographic = half the image size in mm; perspective = tan of the
+// half angles. right/up/forward: the orthonormal camera frame; position: image-plane centre
+// (orthographic) or eye (perspective).
+simd_float3 BKMeshUnprojectPixel(BKProjection projection, simd_float3 position, simd_float3 right,
+                                 simd_float3 up, simd_float3 forward, float halfWidth, float halfHeight,
+                                 float ndcX, float ndcY, float rayDistance);
 
 NS_ASSUME_NONNULL_END
