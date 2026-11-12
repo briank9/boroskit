@@ -322,6 +322,10 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   average, thick and thin slabs (including in-between interpolation and real
   millimetre spacing), cropping, perspective, the 3D composite image, Horos-style
   presets, and that the CPU and GPU agree on the settings layout.
+- **Accuracy check** (`BorosKitAccuracyTests`): a synthetic phantom scan with markers
+  at known positions proves that MPR, 3D, CPR/panorex and the 2D display put left/right,
+  front/back and head/feet on the correct side and measure 40 mm as 40 mm. See
+  [ACCURACY.md](ACCURACY.md) for what is checked, how to run it and the latest results.
 
 ## Notes
 - The engine code uses manual memory management (retain/release), like Horos.
