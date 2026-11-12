@@ -97,5 +97,14 @@ let package = Package(
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
         // --- end BorosKitDisplay ---
+        // --- Accuracy check: a synthetic "phantom" scan with known markers, rendered through
+        // every image path (MPR/slab, 3D, CPR, 2D display) to prove orientation, left/right
+        // and distances are exactly right. See ACCURACY.md.
+        .testTarget(
+            name: "BorosKitAccuracyTests",
+            dependencies: ["BorosKitDisplay", "BorosKitRender", "BorosKitCore"],
+            path: "Tests/BorosKitAccuracyTests",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])]
+        ),
     ]
 )
