@@ -22,6 +22,12 @@
 
 @class N3BezierPath;
 
+// C functions here keep C names when this header is used from C++ (Objective-C++ app
+// code such as the VTK -> Metal mirror), so they link (added 2026-11-12).
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 NS_ASSUME_NONNULL_BEGIN
 
 // Base class: style shared by all overlay items.
@@ -130,3 +136,7 @@ BKOverlayItem * _Nullable BKOverlayHitTest(NSArray<BKOverlayItem *> *items, CGPo
                                            CGFloat tolerance, BKViewTransform transform);
 
 NS_ASSUME_NONNULL_END
+
+#ifdef __cplusplus
+}
+#endif

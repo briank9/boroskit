@@ -18,6 +18,12 @@
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 
+// C functions here keep C names when this header is used from C++ (Objective-C++ app
+// code such as the VTK -> Metal mirror), so they link (added 2026-11-12).
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 NS_ASSUME_NONNULL_BEGIN
 
 typedef struct {
@@ -61,3 +67,7 @@ CGFloat BKViewTransformMillimetresPerViewPoint(BKViewTransform t);
 BKViewTransform BKViewTransformZoomedAroundViewPoint(BKViewTransform t, CGFloat factor, CGPoint viewPoint);
 
 NS_ASSUME_NONNULL_END
+
+#ifdef __cplusplus
+}
+#endif

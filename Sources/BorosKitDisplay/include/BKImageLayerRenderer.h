@@ -18,6 +18,12 @@
 #import "BKViewTransform.h"
 #import "N3Geometry.h"
 
+// C functions here keep C names when this header is used from C++ (Objective-C++ app
+// code such as the VTK -> Metal mirror), so they link (added 2026-11-12).
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 NS_ASSUME_NONNULL_BEGIN
 
 // One 2D image to display: float pixel values (e.g. Hounsfield units), row 0 = top.
@@ -134,3 +140,7 @@ static inline BKColor BKColorMake(float r, float g, float b, float a) { BKColor 
 @end
 
 NS_ASSUME_NONNULL_END
+
+#ifdef __cplusplus
+}
+#endif
