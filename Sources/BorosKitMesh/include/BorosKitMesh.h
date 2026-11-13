@@ -4,3 +4,4 @@
 
 #import "BKMesh.h"
 #import "BKMeshIO.h"
+#import "BKMeshProcessing.h"
