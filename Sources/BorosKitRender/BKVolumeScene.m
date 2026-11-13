@@ -13,6 +13,7 @@
 #import "BKPreset.h"
 #import "BKTransferFunction.h"
 #import "CPRVolumeData.h"
+#import "BKCameraMath.h"
 #import <QuartzCore/QuartzCore.h>
 
 // What: GPU cost of a level relative to full quality (pixel count x samples per ray).
@@ -337,6 +338,66 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
 
 #pragma mark - Rendering
 
+#pragma mark - Camera slab
+
+// What: switching the camera slab on or off. Why: off must also switch the renderer's slab
+// off, otherwise the last slab would stay in the picture.
+- (void)setViewSlabEnabled:(BOOL)viewSlabEnabled
+{
+    _viewSlabEnabled = viewSlabEnabled;
+    if (!viewSlabEnabled) _renderer.slabEnabled = NO;
+}
+
+// What: the scene camera in the plain-C form used by BKCameraMath (patient mm).
+static BKCameraFrame BKSceneCameraFrame(BKVolumeCamera *camera)
+{
+    N3Vector p = camera.position, d = camera.direction, u = camera.viewUp;
+    BKCameraFrame f;
+    f.position = simd_make_double3(p.x, p.y, p.z);
+    f.direction = simd_make_double3(d.x, d.y, d.z);
+    f.up = simd_make_double3(u.x, u.y, u.z);
+    f.parallelScale = camera.parallelScale;
+    f.viewAngle = camera.viewAngle;
+    f.perspective = camera.projection == BKProjectionPerspective;
+    return f;
+}
+
+// What: places the renderer's slab from the current camera (see viewSlabEnabled).
+// Why: called just before every render so the slab always matches the camera of that frame.
+- (void)applyViewSlab
+{
+    if (!_viewSlabEnabled) return;
+    simd_double3 point, normal;
+    double thickness;
+    if (!BKCameraSlab(BKSceneCameraFrame(_camera), _viewSlabNear, _viewSlabFar, &point, &normal, &thickness)) {
+        _renderer.slabEnabled = NO;   // empty slab settings: show nothing special rather than garbage
+        return;
+    }
+    // The renderer's slab API takes BorosKitCore's plane type (point + normal, patient mm).
+    _renderer.slabPlane = N3PlaneMake(N3VectorMake(point.x, point.y, point.z), N3VectorMake(normal.x, normal.y, normal.z));
+    _renderer.slabThickness = thickness;
+    _renderer.slabEnabled = YES;
+}
+
+// What: one full-quality CPU-readable render with the scene's camera (see header).
+// Why: the 16-bit export needs the real projected values, not screen colours.
+- (BKRenderResult *)renderFullQualityWithWidth:(NSUInteger)width height:(NSUInteger)height
+                                     missValue:(float)missValue error:(NSError **)error
+{
+    if (width == 0 || height == 0) {
+        if (error) *error = [NSError errorWithDomain:@"BorosKit" code:1 userInfo:@{NSLocalizedDescriptionKey: @"empty image size"}];
+        return nil;
+    }
+    _renderer.sampleSpacing = _baseSampleSpacing;   // full quality (0 = automatic half voxel)
+    [_camera applyToRenderer:_renderer aspectRatio:(CGFloat)width / (CGFloat)height];
+    [self applyViewSlab];
+    float savedMiss = _renderer.missValue;
+    _renderer.missValue = missValue;
+    BKRenderResult *result = [_renderer renderWithWidth:width height:height error:error];
+    _renderer.missValue = savedMiss;
+    return result;
+}
+
 // What: encodes one frame at the chosen level (see header): direct ray-cast at full
 // resolution, or ray-cast into a smaller texture + upscale. Records the GPU time.
 // Why: never blocks; quality adapts to the measured cost.
@@ -357,6 +418,7 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
     CGSize full = CGSizeMake(target.width, target.height);
     CGSize size = [self renderSizeForTargetSize:full qualityLevel:level];
     [_camera applyToRenderer:_renderer aspectRatio:full.width / MAX(full.height, 1.0)];
+    [self applyViewSlab];
 
     BOOL ok;
     if (size.width >= full.width && size.height >= full.height) {
