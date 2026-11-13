@@ -17,6 +17,8 @@ let package = Package(
         // BorosKitMesh (surface meshes + STL/PLY/OBJ files) and BorosKitMeshRender (Metal mesh drawing)
         .library(name: "BorosKitMesh", targets: ["BorosKitMesh"]),
         .library(name: "BorosKitMeshRender", targets: ["BorosKitMeshRender"]),
+        // BorosKitSurface (bone / skin surfaces from a scan, built on the GPU)
+        .library(name: "BorosKitSurface", targets: ["BorosKitSurface"]),
     ],
     targets: [
         .target(
@@ -137,5 +139,24 @@ let package = Package(
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
         // --- end BorosKitMesh ---
+        // --- BorosKitSurface: GPU isosurface extraction (replaces VTK contour/decimate/smooth) ---
+        .target(
+            name: "BorosKitSurface",
+            // Render: BKVolumeTexture (the scan on the GPU). Mesh: BKMesh (the result).
+            // The plain-C core (BKSurfaceCore) uses none of them, so a Vulkan backend can reuse it.
+            dependencies: ["BorosKitCore", "BorosKitRender", "BorosKitMesh"],
+            path: "Sources/BorosKitSurface",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc"])],
+            linkerSettings: [.linkedFramework("Metal"), .linkedFramework("QuartzCore"), .linkedFramework("Foundation")]
+        ),
+        .testTarget(
+            name: "BorosKitSurfaceTests",
+            dependencies: ["BorosKitSurface", "BorosKitMesh", "BorosKitRender", "BorosKitCore"],
+            path: "Tests/BorosKitSurfaceTests",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])]
+        ),
+        // --- end BorosKitSurface ---
     ]
 )
