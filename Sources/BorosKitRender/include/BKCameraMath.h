@@ -52,6 +52,15 @@ simd_double3 BKCameraRight(BKCameraFrame camera);
 void BKCameraRayThroughViewPoint(BKCameraFrame camera, double viewWidth, double viewHeight,
                                  double x, double y, simd_double3 *origin, simd_double3 *direction);
 
+// What: where patient point p appears on a view of viewWidth x viewHeight points (origin top-left,
+// y down) - the exact inverse of BKCameraRayThroughViewPoint. *depth (optional) = mm in front of
+// camera.position along the viewing direction. Returns false (x, y untouched) when the point is
+// at or behind the eye of a perspective camera (it can't appear on screen).
+// Why (2026-11-14): selecting a 3D point by clicking near its ball needs the ball's screen
+// position from the BorosKit camera (no VTK).
+bool BKCameraProjectPoint(BKCameraFrame camera, double viewWidth, double viewHeight, simd_double3 p,
+                          double *x, double *y, double *depth);
+
 // What: millimetres per view point at `depth` mm in front of camera.position (the depth is
 // ignored for an orthographic camera, where it is the same everywhere).
 double BKCameraMillimetresPerViewPoint(BKCameraFrame camera, double viewHeight, double depth);

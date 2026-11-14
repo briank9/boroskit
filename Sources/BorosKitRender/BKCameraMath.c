@@ -55,6 +55,36 @@ void BKCameraRayThroughViewPoint(BKCameraFrame camera, double viewWidth, double 
     }
 }
 
+// What / why: see the header. Undoes BKCameraRayThroughViewPoint: the offset from the view's
+// centre in mm (orthographic) or in mm at 1 mm in front of the eye (perspective, after dividing by
+// the depth) is turned back into view points.
+bool BKCameraProjectPoint(BKCameraFrame camera, double viewWidth, double viewHeight, simd_double3 p,
+                          double *x, double *y, double *depth)
+{
+    simd_double3 dir = BKSafeNormalize(camera.direction);
+    simd_double3 up = BKSafeNormalize(camera.up);
+    simd_double3 right = BKCameraRight(camera);
+    simd_double3 d = p - camera.position;
+    double z = simd_dot(d, dir);
+    double ox, oy;   // offset from the view's centre in view points, y UP
+    if (!camera.perspective) {
+        double mm = BKCameraMillimetresPerViewPoint(camera, viewHeight, 0);
+        if (!(mm > 0)) return false;
+        ox = simd_dot(d, right) / mm;
+        oy = simd_dot(d, up) / mm;
+    } else {
+        if (!(z > 0)) return false;
+        double mmAtOne = BKCameraMillimetresPerViewPoint(camera, viewHeight, 1.0);
+        if (!(mmAtOne > 0)) return false;
+        ox = simd_dot(d, right) / z / mmAtOne;
+        oy = simd_dot(d, up) / z / mmAtOne;
+    }
+    if (x) *x = 0.5 * viewWidth + ox;
+    if (y) *y = 0.5 * viewHeight - oy;
+    if (depth) *depth = z;
+    return true;
+}
+
 simd_double3 BKCameraWorldDeltaForViewDelta(BKCameraFrame camera, double viewHeight, double depth,
                                             double dx, double dy)
 {

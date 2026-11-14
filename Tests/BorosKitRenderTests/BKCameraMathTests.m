@@ -32,6 +32,33 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
 @implementation BKCameraMathTests
 
 // Right = direction x up; with +z view and +y up this is -x (as in VTK's convention).
+// BKCameraProjectPoint is the exact inverse of BKCameraRayThroughViewPoint: a point on the ray
+// through a screen position projects back onto that position (ortho + perspective, several
+// points and depths); a point behind a perspective eye is refused. (2026-11-14, 3D point picking.)
+- (void)testProjectPointInvertsRay
+{
+    for (int perspective = 0; perspective <= 1; perspective++) {
+        BKCameraFrame c = BKTestOrthoCamera();
+        c.perspective = perspective;
+        c.viewAngle = 30;
+        double pts[4][2] = {{0, 0}, {200, 100}, {399, 7}, {13.5, 187.25}};
+        for (int i = 0; i < 4; i++)
+            for (double t = 5; t < 400; t *= 3) {
+                simd_double3 o, d;
+                BKCameraRayThroughViewPoint(c, 400, 200, pts[i][0], pts[i][1], &o, &d);
+                double x = -1, y = -1, depth = 0;
+                XCTAssertTrue(BKCameraProjectPoint(c, 400, 200, o + d * t, &x, &y, &depth));
+                XCTAssertEqualWithAccuracy(x, pts[i][0], 1e-6);
+                XCTAssertEqualWithAccuracy(y, pts[i][1], 1e-6);
+                XCTAssertGreaterThan(depth, perspective ? 0.0 : -1e9);
+            }
+        if (perspective) {
+            double x = 0, y = 0;
+            XCTAssertFalse(BKCameraProjectPoint(c, 400, 200, c.position - c.direction * 10, &x, &y, NULL));
+        }
+    }
+}
+
 - (void)testRightVector
 {
     BKCameraFrame c = BKTestOrthoCamera();
