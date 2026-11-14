@@ -548,3 +548,42 @@ call the same `bk_golden_compare_*` functions. First check: the phantom hash.
   identical everywhere), no `-ffast-math`.
 - **Licences:** the SDK tools are only used to build; nothing from them is copied into
   BorosKit. No new libraries are linked into BorosKit.
+
+## 12. NVIDIA (CUDA) and AMD support (user request 2026-11-14)
+
+The user asked for CUDA support on NVIDIA cards and optimisation for AMD cards. Decisions and plan:
+
+**Licence rule first.** CUDA (toolkit, runtime, cuDNN, TensorRT) is NVIDIA's proprietary software
+under NVIDIA's licence and runs only on NVIDIA GPUs. BorosKit must stay licence-free and have no
+third-party dependencies, so CUDA never goes into BorosKit itself.
+
+- **Drawing and imaging (BorosKit):** Vulkan on every vendor (NVIDIA, AMD, Intel) through the GPU
+  interface of section 6. Vulkan already reaches full speed on NVIDIA for this kind of work, so
+  rendering does not need CUDA.
+- **AI (BorosAI plug-in, outside BorosKit):** an optional, separately downloaded "accelerator pack":
+  CUDA (cuDNN / TensorRT) on NVIDIA, ROCm/HIP (MIOpen) on AMD, and Core ML / Metal on Apple. The
+  plug-in picks the best one present and falls back to the plain path (Vulkan compute or CPU) when
+  none is installed. The core app runs and gives the same results without any vendor pack.
+- **Optional CUDA compute backend for BorosKit operations (later, only if measurements show a real
+  gain over Vulkan compute, e.g. very large surface extraction or registration):** it would be one
+  more implementation of the section-6 GPU interface, shipped as a separate optional module, never
+  required, and validated by the same golden harness.
+
+**Vendor tuning inside the Vulkan backend** (chosen at start-up from `VkPhysicalDeviceProperties`
+vendorID and subgroup properties; results must stay inside the golden tolerances on every vendor):
+
+| Topic | AMD | NVIDIA | Intel / other |
+|---|---|---|---|
+| Subgroup (wave) size | 64 on GCN, 32 or 64 on RDNA: request with `VK_EXT_subgroup_size_control` and size workgroups as a multiple | 32 | query, default 32 |
+| Workgroup sizes | specialization constants per vendor (fixes audit item R13: no run-time-chosen sizes) | same mechanism | same |
+| Scan upload | device-local + host-visible memory (Resizable BAR / SAM) when offered, so the CPU writes the scan straight into GPU memory | same when offered | staging buffer |
+| Overlap | async compute queue for surface building / brick pass while the graphics queue draws | same | single queue if no separate compute family |
+| Precision | 16-bit maths (packed FP16) only where the golden tolerances still pass (e.g. colour blending, not HU values) | same | same |
+| 3D textures | optimal tiling, R16_UNORM; manual trilinear path where linear filtering of R16 / R32F is missing (section 4) | same | same |
+
+**Testing:** the golden harness (section 10) runs per vendor (NVIDIA, AMD, Intel, and MoltenVK on
+the Mac). Speed tuning may never move results outside the agreed tolerances. Real NVIDIA and AMD
+machines are needed for this; MoltenVK only exercises the Apple GPU.
+
+Note: the vendor details above are from general knowledge, not from looking anything up (the user
+asked for no web search); verify them on real hardware when the Vulkan backend is built.
