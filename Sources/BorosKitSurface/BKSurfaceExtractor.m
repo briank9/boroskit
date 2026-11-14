@@ -134,7 +134,7 @@ static double BKNowMs(void)
     @synchronized (cache) {
         id<MTLLibrary> library = [cache objectForKey:device];
         if (!library) {
-            library = [device newLibraryWithSource:BKSurfaceShaderSource() options:[[MTLCompileOptions alloc] init] error:error];
+            library = [device newLibraryWithSource:BKSurfaceShaderSource() options:[BKMetalDevice shaderCompileOptions] /* fast math off, 2026-11-14 */ error:error];
             if (library) [cache setObject:library forKey:device];
         }
         return library;

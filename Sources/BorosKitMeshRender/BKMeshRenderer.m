@@ -430,7 +430,7 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     @synchronized (cache) {
         id<MTLLibrary> library = [cache objectForKey:device];
         if (!library) {
-            library = [device newLibraryWithSource:BKMeshShaderSource() options:[[MTLCompileOptions alloc] init] error:error];
+            library = [device newLibraryWithSource:BKMeshShaderSource() options:[BKMetalDevice shaderCompileOptions] /* fast math off, 2026-11-14 */ error:error];
             if (library) [cache setObject:library forKey:device];
         }
         return library;

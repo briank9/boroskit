@@ -136,7 +136,7 @@ static simd_float4 BKFloat4(simd_float3 v)
     @synchronized (cache) {
         id<MTLLibrary> library = [cache objectForKey:device];
         if (!library) {
-            MTLCompileOptions *options = [[MTLCompileOptions alloc] init];
+            MTLCompileOptions *options = [BKMetalDevice shaderCompileOptions];   // fast math off (2026-11-14)
             library = [device newLibraryWithSource:BKVolumeShaderSource() options:options error:error];
             if (library) [cache setObject:library forKey:device];
         }

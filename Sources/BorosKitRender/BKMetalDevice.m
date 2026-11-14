@@ -39,7 +39,44 @@
 // The preference string (guarded by the class object).
 static NSString *BKPreferredGPUName = @"";
 
+// Default Relaxed (2026-11-14): user approved "fast math off"; measured on M1 Pro (BKShaderMathBenchmark-
+// Tests, 1024^2, 256^3 phantom): fast 1.55 ms / relaxed 1.55 ms / safe 5.1 ms per 3D frame (MIP 6.9 /
+// 7.0 / 21.6 ms). Relaxed keeps infinity / NaN correct (the actual risk) at no cost; Safe is 3.3x slower.
+static BKShaderMath gBKShaderMath = BKShaderMathRelaxed;
+
 @implementation BKMetalDevice
+
++ (BKShaderMath)shaderMath { return gBKShaderMath; }
++ (void)setShaderMath:(BKShaderMath)shaderMath { gBKShaderMath = shaderMath; }
+
+// What / why: see the header. macOS 15 / iOS 18 have the explicit math modes; older systems only
+// the fast-math on/off switch (Relaxed then falls back to off, the safe side).
++ (MTLCompileOptions *)shaderCompileOptions
+{
+    MTLCompileOptions *options = [[MTLCompileOptions alloc] init];
+    if (@available(macOS 15.0, iOS 18.0, *)) {
+        switch (gBKShaderMath) {
+            case BKShaderMathFast:
+                options.mathMode = MTLMathModeFast;
+                options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsFast;
+                break;
+            case BKShaderMathRelaxed:
+                options.mathMode = MTLMathModeRelaxed;
+                options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsFast;
+                break;
+            default:
+                options.mathMode = MTLMathModeSafe;
+                options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsPrecise;
+                break;
+        }
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        options.fastMathEnabled = (gBKShaderMath == BKShaderMathFast);
+#pragma clang diagnostic pop
+    }
+    return options;
+}
 
 + (void)setPreferredGPUName:(NSString *)name
 {

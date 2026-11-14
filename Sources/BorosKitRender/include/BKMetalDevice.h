@@ -55,6 +55,28 @@ NS_ASSUME_NONNULL_BEGIN
 // What: the device to use now (preference, else Automatic). nil only when the machine has no
 // Metal GPU at all. Not +1 (normal Cocoa naming); the system keeps one object per card.
 + (nullable id<MTLDevice>)preferredDevice;
+
+// --- Shader maths (2026-11-14, user decision: fast math OFF) -------------------------------------
+// How BorosKit's runtime-compiled shaders treat floating-point maths.
+//   Safe: IEEE rules - infinity / not-a-number are kept and compared correctly, no
+//     reordering of operations, precise maths functions (pow, exp, ...). Same results on every GPU.
+//   Relaxed (DEFAULT): reordering allowed, but infinity / not-a-number still kept (macOS 15 / iOS 18+;
+//     older systems fall back to fast math OFF = Safe, which is about 3x slower in 3D).
+//   Measured 2026-11-14 (M1 Pro, BKShaderMathBenchmarkTests): 3D frame fast 1.55 / relaxed 1.55 /
+//     safe 5.1 ms; MIP 6.9 / 7.0 / 21.6 ms.
+//   Fast: Metal's old default - the compiler may assume infinity / NaN never occur.
+// Why: the shaders rely on +infinity ("ray misses", 1/dv, the "no object here" ray distance of
+// embedded objects); under fast maths the compiler may break those tests (VULKAN-PREP-AUDIT
+// 2026-11-14 section 2). Vulkan/SPIR-V keeps IEEE behaviour, so Safe also keeps both engines alike.
+// Set BEFORE the first renderer is created (libraries are compiled once per device and cached).
+typedef NS_ENUM(NSInteger, BKShaderMath) {
+    BKShaderMathSafe = 0,
+    BKShaderMathRelaxed = 1,
+    BKShaderMathFast = 2,
+};
+@property (class, nonatomic) BKShaderMath shaderMath;
+// The compile options every BorosKit shader library uses (volume, mesh, surface, display).
++ (MTLCompileOptions *)shaderCompileOptions;
 // Same, also telling how the choice was made (status may be NULL).
 + (nullable id<MTLDevice>)preferredDeviceWithStatus:(nullable BKGPUChoiceStatus *)status;
 
