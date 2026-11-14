@@ -168,6 +168,15 @@ typedef NS_ENUM(int32_t, BKProjection) {
 // The first render of a new volume spends a few milliseconds measuring the blocks.
 @property (nonatomic) BOOL skipsEmptySpace;
 
+// Manual filtering (default NO, except see below): when YES, the shader blends the 8
+// neighbouring voxels and the 2 neighbouring colour-table entries itself instead of using
+// the GPU's built-in linear filter. Why: the built-in filter is an optional feature for
+// these formats on some GPUs (iPad GPUs without 32-bit float filtering; Vulkan devices
+// without linear filtering of 16-bit volumes), and the hand-written path gives the same
+// numbers on every GPU. It is slower. It is switched on automatically on a device that
+// cannot filter 32-bit float textures (MTLDevice.supports32BitFloatFiltering == NO).
+@property (nonatomic) BOOL manualFiltering;
+
 // Renders one image of width x height pixels and waits for the GPU to finish.
 // Returns nil + error if no volume is set or the GPU work fails.
 - (nullable BKRenderResult *)renderWithWidth:(NSUInteger)width

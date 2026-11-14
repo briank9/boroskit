@@ -178,6 +178,10 @@ static simd_float4 BKFloat4(simd_float3 v)
     _missValue = NAN;                           // NAN = use the volume's outOfBoundsValue
     _clipPlane = N3PlaneMake(N3VectorZero, N3VectorMake(0, 0, 1));
     _skipsEmptySpace = YES;   // same picture, only faster (proven by the image-equality tests)
+    // The colour table is RGBA32Float and is sampled with linear filtering, which some GPUs
+    // (e.g. older iPads) cannot do; there the hand-written filter is the only correct path.
+    if (@available(macOS 11.0, iOS 14.0, *))
+        _manualFiltering = !_device.supports32BitFloatFiltering;
     return self;
 }
 
@@ -372,6 +376,7 @@ static simd_float4 BKFloat4(simd_float3 v)
     p->mode = _mode;
     p->projection = _projection;
     p->shading = _shadingEnabled ? 1 : 0;
+    p->manualFiltering = _manualFiltering ? 1 : 0;
     return YES;
 }
 

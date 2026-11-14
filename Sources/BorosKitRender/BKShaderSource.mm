@@ -61,10 +61,49 @@ static float3x3 bk_patient_to_voxel(constant BKRenderParams &p)
 // Reads the real (CT) value at a position given in voxel index coordinates, with
 // hardware trilinear interpolation. Voxel centres sit at whole numbers, texel centres
 // at (i + 0.5) / size, hence the +0.5.
+// PORTING NOTE: linear filtering of R16_UNORM 3D images is an OPTIONAL Vulkan format
+// feature (VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT). Where it is missing, set
+// p.manualFiltering = 1: the 8 neighbouring voxels are read exactly and blended in 32-bit
+// float. Same clamp-to-edge rule as the hardware path. (The hardware filter on some GPUs
+// uses fewer bits for the blend weights, so the two paths can differ very slightly.)
 static float bk_sample(texture3d<float> volume, sampler s, float3 voxel, constant BKRenderParams &p)
 {
+    if (p.manualFiltering != 0) {
+        float3 last = p.volumeSize.xyz - 1.0f;
+        float3 v = clamp(voxel, float3(0.0f), last);
+        float3 base = floor(v);
+        float3 f = v - base;
+        uint3 a = uint3(base);
+        uint3 b = uint3(min(base + 1.0f, last));
+        float c000 = volume.read(uint3(a.x, a.y, a.z)).r, c100 = volume.read(uint3(b.x, a.y, a.z)).r;
+        float c010 = volume.read(uint3(a.x, b.y, a.z)).r, c110 = volume.read(uint3(b.x, b.y, a.z)).r;
+        float c001 = volume.read(uint3(a.x, a.y, b.z)).r, c101 = volume.read(uint3(b.x, a.y, b.z)).r;
+        float c011 = volume.read(uint3(a.x, b.y, b.z)).r, c111 = volume.read(uint3(b.x, b.y, b.z)).r;
+        float c0 = mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y);
+        float c1 = mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y);
+        return mix(c0, c1, f.z) * p.valueScale + p.valueOffset;
+    }
     float3 tc = (voxel + 0.5f) / p.volumeSize.xyz;
     return volume.sample(s, tc).r * p.valueScale + p.valueOffset;
+}
+
+// The colour/opacity of a value from the 4096-entry table, blended between the two nearest
+// entries. PORTING NOTE: linear filtering of 32-bit float textures is optional in Vulkan
+// (and on some iPad GPUs: MTLDevice.supports32BitFloatFiltering); p.manualFiltering = 1
+// does the blend by hand with two exact reads, same position rule as the hardware:
+// texel position = x * entries - 0.5, clamped to the first/last entry.
+static float4 bk_transfer(texture2d<float> transferFn, sampler s, float x, constant BKRenderParams &p)
+{
+    if (p.manualFiltering != 0) {
+        float entries = (float)BKTransferFunctionEntries;
+        float t = clamp(x * entries - 0.5f, 0.0f, entries - 1.0f);
+        float i0 = floor(t);
+        float i1 = min(i0 + 1.0f, entries - 1.0f);
+        float4 c0 = transferFn.read(uint2((uint)i0, 0));
+        float4 c1 = transferFn.read(uint2((uint)i1, 0));
+        return mix(c0, c1, t - i0);
+    }
+    return transferFn.sample(s, float2(x, 0.5f));
 }
 
 // Surface normal for lighting: central differences of the value in voxel space,
@@ -296,7 +335,7 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
                 }
             }
             float value = bk_sample(volume, linearSampler, v, p);
-            float4 c = transferFn.sample(tfSampler, float2((value - p.tfMin) / tfRange, 0.5f));
+            float4 c = bk_transfer(transferFn, tfSampler, (value - p.tfMin) / tfRange, p);
             if (c.a <= 0.0f) continue;
             float a = 1.0f - pow(1.0f - min(c.a, 0.9999f), exponent);
             float3 rgb = c.rgb;

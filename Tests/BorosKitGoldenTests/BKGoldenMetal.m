@@ -122,6 +122,7 @@ static BKGoldenImage BKGoldenImageFromFloats(NSData *data, NSUInteger width, NSU
     r.opacityUnitDistance = c->opacityUnitDistance;
     r.skipsEmptySpace = c->skipEmptySpace != 0;
     r.missValue = NAN;
+    r.manualFiltering = _manualFiltering;
     if (c->useTransferFunction) {
         BKTransferFunction *tf = [[BKTransferFunction alloc] init];
         for (uint32_t i = 0; i < kBKGoldenColorPointCount; i++) {

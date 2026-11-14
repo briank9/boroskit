@@ -75,7 +75,7 @@ typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment in C, Metal a
     int32_t useClip;              /* 1 = cut away the half-space in front of the clipping plane */ \
     int32_t skipEmptySpace;       /* 1 = jump over bricks that cannot change the picture (see BK_BRICK_SIZE) */ \
     int32_t clipPlaneCount;       /* number of valid entries in clipPlanes (0..BK_MAX_CLIP_PLANES) */ \
-    int32_t reserved0;            /* explicit padding: total size stays a multiple of 16 bytes */ \
+    int32_t manualFiltering;      /* 1 = interpolate the volume and the colour table by hand (8 / 2 exact reads) instead of the GPU's linear filter */ \
     int32_t reserved1; \
     int32_t reserved2;
 

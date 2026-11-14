@@ -37,6 +37,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)renderVolumeCase:(const BKGoldenVolumeCase *)c rgba:(BKGoldenImage *)rgba values:(BKGoldenImage *)values
                    error:(NSError * _Nullable * _Nullable)error;
 
+// Interpolate by hand instead of the GPU's linear filter (BKVolumeRenderer.manualFiltering);
+// the path a Vulkan device without linear filtering of R16_UNORM / float textures uses.
+@property (nonatomic) BOOL manualFiltering;
+
 // 2D display of one axial phantom slice: rgba (U8 x4).
 - (BOOL)renderImageCase:(const BKGoldenImageCase *)c volume:(const BKGoldenVolume *)volume rgba:(BKGoldenImage *)rgba
                   error:(NSError * _Nullable * _Nullable)error;

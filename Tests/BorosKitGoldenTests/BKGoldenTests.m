@@ -344,6 +344,45 @@ static BKGoldenMetalProducer *gProducer;
     free(steps);
 }
 
+// The hand-written filter (for GPUs / Vulkan devices that cannot linearly filter 16-bit
+// volumes or float colour tables) compared with the hardware filter that made the
+// references. The 8-bit pictures must meet the normal tolerance. The float HU values
+// cannot: GPU filters blend with 8-bit fixed-point weights (Apple's, and the D3D/Vulkan
+// minimum too), so a filtered sample next to a sharp edge can be off by up to about
+// 1/256 of the jump between the two voxels (measured here: up to ~5 HU next to the
+// 2500 HU ball). So float values get a "different filter" tolerance of 1/256 of the
+// volume's value range. Lesson for the Vulkan port (see VULKAN-PORT-PLAN.md): HU-exact
+// outputs should use the same (manual) filter on both backends.
+- (void)testManualFilteringMatchesReferences
+{
+    if (![self requireGPU]) return;
+    gProducer.manualFiltering = YES;
+    for (uint32_t i = 0; i < kBKGoldenVolumeCaseCount; i++) {
+        const BKGoldenVolumeCase *c = &kBKGoldenVolumeCases[i];
+        BKGoldenImage rgba = {0}, values = {0}, refRGBA = {0}, refValues = {0};
+        XCTAssertTrue([gProducer renderVolumeCase:c rgba:&rgba values:&values error:NULL]);
+        NSString *name = @(c->name);
+        if (bk_golden_read_pam(BKGoldenPath([name stringByAppendingString:@".rgba.pam"]).fileSystemRepresentation, &refRGBA) != 0 ||
+            bk_golden_read_pfm(BKGoldenPath([name stringByAppendingString:@".values.pfm"]).fileSystemRepresentation, &refValues) != 0) {
+            if (!BKGoldenRecording()) XCTFail(@"%@: reference missing", name);
+        } else {
+            BKGoldenImageReport ra = bk_golden_compare_images(&refRGBA, &rgba, bk_golden_tolerance_u8());
+            double range = gProducer.volumeTexture.maximumValue - gProducer.volumeTexture.minimumValue;
+            BKGoldenImageTolerance vt = {c->mode == 0 ? 2.0 / 255.0 : range / 256.0, 0.005};
+            BKGoldenImageReport rv = bk_golden_compare_images(&refValues, &values, vt);
+            char ta[256], tv[256];
+            bk_golden_describe_image_report(&ra, ta, sizeof ta);
+            bk_golden_describe_image_report(&rv, tv, sizeof tv);
+            NSLog(@"GOLDEN | %@ | manual filtering vs hardware reference: colour %s; values %s", name, ta, tv);
+            XCTAssertTrue(ra.pass, @"%@ manual filtering colour: %s", name, ta);
+            XCTAssertTrue(rv.pass, @"%@ manual filtering values: %s", name, tv);
+        }
+        bk_golden_image_free(&rgba); bk_golden_image_free(&values);
+        bk_golden_image_free(&refRGBA); bk_golden_image_free(&refValues);
+    }
+    gProducer.manualFiltering = NO;
+}
+
 #pragma mark - 2D image display
 
 - (void)testImageLayerRenders
