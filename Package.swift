@@ -159,4 +159,6 @@ let package = Package(
         ),
         // --- end BorosKitSurface ---
     ]
+    // C++17 for the plain C++ cores (std::to_chars in BKSceneExportCore).
+    , cxxLanguageStandard: .gnucxx17
 )
