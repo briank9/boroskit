@@ -7,9 +7,21 @@
 // the very same text in as a string (see BKShaderSource.mm). A unit test also checks
 // that the GPU and CPU agree on the struct size.
 //
-// Type names: bk_float3 / bk_float3x3 map to simd_float3 / simd_float3x3 on the CPU and
-// to float3 / float3x3 in Metal. Both have identical size (16 / 48 bytes) and
-// alignment (16), so the layouts match field for field.
+// ---- PORTING NOTES (future Vulkan backend) -------------------------------------------
+// Layout rules (std430-compatible, so GLSL can declare the identical struct):
+//  - only 16-byte vectors (bk_float4 = simd_float4 / float4 / vec4) first, then 4-byte
+//    scalars (float, uint32_t, int32_t). No float3 (12 bytes in std430 but 16 in C/Metal),
+//    no float3x3 (a matrix is stored as an array of float4 columns), no bool.
+//  - 3D quantities use .xyz of a float4; the 4th component is unused and set to 0.
+//  - the total size is a multiple of 16 bytes with explicit padding at the end, so no
+//    compiler adds hidden bytes (464 bytes; the C/GPU size test checks it).
+//  - in Vulkan, bind it as a std430 storage buffer (or a small uniform buffer with
+//    VK_EXT_scalar_block_layout); it is far larger than the guaranteed 128 bytes of
+//    push constants. std140 would put the clipPlanes array on the same 16-byte stride it
+//    already has, so std140 works too.
+// (Before 2026-11-13 the fields were float3 / float3x3. float3 has the same size and
+// alignment as float4 in C and Metal, so the byte layout did not change.)
+// ---------------------------------------------------------------------------------------
 
 #ifndef BK_SHADER_TYPES_H
 #define BK_SHADER_TYPES_H
@@ -18,27 +30,25 @@
 #include <stdint.h>
 #include "BKClipPlanes.h"   // BK_MAX_CLIP_PLANES (shared with the plain-C plane math)
 
-typedef simd_float3   bk_float3;
-typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment on both sides, like float3
-typedef simd_float3x3 bk_float3x3;
+typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment in C, Metal and std430
 
 // Field list (order matters: 16-byte vectors first, then 4-byte scalars, so there is
 // no hidden padding that one compiler might lay out differently from the other).
 #define BK_RENDER_PARAMS_FIELDS \
-    bk_float3x3 patientToVoxel;   /* linear part of the patient(mm) -> voxel index transform */ \
-    bk_float3 patientToVoxelTranslation; /* translation part of the same transform */ \
-    bk_float3 volumeSize;         /* voxel counts (w, h, d) as floats */ \
-    bk_float3 boxMin;             /* region to ray-cast, voxel space (volume bounds intersected with crop box) */ \
-    bk_float3 boxMax; \
-    bk_float3 cameraPosition;     /* ortho: centre of the image plane; perspective: the eye. Patient mm */ \
-    bk_float3 cameraRight;        /* unit vector pointing to the right of the image */ \
-    bk_float3 cameraUp;           /* unit vector pointing to the top of the image */ \
-    bk_float3 cameraForward;      /* unit viewing direction */ \
-    bk_float3 slabPoint;          /* a point on the slab's centre plane (patient mm) */ \
-    bk_float3 slabNormal;         /* unit normal of the slab's centre plane */ \
-    bk_float3 clipPoint;          /* a point on the clipping ("scissors") plane, patient mm */ \
-    bk_float3 clipNormal;         /* unit normal; the side it points to is cut away */ \
-    bk_float3 brickGrid;          /* empty-space skipping: number of bricks along x, y, z */ \
+    bk_float4 patientToVoxelColumns[3]; /* linear part of the patient(mm) -> voxel index transform: 3 columns, .xyz used */ \
+    bk_float4 patientToVoxelTranslation; /* translation part of the same transform */ \
+    bk_float4 volumeSize;         /* voxel counts (w, h, d) as floats */ \
+    bk_float4 boxMin;             /* region to ray-cast, voxel space (volume bounds intersected with crop box) */ \
+    bk_float4 boxMax; \
+    bk_float4 cameraPosition;     /* ortho: centre of the image plane; perspective: the eye. Patient mm */ \
+    bk_float4 cameraRight;        /* unit vector pointing to the right of the image */ \
+    bk_float4 cameraUp;           /* unit vector pointing to the top of the image */ \
+    bk_float4 cameraForward;      /* unit viewing direction */ \
+    bk_float4 slabPoint;          /* a point on the slab's centre plane (patient mm) */ \
+    bk_float4 slabNormal;         /* unit normal of the slab's centre plane */ \
+    bk_float4 clipPoint;          /* a point on the clipping ("scissors") plane, patient mm */ \
+    bk_float4 clipNormal;         /* unit normal; the side it points to is cut away */ \
+    bk_float4 brickGrid;          /* empty-space skipping: number of bricks along x, y, z */ \
     bk_float4 clipPlanes[BK_MAX_CLIP_PLANES]; /* extra clip planes (e.g. a rotated crop box): (nx,ny,nz,w), patient mm; cut where dot(n,x)+w > 0 (see BKClipPlanesPack) */ \
     float viewWidth;              /* ortho: image width in mm; perspective: 2*tan(hfov/2) */ \
     float viewHeight;             /* ortho: image height in mm; perspective: 2*tan(vfov/2) */ \
@@ -64,7 +74,10 @@ typedef simd_float3x3 bk_float3x3;
     int32_t shading;              /* 1 = gradient shading in composite mode */ \
     int32_t useClip;              /* 1 = cut away the half-space in front of the clipping plane */ \
     int32_t skipEmptySpace;       /* 1 = jump over bricks that cannot change the picture (see BK_BRICK_SIZE) */ \
-    int32_t clipPlaneCount;       /* number of valid entries in clipPlanes (0..BK_MAX_CLIP_PLANES) */
+    int32_t clipPlaneCount;       /* number of valid entries in clipPlanes (0..BK_MAX_CLIP_PLANES) */ \
+    int32_t reserved0;            /* explicit padding: total size stays a multiple of 16 bytes */ \
+    int32_t reserved1; \
+    int32_t reserved2;
 
 // Empty-space skipping (plain language): the volume is divided into small cubes
 // ("bricks") of BK_BRICK_SIZE voxels per side. For every brick the lowest and highest

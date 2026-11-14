@@ -34,6 +34,13 @@ static simd_float3 BKFloat3(N3Vector v)
     return simd_make_float3((float)v.x, (float)v.y, (float)v.z);
 }
 
+// What: a float3 widened to the float4 the parameter block stores (w = 0).
+// Why: BKRenderParams keeps 3D quantities in float4 so its layout is std430 (Vulkan).
+static simd_float4 BKFloat4(simd_float3 v)
+{
+    return simd_make_float4(v, 0.0f);
+}
+
 #pragma mark - BKRenderResult
 
 @interface BKRenderResult ()
@@ -289,16 +296,17 @@ static simd_float3 BKFloat3(N3Vector v)
     // patient -> voxel, row-vector convention of N3/CATransform3D:
     // voxel.x = p.x*m11 + p.y*m21 + p.z*m31 + m41 (etc.). As a column-major float3x3
     // that is columns (m11,m12,m13), (m21,m22,m23), (m31,m32,m33).
-    p->patientToVoxel = simd_matrix(simd_make_float3(m.m11, m.m12, m.m13),
-                                    simd_make_float3(m.m21, m.m22, m.m23),
-                                    simd_make_float3(m.m31, m.m32, m.m33));
-    p->patientToVoxelTranslation = simd_make_float3(m.m41, m.m42, m.m43);
-    p->volumeSize = simd_make_float3(vt.pixelsWide, vt.pixelsHigh, vt.pixelsDeep);
+    p->patientToVoxelColumns[0] = BKFloat4(simd_make_float3(m.m11, m.m12, m.m13));
+    p->patientToVoxelColumns[1] = BKFloat4(simd_make_float3(m.m21, m.m22, m.m23));
+    p->patientToVoxelColumns[2] = BKFloat4(simd_make_float3(m.m31, m.m32, m.m33));
+    p->patientToVoxelTranslation = BKFloat4(simd_make_float3(m.m41, m.m42, m.m43));
+    simd_float3 volumeSize = simd_make_float3(vt.pixelsWide, vt.pixelsHigh, vt.pixelsDeep);
+    p->volumeSize = BKFloat4(volumeSize);
 
     // Ray-cast region: crop box intersected with the volume's voxel-centre bounds.
-    simd_float3 volMax = p->volumeSize - 1.0f;
-    p->boxMin = simd_clamp(BKFloat3(_cropMin), simd_make_float3(0, 0, 0), volMax);
-    p->boxMax = simd_clamp(BKFloat3(_cropMax), simd_make_float3(0, 0, 0), volMax);
+    simd_float3 volMax = volumeSize - 1.0f;
+    p->boxMin = BKFloat4(simd_clamp(BKFloat3(_cropMin), simd_make_float3(0, 0, 0), volMax));
+    p->boxMax = BKFloat4(simd_clamp(BKFloat3(_cropMax), simd_make_float3(0, 0, 0), volMax));
 
     simd_float3 forward = BKFloat3(_cameraDirection);
     simd_float3 up = BKFloat3(_cameraUp);
@@ -314,10 +322,10 @@ static simd_float3 BKFloat3(N3Vector v)
     }
     right = simd_normalize(right);
     up = simd_cross(right, forward);
-    p->cameraPosition = BKFloat3(_cameraPosition);
-    p->cameraRight = right;
-    p->cameraUp = up;
-    p->cameraForward = forward;
+    p->cameraPosition = BKFloat4(BKFloat3(_cameraPosition));
+    p->cameraRight = BKFloat4(right);
+    p->cameraUp = BKFloat4(up);
+    p->cameraForward = BKFloat4(forward);
 
     if (_projection == BKProjectionPerspective) {
         float vfov = (float)_fieldOfView * (float)M_PI / 180.0f;
@@ -328,15 +336,15 @@ static simd_float3 BKFloat3(N3Vector v)
         p->viewHeight = (float)_viewHeight;
     }
 
-    p->slabPoint = BKFloat3(_slabPlane.point);
+    p->slabPoint = BKFloat4(BKFloat3(_slabPlane.point));
     simd_float3 normal = BKFloat3(_slabPlane.normal);
-    p->slabNormal = simd_length(normal) > 1e-6f ? simd_normalize(normal) : simd_make_float3(0, 0, 1);
+    p->slabNormal = BKFloat4(simd_length(normal) > 1e-6f ? simd_normalize(normal) : simd_make_float3(0, 0, 1));
     p->slabThickness = (float)MAX(_slabThickness, 0.0);
     p->useSlab = _slabEnabled ? 1 : 0;
 
-    p->clipPoint = BKFloat3(_clipPlane.point);
+    p->clipPoint = BKFloat4(BKFloat3(_clipPlane.point));
     simd_float3 clipNormal = BKFloat3(_clipPlane.normal);
-    p->clipNormal = simd_length(clipNormal) > 1e-6f ? simd_normalize(clipNormal) : simd_make_float3(0, 0, 1);
+    p->clipNormal = BKFloat4(simd_length(clipNormal) > 1e-6f ? simd_normalize(clipNormal) : simd_make_float3(0, 0, 1));
     p->useClip = _clipPlaneEnabled ? 1 : 0;
 
     // Extra planes: packed as plain float4s by the backend-neutral helper (BKClipPlanes.h).
@@ -388,7 +396,7 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     @synchronized (vt) {
         if (vt.brickRangeBuffer) return vt.brickRangeBuffer;
         simd_float3 g = BKBrickGrid(vt);
-        simd_uint3 grid = simd_make_uint3((uint32_t)g.x, (uint32_t)g.y, (uint32_t)g.z);
+        simd_uint4 grid = simd_make_uint4((uint32_t)g.x, (uint32_t)g.y, (uint32_t)g.z, 0);   // uint4: no 3-vectors in GPU data
         NSUInteger bricks = (NSUInteger)grid.x * grid.y * grid.z;
         id<MTLBuffer> ranges = [_device newBufferWithLength:bricks * 2 * sizeof(uint16_t) options:MTLResourceStorageModePrivate];
         if (!ranges) return nil;
@@ -430,7 +438,7 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     BKVolumeTexture *vt = _volumeTexture;
     id<MTLBuffer> ranges = [self brickRangesForVolume:vt];
     if (!ranges) return;   // could not build the list: just render without skipping
-    params->brickGrid = BKBrickGrid(vt);
+    params->brickGrid = BKFloat4(BKBrickGrid(vt));
 
     if (_mode == BKRenderModeComposite) {
         if (_classifiedAlphaCount != _alphaCountBuffer || _classifiedVolume != vt || !_brickEmptyBuffer) {

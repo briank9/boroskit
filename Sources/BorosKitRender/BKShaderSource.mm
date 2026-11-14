@@ -34,9 +34,7 @@ extern "C" NSString *BKVolumeShaderSource(void)
         const char *prelude = R"METAL(
 #include <metal_stdlib>
 using namespace metal;
-typedef float3   bk_float3;
 typedef float4   bk_float4;
-typedef float3x3 bk_float3x3;
 )METAL";
 
         const char *params = "struct BKRenderParams { " BK_STRINGIFY(BK_RENDER_PARAMS_FIELDS) " };\n"
@@ -53,12 +51,19 @@ constant int BKModeMinIP     = 2;
 constant int BKModeAverage   = 3;
 constant int BKProjPerspective = 1;
 
+// The parameter block stores every 3D quantity in a float4 (std430-friendly, see
+// BKShaderTypes.h); these two helpers rebuild the 3x3 matrix and read .xyz in one place.
+static float3x3 bk_patient_to_voxel(constant BKRenderParams &p)
+{
+    return float3x3(p.patientToVoxelColumns[0].xyz, p.patientToVoxelColumns[1].xyz, p.patientToVoxelColumns[2].xyz);
+}
+
 // Reads the real (CT) value at a position given in voxel index coordinates, with
 // hardware trilinear interpolation. Voxel centres sit at whole numbers, texel centres
 // at (i + 0.5) / size, hence the +0.5.
 static float bk_sample(texture3d<float> volume, sampler s, float3 voxel, constant BKRenderParams &p)
 {
-    float3 tc = (voxel + 0.5f) / p.volumeSize;
+    float3 tc = (voxel + 0.5f) / p.volumeSize.xyz;
     return volume.sample(s, tc).r * p.valueScale + p.valueOffset;
 }
 
@@ -71,7 +76,7 @@ static float3 bk_gradient(texture3d<float> volume, sampler s, float3 v, constant
     g.x = bk_sample(volume, s, v + float3(1,0,0), p) - bk_sample(volume, s, v - float3(1,0,0), p);
     g.y = bk_sample(volume, s, v + float3(0,1,0), p) - bk_sample(volume, s, v - float3(0,1,0), p);
     g.z = bk_sample(volume, s, v + float3(0,0,1), p) - bk_sample(volume, s, v - float3(0,0,1), p);
-    return transpose(p.patientToVoxel) * (0.5f * g);
+    return transpose(bk_patient_to_voxel(p)) * (0.5f * g);
 }
 
 // Packs a 0..1 colour into 8-bit RGBA.
@@ -90,14 +95,14 @@ static uchar4 bk_pack(float4 c)
 // the very edge of the volume use the edge brick).
 static int3 bk_brick_of(float3 v, constant BKRenderParams &p)
 {
-    int3 last = int3(p.brickGrid) - 1;
+    int3 last = int3(p.brickGrid.xyz) - 1;
     return clamp(int3(floor(v * (1.0f / (float)BKBrickSize))), int3(0), last);
 }
 
 // Position of brick b in the flat per-brick lists (x fastest, then y, then z).
 static uint bk_brick_index(int3 b, constant BKRenderParams &p)
 {
-    uint3 g = uint3(p.brickGrid);
+    uint3 g = uint3(p.brickGrid.xyz);
     return ((uint)b.z * g.y + (uint)b.y) * g.x + (uint)b.x;
 }
 
@@ -152,28 +157,30 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
     float3 origin, dir;
     float tLo, tHi;
     if (p.projection == BKProjPerspective) {
-        origin = p.cameraPosition;
-        dir = normalize(p.cameraForward + p.cameraRight * (u * p.viewWidth) + p.cameraUp * (w * p.viewHeight));
+        origin = p.cameraPosition.xyz;
+        dir = normalize(p.cameraForward.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight));
         tLo = 0.0f; tHi = INFINITY;
     } else {
-        origin = p.cameraPosition + p.cameraRight * (u * p.viewWidth) + p.cameraUp * (w * p.viewHeight);
-        dir = p.cameraForward;
+        origin = p.cameraPosition.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight);
+        dir = p.cameraForward.xyz;
         tLo = -INFINITY; tHi = INFINITY;
     }
 
     // Ray in voxel space.
-    float3 ov = p.patientToVoxel * origin + p.patientToVoxelTranslation;
-    float3 dv = p.patientToVoxel * dir;
+    float3x3 patientToVoxel = bk_patient_to_voxel(p);
+    float3 ov = patientToVoxel * origin + p.patientToVoxelTranslation.xyz;
+    float3 dv = patientToVoxel * dir;
 
     // Slab-test against the box (standard ray/box intersection).
     float3 inv = 1.0f / dv;
-    float3 t0 = (p.boxMin - ov) * inv;
-    float3 t1 = (p.boxMax - ov) * inv;
+    float3 boxMin = p.boxMin.xyz, boxMax = p.boxMax.xyz;
+    float3 t0 = (boxMin - ov) * inv;
+    float3 t1 = (boxMax - ov) * inv;
     float3 tSmall = min(t0, t1), tBig = max(t0, t1);
     // Axis-parallel rays: inside the box on that axis -> no constraint, outside -> miss.
     for (int k = 0; k < 3; k++) {
         if (dv[k] == 0.0f) {
-            bool inside = ov[k] >= p.boxMin[k] && ov[k] <= p.boxMax[k];
+            bool inside = ov[k] >= boxMin[k] && ov[k] <= boxMax[k];
             tSmall[k] = inside ? -INFINITY : INFINITY;
             tBig[k]   = inside ?  INFINITY : -INFINITY;
         }
@@ -184,8 +191,8 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
     bool singlePlane = false;
     if (p.useSlab != 0) {
         // Signed distance from the slab's centre plane along the ray: s(t) = s0 + t*dn.
-        float s0 = dot(origin - p.slabPoint, p.slabNormal);
-        float dn = dot(dir, p.slabNormal);
+        float s0 = dot(origin - p.slabPoint.xyz, p.slabNormal.xyz);
+        float dn = dot(dir, p.slabNormal.xyz);
         float halfThick = 0.5f * p.slabThickness;
         if (p.slabThickness <= 0.0f) {
             // Thin slice: exactly one sample where the ray crosses the plane.
@@ -203,8 +210,8 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
     if (p.useClip != 0) {
         // Clipping ("scissors") plane: keep only points with dot(x - clipPoint, n) <= 0,
         // i.e. cut away the side the normal points to. s(t) = c0 + t*cn along the ray.
-        float c0 = dot(origin - p.clipPoint, p.clipNormal);
-        float cn = dot(dir, p.clipNormal);
+        float c0 = dot(origin - p.clipPoint.xyz, p.clipNormal.xyz);
+        float cn = dot(dir, p.clipNormal.xyz);
         if (fabs(cn) < 1e-6f) {
             if (c0 > 0.0f) tHi = -INFINITY;               // ray runs parallel, on the cut side
         } else if (cn > 0.0f) {
@@ -397,9 +404,10 @@ kernel void bk_upscale(texture2d<float> source                 [[texture(0)]],
 // Values are kept as the raw 16-bit numbers, exactly as stored in the volume.
 kernel void bk_brick_ranges(texture3d<float> volume      [[texture(0)]],
                             device ushort2 *brickRange   [[buffer(0)]],
-                            constant uint3 &grid         [[buffer(1)]],
+                            constant uint4 &grid4        [[buffer(1)]],   /* xyz = brick counts (uint4: no 3-vectors in GPU buffers) */
                             uint3 gid                    [[thread_position_in_grid]])
 {
+    uint3 grid = grid4.xyz;
     if (any(gid >= grid)) return;
     int3 last = int3(volume.get_width(), volume.get_height(), volume.get_depth()) - 1;
     int3 lo = max(int3(gid) * BKBrickSize - 1, int3(0));
@@ -429,7 +437,7 @@ kernel void bk_classify_bricks(device const ushort2 *brickRange [[buffer(0)]],
                                constant BKRenderParams &p       [[buffer(3)]],
                                uint3 gid                        [[thread_position_in_grid]])
 {
-    uint3 g = uint3(p.brickGrid);
+    uint3 g = uint3(p.brickGrid.xyz);
     if (any(gid >= g)) return;
     uint index = (gid.z * g.y + gid.y) * g.x + gid.x;
     ushort2 raw = brickRange[index];
