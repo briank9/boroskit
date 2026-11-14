@@ -634,3 +634,13 @@ Vulkan: same two images; a pipeline barrier (COLOR_ATTACHMENT_WRITE -> SHADER_RE
 compute) between the object pass and the ray-cast (Metal orders them inside one command buffer).
 Tests: `Tests/BorosKitMeshTests/BKVolumeGeometryTests.m` (ball in front seen, behind hidden, half
 buried, outside the scan, empty pictures change nothing, slab, MIP, scene thumbnails exclude).
+
+## 14. Rule clarification: no Apple simd in cores (2026-11-14)
+
+Plain-C/C++ cores (BKCameraMath, BKBoxWidgetMath, BKCropBoxCore, BKMeshDrawCore, BKRenderCore ...)
+must not use Apple `<simd/simd.h>`: it does not exist on Windows/Linux. An older licence note said
+"use simd instead of the LGPL N3 types"; that was about leaving N3 behind, not a portability rule.
+Cores use BorosKit's own neutral vector types (to be added: BKVec3d / BKVec3f / BKMat4, step R1);
+simd stays only in Objective-C / Metal glue. Today the four cores above still use simd (debt, listed
+in VULKAN-PREP-AUDIT-2026-11-14.md step 1); BKCameraProjectPoint (added 2026-11-14) joined them by
+mistake and moves with them.

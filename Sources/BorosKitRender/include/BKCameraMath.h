@@ -1,9 +1,10 @@
 // BorosKitRender: camera maths for the interactive 3D view (plain C, no GPU code).
 //
 // PORTING NOTES (Vulkan / other backends):
-// - Pure C with <simd/simd.h> vector types only; no Objective-C, no Metal, no VTK and no
-//   Horos-derived (LGPL) types such as N3Vector. A Vulkan build can use it unchanged
-//   (simd_double3 can be swapped for any 3-double struct with the same meaning).
+// - Pure C: no Objective-C, no Metal, no VTK and no Horos-derived (LGPL) types such as N3Vector.
+//   NOT YET PORTABLE: it still uses Apple's <simd/simd.h> types (simd_double3 ...), which do not
+//   exist on Windows/Linux. VULKAN-PORT-PLAN.md rule 1 / step R1: move to BorosKit's own neutral
+//   vector types (BKVec3d) - same maths, mechanical change. Do not add more simd-based core code.
 // - Nothing here is sent to the GPU directly. The only GPU-facing output is
 //   BKCameraSlabPlanes(), which writes plain float4 planes (x, y, z, w) - std430 friendly,
 //   the same packing as BKClipPlanesPack() - so a Vulkan shader reads them the same way.
