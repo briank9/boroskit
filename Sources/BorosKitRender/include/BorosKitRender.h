@@ -12,6 +12,7 @@
 #import "BKVolumeGeometryLayer.h"   // objects drawn inside the volume picture (2026-11-14)
 #import "BKRenderCore.h"      // plain-C maths shared with a future Vulkan backend
 #import "BKCameraMath.h"
+#import "BKSlabGeometryCore.h" // MPR / curved-MPR slab picture geometry (plain C, 2026-11-14)
 #import "BKVecSimd.h"        // Apple glue: BorosKit neutral vectors (BorosKitVec) <-> simd
 #import "BKBoxWidgetMath.h"
 #import "BKCropBoxCore.h"
