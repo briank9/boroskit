@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Serdal Kocak. All rights reserved.
+// Original BorosKit code written for this project; contains no third-party code.
 //
 // BorosKitSurface: builds bone / soft-tissue surface meshes from a scan on the GPU
 // (replaces the old single-threaded VTK contour + decimate + smooth + normals chain).

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Serdal Kocak. All rights reserved.
+// Original BorosKit code written for this project; contains no third-party code.
 //
 // BorosKitSurface: the GPU programs ("compute kernels") that build a surface, as Metal
 // source compiled at runtime (like the volume and mesh shaders, so the Swift package

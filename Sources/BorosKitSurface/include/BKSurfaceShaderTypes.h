@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Serdal Kocak. All rights reserved.
+// Original BorosKit code written for this project; contains no third-party code.
 //
 // BorosKitSurface: the settings block the CPU hands to the GPU for every surface
 // extraction step, and the few numbers both sides must agree on.

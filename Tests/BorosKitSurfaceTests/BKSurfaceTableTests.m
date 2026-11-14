@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Serdal Kocak. All rights reserved.
+// Original BorosKit code written for this project; contains no third-party code.
 //
 // Tests for the backend-neutral surface core (BKSurfaceCore): no GPU needed.
 //

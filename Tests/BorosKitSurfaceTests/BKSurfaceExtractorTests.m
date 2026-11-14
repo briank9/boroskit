@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Serdal Kocak. All rights reserved.
+// Original BorosKit code written for this project; contains no third-party code.
 //
 // Tests for BKSurfaceExtractor (GPU surface building). They run on the real GPU and
 // skip themselves on a machine without one.

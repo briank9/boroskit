@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Serdal Kocak. All rights reserved.
+// Original BorosKit code written for this project; contains no third-party code.
 //
 // BorosKitSurface: BKSurfaceExtractor implementation (see the header for what it does).
 
