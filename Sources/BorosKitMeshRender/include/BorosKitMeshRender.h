@@ -6,3 +6,4 @@
 #import "BKCropBox.h"
 #import "BKMeshGeometryLayer.h"   // 2026-11-14: meshes / lines / points drawn inside the volume picture
 #import "BKMeshDrawCore.h"   // 2026-11-14: culling / texture / point rules (plain C)
+#import "BKOrientationCube.h"       // 2026-11-14: native orientation cube (replaces vtkAnnotatedCubeActor)

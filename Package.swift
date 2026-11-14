@@ -83,7 +83,8 @@ let package = Package(
             // Core: N3 geometry, N3BezierPath for curve overlays.
             // Render: BKVolumeScene/BKVolumeRenderer for the interactive 3D view (BKVolumeView),
             // so all on-screen views live in one UI module and Render stays UI-free.
-            dependencies: ["BorosKitCore", "BorosKitRender"],
+            // Vec (2026-11-14): BKTextLayoutCore (plain-C label placement) uses BKVec2f.
+            dependencies: ["BorosKitCore", "BorosKitRender", "BorosKitVec"],
             path: "Sources/BorosKitDisplay",
             publicHeadersPath: "include",
             cSettings: [
