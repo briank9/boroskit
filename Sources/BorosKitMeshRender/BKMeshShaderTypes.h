@@ -8,6 +8,26 @@
 // never drift apart. Only 16-byte vectors/matrices first, then 4-byte scalars, so
 // both compilers lay the struct out identically (a unit test checks the size too).
 
+//
+// ---- PORTING NOTES (future Vulkan backend) -------------------------------------------
+//  - BKMeshUniforms is std430- and std140-compatible as is: two float4x4, five float4,
+//    then 4-byte scalars (float / int32_t), 272 bytes (a multiple of 16), no float3, no
+//    bool. Larger than the guaranteed 128 bytes of push constants: use a uniform buffer.
+//  - BKMeshGPUVertex (40 bytes) is read as vertex attributes in Vulkan:
+//    location 0 = R32G32B32_SFLOAT at offset 0, 1 = R32G32B32_SFLOAT at 12,
+//    2 = R32G32B32A32_SFLOAT at 24, stride 40 (Metal reads it as packed_float3/4 from a
+//    buffer by vertex_id; either way gives the same numbers).
+//  - Line points are a tightly packed float x3 array (12-byte stride), fetched by
+//    vertex index: in GLSL read them from a std430 `float points[]` buffer (3 floats per
+//    point), NOT a vec3[] (which would have a 16-byte stride).
+//  - Clip space: Vulkan's y axis points down and its depth range is 0..1 like Metal's;
+//    flip y (negative viewport height, core since Vulkan 1.1) and keep the depth maths.
+//  - The fragment shader uses screen-space derivatives (dfdx/dfdy -> GLSL dFdx/dFdy) for
+//    flat normals when a mesh has none: core in Vulkan.
+//  - Two colour targets (RGBA8 colour + R32_SFLOAT ray distance) with premultiplied
+//    "over" blending on the first only, plus a D32_SFLOAT depth buffer.
+// ---------------------------------------------------------------------------------------
+
 #ifndef BK_MESH_SHADER_TYPES_H
 #define BK_MESH_SHADER_TYPES_H
 
