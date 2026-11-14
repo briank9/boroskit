@@ -321,6 +321,29 @@ static BKGoldenMetalProducer *gProducer;
     }
 }
 
+// The volume as stored on the GPU must equal the portable plain-C conversion
+// (BKRenderQuantizeToSteps): a Vulkan upload built on the core stores the same volume.
+- (void)testVolumeStorageMatchesCore
+{
+    if (![self requireGPU]) return;
+    NSError *error = nil;
+    NSData *gpu = [gProducer storedVolumeStepsWithError:&error];
+    XCTAssertNotNil(gpu, @"%@", error);
+    size_t n = (size_t)gPhantom.width * gPhantom.height * gPhantom.depth;
+    float lo = INFINITY, hi = -INFINITY;
+    for (size_t i = 0; i < n; i++) { lo = fminf(lo, gPhantom.voxels[i]); hi = fmaxf(hi, gPhantom.voxels[i]); }
+    BKRenderQuantization q = BKRenderQuantizationForRange(lo, hi, BKRenderAllIntegral(gPhantom.voxels, n));
+    XCTAssertEqual(q.valueScale, gProducer.volumeTexture.valueScale);
+    XCTAssertEqual(q.valueOffset, gProducer.volumeTexture.valueOffset);
+    uint16_t *steps = malloc(n * sizeof(uint16_t));
+    BKRenderQuantizeToSteps(gPhantom.voxels, n, q, steps);
+    const float *g = gpu.bytes;
+    size_t differ = 0;
+    for (size_t i = 0; i < n && g; i++) differ += (float)steps[i] != g[i];
+    XCTAssertEqual(differ, 0u, @"GPU volume differs from the plain-C conversion");
+    free(steps);
+}
+
 #pragma mark - 2D image display
 
 - (void)testImageLayerRenders

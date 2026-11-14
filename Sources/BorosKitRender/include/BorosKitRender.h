@@ -9,3 +9,4 @@
 #import "BKPresetLoader.h"
 #import "BKVolumeCamera.h"
 #import "BKVolumeScene.h"
+#import "BKRenderCore.h"      // plain-C maths shared with a future Vulkan backend

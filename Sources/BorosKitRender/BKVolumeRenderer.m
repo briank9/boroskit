@@ -14,6 +14,7 @@
 #import "BKVolumeTexture+Bricks.h"
 #import "BKTransferFunction.h"
 #import "BKShaderTypes.h"
+#import "BKRenderCore.h"
 #import "CPRVolumeData.h"
 
 NSString *BKVolumeShaderSource(void); // BKShaderSource.mm
@@ -261,10 +262,7 @@ static simd_float4 BKFloat4(simd_float3 v)
     // the old one undisturbed.
     _alphaCountBuffer = [_device newBufferWithLength:(kTransferFunctionEntries + 1) * sizeof(uint32_t)
                                              options:MTLResourceStorageModeShared];
-    uint32_t *count = _alphaCountBuffer.contents;
-    count[0] = 0;
-    for (NSUInteger i = 0; i < kTransferFunctionEntries; i++)
-        count[i + 1] = count[i] + (rgba[4 * i + 3] > 0.0f ? 1 : 0);
+    BKRenderAlphaPrefixCount(rgba, kTransferFunctionEntries, _alphaCountBuffer.contents);   // plain-C core
     free(rgba);
     _bakedTransferFunction = tf;
 }
@@ -382,9 +380,9 @@ static simd_float4 BKFloat4(simd_float3 v)
 // Number of bricks along each axis of `vt` (a partial brick at the end counts).
 static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
 {
-    return simd_make_float3((vt.pixelsWide + BK_BRICK_SIZE - 1) / BK_BRICK_SIZE,
-                            (vt.pixelsHigh + BK_BRICK_SIZE - 1) / BK_BRICK_SIZE,
-                            (vt.pixelsDeep + BK_BRICK_SIZE - 1) / BK_BRICK_SIZE);
+    uint32_t g[3];
+    BKRenderBrickGrid((uint32_t)vt.pixelsWide, (uint32_t)vt.pixelsHigh, (uint32_t)vt.pixelsDeep, BK_BRICK_SIZE, g);   // plain-C core
+    return simd_make_float3(g[0], g[1], g[2]);
 }
 
 // What: makes sure the volume's per-brick (lowest, highest) list exists; builds it on

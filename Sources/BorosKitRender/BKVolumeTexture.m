@@ -12,6 +12,7 @@
 #import "BKVolumeTexture.h"
 #import "BKVolumeTexture+Bricks.h"   // so the brick-range slot gets its storage here
 #import "CPRVolumeData.h"
+#import "BKRenderCore.h"
 #import <Accelerate/Accelerate.h>
 
 NSErrorDomain const BKRenderErrorDomain = @"BKRenderErrorDomain";
@@ -107,9 +108,7 @@ static NSError *BKMakeError(NSInteger code, NSString *message)
     float lo = INFINITY, hi = -INFINITY;
     vDSP_minv(floats, 1, &lo, totalVoxels);
     vDSP_maxv(floats, 1, &hi, totalVoxels);
-    BOOL integral = YES;
-    for (NSUInteger i = 0; i < totalVoxels && integral; i++)
-        integral = (floats[i] == floorf(floats[i]));
+    BOOL integral = BKRenderAllIntegral(floats, totalVoxels) != 0;   // plain-C core
     _minimumValue = lo;
     _maximumValue = hi;
 
@@ -120,11 +119,13 @@ static NSError *BKMakeError(NSInteger code, NSString *message)
     // in-between sample would snap to a whole HU. Spreading the range keeps
     // interpolation ~30x finer, while each stored voxel is still within half a step
     // of its true value, so rounding gives the original whole numbers back exactly.
-    float range = hi - lo;
-    float step = range > 0 ? range / 65535.0f : 1.0f;
-    _lossless = range == 0 || (integral && range <= 65535.0f);
-    _valueOffset = lo;
-    _valueScale = step * 65535.0f;          // texel 0..1 -> 0..65535 steps -> real value
+    // The choice itself is in the plain-C core (BKRenderQuantizationForRange), shared with
+    // a future Vulkan upload.
+    BKRenderQuantization q = BKRenderQuantizationForRange(lo, hi, integral ? 1 : 0);
+    float step = q.step;
+    _lossless = q.lossless != 0;
+    _valueOffset = q.valueOffset;
+    _valueScale = q.valueScale;             // texel 0..1 -> 0..65535 steps -> real value
 
     // (3) Texture + chunked upload.
     MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
@@ -160,7 +161,9 @@ static NSError *BKMakeError(NSInteger code, NSString *message)
         uint16_t *dst = staging.contents;
         for (NSUInteger s = 0; s < n; s++) {
             const float *src = floats + (z0 + s) * sliceVoxels;
-            // (v - lo) / step, then round to the nearest 16-bit integer.
+            // (v - lo) / step, then round to the nearest 16-bit integer. Accelerate is used here
+            // for speed; BKRenderQuantizeToSteps (plain-C core) is the portable equivalent and
+            // gives identical steps (checked by the golden harness).
             vDSP_vsadd(src, 1, &negOffset, scratch, 1, sliceVoxels);
             vDSP_vsmul(scratch, 1, &invStep, scratch, 1, sliceVoxels);
             float zero = 0, top = 65535;
