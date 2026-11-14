@@ -4,3 +4,5 @@
 
 #import "BKMesh.h"
 #import "BKMeshIO.h"
+#import "BKMeshProcessing.h"
+#import "BKSceneExport.h"
