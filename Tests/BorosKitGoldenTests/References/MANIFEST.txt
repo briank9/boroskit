@@ -1,0 +1,38 @@
+# BorosKit golden references (recorded from the Metal backend).
+# file  bytes  hash (bk_golden_hash, hex)
+avg_coronal_slab20.rgba.pam  36931  df99e96d3b7d261e
+avg_coronal_slab20.values.pfm  36878  22a505841b97c363
+mesh_decimate_50.bkmesh  88352  8cc9a71cc8fb618c
+mesh_smooth_taubin10.bkmesh  174992  8e1f24abb81d5839
+meshrender_bone_ortho.distance.pfm  36878  7765f72e4934b62f
+meshrender_bone_ortho.rgba.pam  36931  feab2e0412e196a6
+meshrender_bone_persp_seethrough.distance.pfm  30734  a19cc279fcbbc75d
+meshrender_bone_persp_seethrough.rgba.pam  30787  66f6ea5c9d35ad17
+minip_axial_slab10.rgba.pam  36931  751581459f917ddf
+minip_axial_slab10.values.pfm  36878  645877564fa8fc63
+mip_axial_slab10.rgba.pam  36931  dd4352b185897db3
+mip_axial_slab10.values.pfm  36878  4a6b1128ab48ed15
+mip_persp_full.rgba.pam  30787  20bd48f5fb2019fb
+mip_persp_full.values.pfm  30734  929ffe59ae6d1dcd
+mpr_thin_oblique.rgba.pam  36931  779974a769aae5a2
+mpr_thin_oblique.values.pfm  36878  ce715338d5242ee6
+numbers_core.txt  1477  65256bcdda7dcb21
+numbers_phantom.txt  167  b9478b73ef4ace35
+scene_export_scene.iv  5289  17991ceca929d655
+scene_export_scene.mtl  311  2fe8480615fe36a7
+scene_export_scene.obj  4570  5b830ac2606a3b0c
+scene_export_scene.rib  4553  98154e042add130d
+scene_export_scene.wrl  5120  833299bf0297e1c9
+slice_linear_inverted_flipped.rgba.pam  30787  5d4c52b4b5543bb7
+slice_linear_lut_rotated.rgba.pam  30787  79b44cabb04850fd
+slice_nearest_fit.rgba.pam  36931  4be8a93ab523de4e
+surface_bone_300.bkmesh  174992  c06e5f4f75aba723
+surface_bone_res05_smooth1_manual.bkmesh  68816  a241fbcefaa368d4
+surface_skin_m500.bkmesh  608912  7f63092dff58f6af
+vr_ortho_anterior.rgba.pam  36931  bc5a65f1f958441d
+vr_ortho_anterior.values.pfm  36878  e6029a41ed77d8a3
+vr_ortho_left_clipped_unlit.rgba.pam  36931  b71f0253cc53926b
+vr_ortho_left_clipped_unlit.values.pfm  36878  2d79afdf35ef334d
+vr_persp_oblique.rgba.pam  30787  9bac4f9fa42ae485
+vr_persp_oblique.values.pfm  30734  5a1d9a0d91823af6
+# total 1937282 bytes

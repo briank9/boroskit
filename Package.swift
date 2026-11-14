@@ -158,6 +158,21 @@ let package = Package(
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
         // --- end BorosKitSurface ---
+        // --- Golden-output harness: fixed synthetic phantoms run through every GPU operation,
+        // compared with recorded reference files (images, meshes, numbers, export bytes).
+        // Today Metal records the references; a future Vulkan backend is checked against the
+        // same files. Record: BK_GOLDEN_RECORD=1 swift test -c release --filter BKGoldenTests
+        // The reference files are read from the source folder (not bundled as resources).
+        .testTarget(
+            name: "BorosKitGoldenTests",
+            dependencies: ["BorosKitSurface", "BorosKitMeshRender", "BorosKitMesh", "BorosKitDisplay",
+                           "BorosKitRender", "BorosKitCore"],
+            path: "Tests/BorosKitGoldenTests",
+            exclude: ["References"],
+            // -ffp-contract=off: the phantom generator must give bit-identical scans on every
+            // platform (no fused multiply-add rounding), see BKGoldenCore.h.
+            cSettings: [.unsafeFlags(["-fobjc-arc", "-ffp-contract=off"])]
+        ),
     ]
     // C++17 for the plain C++ cores (std::to_chars in BKSceneExportCore).
     , cxxLanguageStandard: .gnucxx17

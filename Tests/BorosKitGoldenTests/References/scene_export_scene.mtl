@@ -1,0 +1,24 @@
+# Material library written by BorosKit for scene.obj
+
+newmtl Bone_ball_material
+Ka 0.18 0.17 0.14
+Kd 0.72 0.68 0.56
+Ks 0.2 0.2 0.2
+Ns 10
+illum 2
+d 1
+
+newmtl Guide_block_material
+Ka 0.04 0.1 0.18
+Kd 0.16 0.4 0.72
+Ks 0.2 0.2 0.2
+Ns 10
+illum 2
+d 0.5
+
+newmtl Outline_material
+Ka 0 0 0
+Kd 1 1 0
+Ks 0 0 0
+illum 0
+d 1

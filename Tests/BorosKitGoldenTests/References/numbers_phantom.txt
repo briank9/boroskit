@@ -1,0 +1,6 @@
+phantom_hash_low32 3098727089
+phantom_hash_high32 2327743619
+phantom_min -1024
+phantom_max 2525
+phantom_mean -632.97552490234375
+noise_first_value 0.33061028527139508
