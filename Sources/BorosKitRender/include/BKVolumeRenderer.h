@@ -126,8 +126,13 @@ typedef NS_ENUM(int32_t, BKProjection) {
 // Why: the VR window's cropping box can be rotated; 6 planes describe it exactly.
 // BKClipPlanesFromVTK (BorosKitCore) converts VTK planes into this form.
 - (void)setClipPlanes:(const N3Plane *)planes count:(NSUInteger)count;
+// The same planes in the GPU packing, simd float4 each: (nx, ny, nz, w), cut where
+// nx*x + ny*y + nz*z + w > 0 (as BKClipPlanesPack / BKBoxClipPlanes write them). Why: the
+// native cropping box (BKCropBox) works with simd types only, no N3Plane.
+- (void)setPackedClipPlanes:(const simd_float4 *)planes count:(NSUInteger)count;
 @property (nonatomic, readonly) NSUInteger clipPlaneCount;
 - (N3Plane)clipPlaneAtIndex:(NSUInteger)index;
+- (simd_float4)packedClipPlaneAtIndex:(NSUInteger)index;
 
 // --- Appearance ------------------------------------------------------------------
 // Grayscale window for MIP / MinIP / Average output (rgba8Data). floatData is never

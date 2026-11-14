@@ -92,6 +92,8 @@ NS_ASSUME_NONNULL_BEGIN
 // Up to 6 extra planes (patient mm, normal side cut away), e.g. a rotated crop box.
 // count 0 removes them. See -[BKVolumeRenderer setClipPlanes:count:].
 - (void)setClipPlanes:(const N3Plane *)planes count:(NSUInteger)count;
+// Same, in the simd GPU packing (see -[BKVolumeRenderer setPackedClipPlanes:count:]).
+- (void)setPackedClipPlanes:(const simd_float4 *)planes count:(NSUInteger)count;
 
 @end
 

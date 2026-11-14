@@ -10,3 +10,6 @@
 #import "BKVolumeCamera.h"
 #import "BKVolumeScene.h"
 #import "BKRenderCore.h"      // plain-C maths shared with a future Vulkan backend
+#import "BKCameraMath.h"
+#import "BKBoxWidgetMath.h"
+#import "BKCropBoxCore.h"

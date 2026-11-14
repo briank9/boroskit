@@ -94,6 +94,18 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
 // Background behind the volume (RGB 0..1). Set from the preset; can be changed.
 @property (nonatomic) simd_float4 backgroundColor;
 
+// --- Camera slab ("clipping-range slab" of the VR window) -------------------------------
+// When viewSlabEnabled is YES, only the part of the volume between viewSlabNear and
+// viewSlabFar millimetres in front of the camera position (camera.position, measured along
+// the viewing direction) is shown. The slab is recomputed from the camera for every frame,
+// so it follows the view while the user rotates, moves or zooms (like VTK's camera
+// clipping range, which the classic window uses for this mode). It uses the renderer's
+// slab (two parallel planes), so the 6 extra clip planes stay free for the cropping box.
+// Turning it off switches the renderer's slab off. Default NO.
+@property (nonatomic) BOOL viewSlabEnabled;
+@property (nonatomic) CGFloat viewSlabNear;
+@property (nonatomic) CGFloat viewSlabFar;
+
 // --- Camera shortcuts ---------------------------------------------------------------
 // Fits the camera to the volume and shows the Horos reset view (left side, head up).
 - (void)resetCamera;
@@ -128,6 +140,17 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
 - (BOOL)encodeFrameToTexture:(id<MTLTexture>)target
                commandBuffer:(id<MTLCommandBuffer>)commandBuffer
                        error:(NSError * _Nullable * _Nullable)error;
+
+// Renders one full-quality image of width x height pixels with the scene's camera, view
+// slab, clipping and appearance, and waits for the GPU (CPU-readable result, top row
+// first). Why: exports. In MIP / MinIP / mean modes BKRenderResult.floatData holds the
+// projected scan values themselves (e.g. Hounsfield units), which is what a 16-bit
+// ("full depth") DICOM export needs; `missValue` (NAN = the volume's own outside value) is
+// reported where a ray hits nothing. Returns nil + error on failure.
+- (nullable BKRenderResult *)renderFullQualityWithWidth:(NSUInteger)width
+                                                 height:(NSUInteger)height
+                                              missValue:(float)missValue
+                                                  error:(NSError * _Nullable * _Nullable)error;
 
 // The size actually ray-cast for a target of `size` at quality `level` (tests/debug).
 - (CGSize)renderSizeForTargetSize:(CGSize)size qualityLevel:(NSInteger)level;

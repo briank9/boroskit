@@ -516,4 +516,13 @@ static const NSUInteger kBKIdleTicksBeforePause = 30;
     [self setNeedsRedraw];
 }
 
+// What: sets/clears the extra clipping planes given in the simd GPU packing, and redraws.
+// Why (2026-11-14): the 3D window's native cropping box (BKCropBox) hands its 6 face planes in
+// this form; no N3Plane (Horos-derived type) in new code.
+- (void)setPackedClipPlanes:(const simd_float4 *)planes count:(NSUInteger)count
+{
+    [_scene.renderer setPackedClipPlanes:planes count:count];
+    [self setNeedsRedraw];
+}
+
 @end

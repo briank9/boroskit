@@ -262,6 +262,42 @@ static void BKBoxPlanes(double cz, double hx, double hy, double hz, double angle
     XCTAssertEqualWithAccuracy([r valueAtX:63 - 38 y:63 - 38], 1000.0f, 0.5f);
 }
 
+// The simd setter (2026-11-14, used by the native cropping box) stores exactly what the N3Plane
+// setter stores, and the picture is identical whichever setter is used. Zero-normal planes are
+// skipped and normals are made unit length.
+- (void)testPackedClipPlanesMatchN3Planes
+{
+    N3Plane planes[6];
+    BKBoxPlanes(31, 8, 8, 40, 45, 0, planes);
+    [_renderer setClipPlanes:planes count:6];
+    simd_float4 packed[6];
+    for (NSUInteger i = 0; i < 6; i++) packed[i] = [_renderer packedClipPlaneAtIndex:i];
+    BKRenderResult *a = [self requireGPU] ? [self render] : nil;
+
+    [_renderer setPackedClipPlanes:NULL count:0];
+    XCTAssertEqual(_renderer.clipPlaneCount, 0u);
+    simd_float4 scaled[7];
+    for (NSUInteger i = 0; i < 6; i++) scaled[i] = packed[i] * 3.0f;   // same planes, longer normals
+    scaled[6] = simd_make_float4(0, 0, 0, 5);                            // no normal: skipped
+    [_renderer setPackedClipPlanes:scaled count:7];
+    XCTAssertEqual(_renderer.clipPlaneCount, 6u);
+    for (NSUInteger i = 0; i < 6; i++) {
+        simd_float4 p = [_renderer packedClipPlaneAtIndex:i];
+        XCTAssertLessThan(simd_length(p - packed[i]), 1e-5f);
+        N3Plane back = [_renderer clipPlaneAtIndex:i];
+        // The N3Plane form describes the same plane: its point is on the original plane.
+        double d = N3VectorDotProduct(N3VectorNormalize(planes[i].normal), N3VectorSubtract(back.point, planes[i].point));
+        XCTAssertEqualWithAccuracy(d, 0.0, 1e-3);
+    }
+    if (a == nil) return;
+    BKRenderResult *b = [self render];
+    NSUInteger differ = 0;
+    for (NSUInteger j = 0; j < kSize; j++)
+        for (NSUInteger i = 0; i < kSize; i++)
+            if (fabsf([a valueAtX:i y:j] - [b valueAtX:i y:j]) > 1e-3f) differ++;
+    XCTAssertEqual(differ, 0u);
+}
+
 // Box tilted about x (so the planes cut each ray at an angle) with its top inside the
 // volume: where a column's ray does not meet the sphere, the MIP of the z-gradient
 // background (-1000 + 10 z) equals the value at the highest kept z, which a CPU march
