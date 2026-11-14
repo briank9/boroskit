@@ -126,6 +126,21 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
     return YES;
 }
 
+// What / why: see the header. The bounds are recomputed (same numbers for the same geometry);
+// camera and preset stay. Empty-space skipping re-measures the new texture on its first frame.
+- (BOOL)replaceVolumeValues:(CPRVolumeData *)volumeData error:(NSError **)error
+{
+    BKVolumeTexture *old = _renderer.volumeTexture;
+    if (old == nil || volumeData.pixelsWide != old.pixelsWide || volumeData.pixelsHigh != old.pixelsHigh
+        || volumeData.pixelsDeep != old.pixelsDeep)
+        return [self setVolumeData:volumeData error:error];   // a different scan: open it fully
+    if (![_renderer setVolumeData:volumeData error:error]) return NO;
+    // Only the bounds: the preset is NOT re-applied (that would undo the user's window/level; the
+    // app keeps its own colour/opacity in sync) and the camera is NOT reset.
+    [self recomputeVolumeBounds];
+    return YES;
+}
+
 - (BKVolumeTexture *)volumeTexture
 {
     return _renderer.volumeTexture;
@@ -143,10 +158,18 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
 // Why: a new volume invalidates all three.
 - (void)volumeDidChange
 {
+    if (![self recomputeVolumeBounds]) return;
+    if (_preset) [self applyPreset:_preset];
+    [self resetCamera];
+}
+
+// What: the volume's patient-space bounds from the current texture. NO when there is no volume.
+- (BOOL)recomputeVolumeBounds
+{
     BKVolumeTexture *vt = _renderer.volumeTexture;
     if (!vt) {
         _volumeBoundsMin = _volumeBoundsMax = N3VectorZero;
-        return;
+        return NO;
     }
     // Voxel -> patient = inverse of the stored patient -> voxel transform; take the
     // 8 corner voxel centres.
@@ -160,8 +183,7 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
     }
     _volumeBoundsMin = lo;
     _volumeBoundsMax = hi;
-    if (_preset) [self applyPreset:_preset];
-    [self resetCamera];
+    return YES;
 }
 
 // What: fit + Horos' reset view (left side). Why: matches -[VRView resetImage:].

@@ -355,6 +355,15 @@ static const NSUInteger kBKIdleTicksBeforePause = 30;
     return ok;
 }
 
+// What: new voxel values, same scan; keeps the view (see the header).
+- (BOOL)replaceVolumeValues:(CPRVolumeData *)volumeData error:(NSError **)error
+{
+    if (!_scene) return NO;
+    BOOL ok = [_scene replaceVolumeValues:volumeData error:error];
+    [self setNeedsRedraw];
+    return ok;
+}
+
 // What: applies a preset and redraws.
 - (void)applyPreset:(BKPreset *)preset
 {

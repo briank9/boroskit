@@ -135,6 +135,13 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
 - (void)recordFrameTime:(double)seconds atQualityLevel:(NSInteger)level;
 
 // --- Rendering ------------------------------------------------------------------------
+// What: new voxel VALUES for the same scan (same size, spacing and position), e.g. after the 3D
+// window's scissors cut, bone removal or undo changed the data in memory. Uploads them and keeps
+// the camera, the preset, window/level, slab and crop (unlike -setVolumeData:error:, which opens a
+// new study: fits the camera). Falls back to a full -setVolumeData: when the geometry differs.
+// Why (2026-11-14): Metal uploaded the scan once, so cuts never showed while Metal drew.
+- (BOOL)replaceVolumeValues:(CPRVolumeData *)volumeData error:(NSError * _Nullable * _Nullable)error;
+
 // Encodes one frame into `target` (needs MTLTextureUsageShaderWrite) at the current
 // quality level, without waiting. Measures the GPU time when the command buffer
 // completes. Returns NO + error if nothing can be drawn (e.g. no volume).

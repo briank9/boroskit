@@ -63,6 +63,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)setVolumeData:(CPRVolumeData *)volumeData error:(NSError * _Nullable * _Nullable)error;
 
 // Applies a preset (colours, opacity, WL/WW, lighting, projection, background) and redraws.
+// What: new voxel values for the same scan (scissors cut, bone removal, undo): see
+// -[BKVolumeScene replaceVolumeValues:error:] (keeps the view); redraws. (2026-11-14)
+- (BOOL)replaceVolumeValues:(CPRVolumeData *)volumeData error:(NSError * _Nullable * _Nullable)error;
 - (void)applyPreset:(BKPreset *)preset;
 
 // 3D / MIP / MinIP / mean.
