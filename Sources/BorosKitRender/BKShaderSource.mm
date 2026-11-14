@@ -79,10 +79,20 @@ static float3 bk_gradient(texture3d<float> volume, sampler s, float3 v, constant
     return transpose(bk_patient_to_voxel(p)) * (0.5f * g);
 }
 
-// Packs a 0..1 colour into 8-bit RGBA.
-static uchar4 bk_pack(float4 c)
+// Packs a 0..1 colour into 8-bit RGBA inside one 32-bit word (r in the lowest byte, so
+// the bytes in memory are r, g, b, a). Why a uint and not uchar4: GPU buffers here hold
+// only 32-bit words, so a Vulkan device needs no optional 8-bit storage feature.
+static uint bk_pack(float4 c)
 {
-    return uchar4(clamp(c, 0.0f, 1.0f) * 255.0f + 0.5f);
+    uint4 q = uint4(clamp(c, 0.0f, 1.0f) * 255.0f + 0.5f);
+    return q.x | (q.y << 8) | (q.z << 16) | (q.w << 24);
+}
+
+// Per-brick value range, packed as (lowest | highest << 16) in one 32-bit word (raw
+// 16-bit stored steps). Same reason: only 32-bit words in GPU buffers.
+static uint2 bk_unpack_range(uint packed)
+{
+    return uint2(packed & 0xffffu, packed >> 16);
 }
 
 // ---- Empty-space skipping helpers -------------------------------------------------
@@ -145,7 +155,7 @@ struct BKTraceResult {
 // read when p.skipEmptySpace is 1).
 static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transferFn,
                               constant BKRenderParams &p, uint2 gid,
-                              device const uchar *brickEmpty, device const ushort2 *brickRange)
+                              device const uint *brickEmpty, device const uint *brickRange)
 {
     constexpr sampler linearSampler(coord::normalized, filter::linear, address::clamp_to_edge);
     constexpr sampler tfSampler(coord::normalized, filter::linear, address::clamp_to_edge);
@@ -325,7 +335,7 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
                 brickEnd = bk_first_sample_after_brick(b, ov, dv, tLo, step, i, n);
                 // Stored range -> real values. One 16-bit step of margin on each side so
                 // that GPU rounding of an interpolated sample can never step outside it.
-                ushort2 raw = brickRange[bk_brick_index(b, p)];
+                uint2 raw = bk_unpack_range(brickRange[bk_brick_index(b, p)]);
                 brickLow  = (max((float)raw.x - 1.0f, 0.0f) / 65535.0f) * p.valueScale + p.valueOffset;
                 brickHigh = (min((float)raw.y + 1.0f, 65535.0f) / 65535.0f) * p.valueScale + p.valueOffset;
             }
@@ -353,10 +363,10 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
 kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
                        texture2d<float> transferFn   [[texture(1)]],
                        constant BKRenderParams &p    [[buffer(0)]],
-                       device uchar4 *colorOut       [[buffer(1)]],
+                       device uint   *colorOut       [[buffer(1)]],   /* RGBA8 packed in one word */
                        device float  *valueOut       [[buffer(2)]],
-                       device const uchar *brickEmpty   [[buffer(3)]],
-                       device const ushort2 *brickRange [[buffer(4)]],
+                       device const uint *brickEmpty    [[buffer(3)]],   /* 1 word per brick */
+                       device const uint *brickRange    [[buffer(4)]],   /* lowest | highest << 16 */
                        uint2 gid                     [[thread_position_in_grid]])
 {
     if (gid.x >= p.width || gid.y >= p.height) return;
@@ -374,8 +384,8 @@ kernel void bk_raycast_texture(texture3d<float> volume                      [[te
                                texture2d<float, access::write> target       [[texture(2)]],
                                constant BKRenderParams &p                   [[buffer(0)]],
                                constant float4 &background                  [[buffer(1)]],
-                               device const uchar *brickEmpty               [[buffer(2)]],
-                               device const ushort2 *brickRange             [[buffer(3)]],
+                               device const uint *brickEmpty                [[buffer(2)]],
+                               device const uint *brickRange                [[buffer(3)]],
                                uint2 gid                                    [[thread_position_in_grid]])
 {
     if (gid.x >= p.width || gid.y >= p.height) return;
@@ -403,7 +413,7 @@ kernel void bk_upscale(texture2d<float> source                 [[texture(0)]],
 // they must count as part of the brick, or a brick could wrongly look empty.
 // Values are kept as the raw 16-bit numbers, exactly as stored in the volume.
 kernel void bk_brick_ranges(texture3d<float> volume      [[texture(0)]],
-                            device ushort2 *brickRange   [[buffer(0)]],
+                            device uint *brickRange      [[buffer(0)]],   /* lowest | highest << 16 */
                             constant uint4 &grid4        [[buffer(1)]],   /* xyz = brick counts (uint4: no 3-vectors in GPU buffers) */
                             uint3 gid                    [[thread_position_in_grid]])
 {
@@ -421,7 +431,7 @@ kernel void bk_brick_ranges(texture3d<float> volume      [[texture(0)]],
                 mx = max(mx, v);
             }
     uint index = (gid.z * grid.y + gid.y) * grid.x + gid.x;
-    brickRange[index] = ushort2((ushort)rint(mn * 65535.0f), (ushort)rint(mx * 65535.0f));
+    brickRange[index] = uint(rint(mn * 65535.0f)) | (uint(rint(mx * 65535.0f)) << 16);
 }
 
 // Empty-space skipping, step 2 (whenever the colour/opacity rule changes): one thread
@@ -431,16 +441,16 @@ kernel void bk_brick_ranges(texture3d<float> volume      [[texture(0)]],
 // adds one table entry of margin on each side for the table's linear blending and for
 // rounding. alphaCount[k] = how many of the first k table entries are not see-through,
 // so "any opaque entry between a and b" is a single subtraction.
-kernel void bk_classify_bricks(device const ushort2 *brickRange [[buffer(0)]],
+kernel void bk_classify_bricks(device const uint *brickRange     [[buffer(0)]],
                                device const uint *alphaCount    [[buffer(1)]],
-                               device uchar *brickEmpty         [[buffer(2)]],
+                               device uint *brickEmpty          [[buffer(2)]],
                                constant BKRenderParams &p       [[buffer(3)]],
                                uint3 gid                        [[thread_position_in_grid]])
 {
     uint3 g = uint3(p.brickGrid.xyz);
     if (any(gid >= g)) return;
     uint index = (gid.z * g.y + gid.y) * g.x + gid.x;
-    ushort2 raw = brickRange[index];
+    uint2 raw = bk_unpack_range(brickRange[index]);
     float tfRange = max(p.tfMax - p.tfMin, 1e-6f);
     float lowValue  = ((float)raw.x / 65535.0f) * p.valueScale + p.valueOffset;
     float highValue = ((float)raw.y / 65535.0f) * p.valueScale + p.valueOffset;

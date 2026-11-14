@@ -105,7 +105,7 @@ static simd_float4 BKFloat4(simd_float3 v)
     id<MTLComputePipelineState> _brickRangePipeline;    // bk_brick_ranges (once per volume)
     id<MTLComputePipelineState> _classifyPipeline;      // bk_classify_bricks (per transfer function)
     id<MTLBuffer> _alphaCountBuffer;    // running count of non-see-through table entries, per bake
-    id<MTLBuffer> _brickEmptyBuffer;    // 1 byte per brick: 1 = fully see-through
+    id<MTLBuffer> _brickEmptyBuffer;    // 1 uint32 per brick: 1 = fully see-through
     id<MTLBuffer> _classifiedAlphaCount;            // which table _brickEmptyBuffer was made for
     __weak BKVolumeTexture *_classifiedVolume;      // ...and which volume
     id<MTLBuffer> _placeholderBuffer;   // bound instead when skipping is off (the GPU wants something there)
@@ -398,7 +398,8 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
         simd_float3 g = BKBrickGrid(vt);
         simd_uint4 grid = simd_make_uint4((uint32_t)g.x, (uint32_t)g.y, (uint32_t)g.z, 0);   // uint4: no 3-vectors in GPU data
         NSUInteger bricks = (NSUInteger)grid.x * grid.y * grid.z;
-        id<MTLBuffer> ranges = [_device newBufferWithLength:bricks * 2 * sizeof(uint16_t) options:MTLResourceStorageModePrivate];
+        // One 32-bit word per brick: lowest | highest << 16 (raw 16-bit steps).
+        id<MTLBuffer> ranges = [_device newBufferWithLength:bricks * sizeof(uint32_t) options:MTLResourceStorageModePrivate];
         if (!ranges) return nil;
         id<MTLCommandBuffer> cb = [_queue commandBuffer];
         id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
@@ -445,7 +446,9 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
             NSUInteger bricks = (NSUInteger)params->brickGrid.x * (NSUInteger)params->brickGrid.y * (NSUInteger)params->brickGrid.z;
             // A new list each time (rare: only when the colours/opacity change), so a
             // frame still in flight keeps the list it started with.
-            id<MTLBuffer> empty = [_device newBufferWithLength:bricks options:MTLResourceStorageModePrivate];
+            // One 32-bit word per brick (GPU buffers hold only 32-bit words: no optional
+            // 8-bit storage feature needed in Vulkan; a 512^3 scan has 262,144 bricks = 1 MB).
+            id<MTLBuffer> empty = [_device newBufferWithLength:bricks * sizeof(uint32_t) options:MTLResourceStorageModePrivate];
             if (!empty) return;
             id<MTLComputeCommandEncoder> enc = [commandBuffer computeCommandEncoder];
             [enc setComputePipelineState:_classifyPipeline];
