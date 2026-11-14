@@ -587,3 +587,32 @@ machines are needed for this; MoltenVK only exercises the Apple GPU.
 
 Note: the vendor details above are from general knowledge, not from looking anything up (the user
 asked for no web search); verify them on real hardware when the Vulkan backend is built.
+
+### 12.1 GPU preference: which card draws (added 2026-11-14)
+
+Macs (and PCs) can have several GPUs: integrated + discrete laptops, Mac Pro, external GPUs,
+NVIDIA + AMD in one PC. The user picks the card in Boros 6 Settings > General "Graphics card";
+it is stored as user default `BorosPreferredGPU` = the card **name** (`""` = Automatic). A name,
+not an index or registry id, because it stays the same across restarts and backends.
+
+- **One chooser for every backend:** `BKGPUChoiceCore.h` (plain C, BorosKitRender). The backend
+  lists its adapters as `BKGPUAdapterDesc {name, vendorID, kind, isLowPower, isRemovable, handle,
+  memoryBytes}` and calls `BKGPUChooseAdapter(list, count, preference, &status)`. Exact name match,
+  else Automatic: real GPU before software (CPU) renderer, built-in before removable (an eGPU only
+  when chosen), discrete/high-performance before integrated/low-power, more memory, then a
+  deterministic tie-break. A chosen card that is not present (unplugged eGPU) falls back to
+  Automatic and the status says so (Boros 6 logs it).
+- **Metal today:** `BKMetalDevice` (MTLCopyAllDevices -> descriptions). Every BorosKit class that is
+  given no device uses `+[BKMetalDevice preferredDevice]`; no `MTLCreateSystemDefaultDevice` is left
+  in the package outside BKMetalDevice itself (iOS, or no device list). Unit tests: `BKGPUChoiceTests`.
+- **Vulkan later:** one `BKGPUAdapterDesc` per `VkPhysicalDevice`: `deviceName`, `vendorID`
+  (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel), `deviceType` DISCRETE/INTEGRATED/VIRTUAL/CPU -> `kind`,
+  DEVICE_LOCAL heap size -> `memoryBytes`; same function, same preference string (details in the
+  header's PORTING NOTES). Two identical cards share a name; if that ever matters, extend the
+  preference (e.g. deviceUUID) while keeping `""` and plain names working.
+- **CUDA / ROCm accelerator packs (section 12):** read the same `BorosPreferredGPU` and match it
+  against the name their runtime reports, so AI runs on the card that draws; Automatic among their
+  own cards when the preferred card is another vendor's.
+- Applies to windows opened after the change. Objects that share GPU data must be made on the same
+  device (a texture of one card cannot be used by another), so app-wide GPU workers are kept per
+  card and a window keeps the card it started on.

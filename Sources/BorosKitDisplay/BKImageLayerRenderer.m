@@ -12,6 +12,7 @@
 
 #import "BKImageLayerRenderer.h"
 #import "BKDisplayShaderTypes.h"
+#import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
 
 extern NSString *BKDisplayShaderSource(void);
 
@@ -113,7 +114,7 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
 - (nullable instancetype)initWithDevice:(nullable id<MTLDevice>)device error:(NSError **)error
 {
     if ((self = [super init])) {
-        _device = device ?: MTLCreateSystemDefaultDevice();
+        _device = device ?: [BKMetalDevice preferredDevice];   // no device given: the preferred card, see BKMetalDevice.h
         if (!_device) {
             if (error) *error = BKDisplayError(1, @"No Metal device available");
             return nil;

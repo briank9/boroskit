@@ -13,3 +13,5 @@
 #import "BKCameraMath.h"
 #import "BKBoxWidgetMath.h"
 #import "BKCropBoxCore.h"
+#import "BKGPUChoiceCore.h"   // plain-C choice of the graphics card (shared with Vulkan)
+#import "BKMetalDevice.h"     // the preferred Metal device (Settings "Graphics card")

@@ -22,6 +22,7 @@
 #import "BKSurfaceCore.h"
 #import "BKVolumeTexture.h"
 #import "BKMesh.h"
+#import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
 #import <QuartzCore/QuartzCore.h>
 
 NSString *BKSurfaceShaderSource(void); // BKSurfaceShaderSource.mm
@@ -159,7 +160,7 @@ static NSUInteger BKRowThreads(id<MTLComputePipelineState> pipeline)
 - (instancetype)initWithDevice:(id<MTLDevice>)device commandQueue:(id<MTLCommandQueue>)commandQueue error:(NSError **)error
 {
     if (!(self = [super init])) return nil;
-    _device = device ?: MTLCreateSystemDefaultDevice();
+    _device = device ?: [BKMetalDevice preferredDevice];   // no device given: the preferred card, see BKMetalDevice.h
     if (!_device) {
         if (error) *error = BKSurfaceError(BKSurfaceStatusGPUFailed, @"No Metal GPU is available.", nil);
         return nil;

@@ -15,6 +15,7 @@
 #import "BKTransferFunction.h"
 #import "BKShaderTypes.h"
 #import "BKRenderCore.h"
+#import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
 #import "CPRVolumeData.h"
 
 NSString *BKVolumeShaderSource(void); // BKShaderSource.mm
@@ -142,7 +143,7 @@ static simd_float4 BKFloat4(simd_float3 v)
 - (instancetype)initWithDevice:(id<MTLDevice>)device error:(NSError **)error
 {
     if (!(self = [super init])) return nil;
-    _device = device ?: MTLCreateSystemDefaultDevice();
+    _device = device ?: [BKMetalDevice preferredDevice];   // no device given: the preferred card, see BKMetalDevice.h
     if (!_device) {
         if (error) *error = BKRendererError(10, @"No Metal GPU is available on this device.");
         return nil;

@@ -15,6 +15,7 @@
 #import "BKMeshShaderTypes.h"
 #import "BKVolumeTexture.h"   // BKRenderErrorDomain
 #import "BKMeshDrawCore.h"    // 2026-11-14: culling / texture / point rules (plain C)
+#import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
 
 NSString *BKMeshShaderSource(void); // BKMeshShaderSource.mm
 
@@ -439,7 +440,7 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 - (instancetype)initWithDevice:(id<MTLDevice>)device error:(NSError **)error
 {
     if (!(self = [super init])) return nil;
-    _device = device ?: MTLCreateSystemDefaultDevice();
+    _device = device ?: [BKMetalDevice preferredDevice];   // no device given: the preferred card, see BKMetalDevice.h
     if (!_device) {
         if (error) *error = BKMeshRenderError(30, @"No Metal GPU is available on this device.");
         return nil;
