@@ -43,6 +43,24 @@ extern NSErrorDomain const BKRenderErrorDomain;
                                      device:(id<MTLDevice>)device
                                       error:(NSError * _Nullable * _Nullable)error;
 
+// Same upload, from plain data instead of CPRVolumeData (added 2026-11-13).
+// voxels: width*height*depth floats, x fastest, then y, then z (copied; the caller keeps
+// ownership). patientToVoxel: 16 doubles, COLUMN-MAJOR, column-vector convention
+// (voxel = M * (x, y, z, 1) for a patient point in mm; translation in elements 12-14);
+// it becomes volumeTransform. minPixelSpacing: smallest voxel size in mm (> 0).
+// outOfBoundsValue: value reported where a ray leaves the volume (e.g. -1000 HU).
+// Why: new BorosKit code (the golden-output tests, a future Vulkan backend, the iPad app)
+// must be able to upload a volume without the Horos-derived, LGPL CPRVolumeData class.
+- (nullable instancetype)initWithFloatVoxels:(const float *)voxels
+                                       width:(NSUInteger)width
+                                      height:(NSUInteger)height
+                                       depth:(NSUInteger)depth
+                              patientToVoxel:(const double[_Nonnull 16])patientToVoxel
+                             minPixelSpacing:(double)minPixelSpacing
+                            outOfBoundsValue:(float)outOfBoundsValue
+                                      device:(id<MTLDevice>)device
+                                       error:(NSError * _Nullable * _Nullable)error;
+
 @property (nonatomic, readonly) id<MTLTexture> texture;
 
 @property (nonatomic, readonly) NSUInteger pixelsWide;

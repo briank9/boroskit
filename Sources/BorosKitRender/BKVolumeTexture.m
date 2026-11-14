@@ -57,6 +57,42 @@ static NSError *BKMakeError(NSInteger code, NSString *message)
     return ok ? self : nil;
 }
 
+// What: upload from plain arrays (see the header). The checks and the upload are the
+// same code path as -initWithVolumeData:device:error:, so both give identical textures.
+// Why: lets new code (tests, iPad, Vulkan prep) avoid the LGPL CPRVolumeData class.
+- (instancetype)initWithFloatVoxels:(const float *)voxels width:(NSUInteger)width height:(NSUInteger)height
+                              depth:(NSUInteger)depth patientToVoxel:(const double[16])m
+                    minPixelSpacing:(double)minPixelSpacing outOfBoundsValue:(float)outOfBoundsValue
+                             device:(id<MTLDevice>)device error:(NSError **)error
+{
+    if (!(self = [super init])) return nil;
+    _pixelsWide = width;
+    _pixelsHigh = height;
+    _pixelsDeep = depth;
+    // Column-major, column-vector M and the row-vector N3AffineTransform (CATransform3D)
+    // share the same element order: voxel.x = p.x*m11 + p.y*m21 + p.z*m31 + m41, and
+    // M[0], M[4], M[8], M[12] are the same four numbers. So element i of M is the i-th
+    // field of the transform.
+    N3AffineTransform t;
+    t.m11 = m[0];  t.m12 = m[1];  t.m13 = m[2];  t.m14 = m[3];
+    t.m21 = m[4];  t.m22 = m[5];  t.m23 = m[6];  t.m24 = m[7];
+    t.m31 = m[8];  t.m32 = m[9];  t.m33 = m[10]; t.m34 = m[11];
+    t.m41 = m[12]; t.m42 = m[13]; t.m43 = m[14]; t.m44 = m[15];
+    _volumeTransform = t;
+    _minPixelSpacing = minPixelSpacing;
+    _outOfBoundsValue = outOfBoundsValue;
+
+    if (!voxels || _pixelsWide == 0 || _pixelsHigh == 0 || _pixelsDeep == 0) {
+        if (error) *error = BKMakeError(1, @"The volume is empty.");
+        return nil;
+    }
+    if (_pixelsWide > 2048 || _pixelsHigh > 2048 || _pixelsDeep > 2048) {
+        if (error) *error = BKMakeError(2, @"The volume is larger than 2048 voxels on one side, which the GPU cannot hold as one 3D texture.");
+        return nil;
+    }
+    return [self uploadFloats:voxels device:device error:error] ? self : nil;
+}
+
 // Does the actual work: (1) one pass to find min/max and whether all values are whole
 // numbers, (2) pick scale/offset so whole-number data is stored exactly, (3) convert
 // to 16-bit in chunks of slices and copy each chunk into a GPU-private texture with a
