@@ -12,7 +12,7 @@
 // What: a 40 x 20 x 10 mm box centred at (100, 50, 30) (x 80..120, y 40..60, z 25..35).
 static BKOrientedBox BKCropTestBox(void)
 {
-    return BKBoxMakeAxisAligned(simd_make_double3(80, 40, 25), simd_make_double3(120, 60, 35));
+    return BKBoxMakeAxisAligned(BKV3d(80, 40, 25), BKV3d(120, 60, 35));
 }
 
 // What: orthographic camera looking down -z at (100, 50), 100 mm tall view. In a 200 x 200
@@ -21,18 +21,19 @@ static BKOrientedBox BKCropTestBox(void)
 static BKCameraFrame BKCropTestCamera(void)
 {
     BKCameraFrame f;
-    f.position = simd_make_double3(100, 50, 200);
-    f.direction = simd_make_double3(0, 0, -1);
-    f.up = simd_make_double3(0, 1, 0);
+    f.position = BKV3d(100, 50, 200);
+    f.direction = BKV3d(0, 0, -1);
+    f.up = BKV3d(0, 1, 0);
     f.parallelScale = 50;
     f.viewAngle = 30;
     f.perspective = false;
     return f;
 }
 
-static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
+// (Written with BorosKit's neutral vectors, BKVec.h, like the core itself.)
+static BOOL BKCropClose3(BKVec3d a, BKVec3d b, double tol)
 {
-    return simd_length(a - b) <= tol;
+    return BKV3dDistance(a, b) <= tol;
 }
 
 @implementation BKCropBoxCoreTests
@@ -92,11 +93,11 @@ static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
     XCTAssertTrue(BKCropBoxBeginDrag(b, cam, 200, 200, 140, 100, BKCropButtonLeft, false, 6, NULL, 0, &d));
     XCTAssertTrue(BKCropBoxContinueDrag(&b, &d, cam, 200, 10, 0, 2.0));
     XCTAssertEqualWithAccuracy(b.halfSize[0], 22.5, 1e-9);
-    XCTAssertTrue(BKCropClose3(BKBoxHandlePosition(b, BKBoxFacePlusX), simd_make_double3(125, 50, 30), 1e-9));
-    XCTAssertTrue(BKCropClose3(BKBoxHandlePosition(b, BKBoxFaceMinusX), simd_make_double3(80, 50, 30), 1e-9));
+    XCTAssertTrue(BKCropClose3(BKBoxHandlePosition(b, BKBoxFacePlusX), BKV3d(125, 50, 30), 1e-9));
+    XCTAssertTrue(BKCropClose3(BKBoxHandlePosition(b, BKBoxFaceMinusX), BKV3d(80, 50, 30), 1e-9));
     BKCropBoxContinueDrag(&b, &d, cam, 200, -1000, 0, 2.0);
     XCTAssertEqualWithAccuracy(2 * b.halfSize[0], 2.0, 1e-9);
-    XCTAssertTrue(BKCropClose3(BKBoxHandlePosition(b, BKBoxFaceMinusX), simd_make_double3(80, 50, 30), 1e-9));
+    XCTAssertTrue(BKCropClose3(BKBoxHandlePosition(b, BKBoxFaceMinusX), BKV3d(80, 50, 30), 1e-9));
     // No motion -> no change.
     XCTAssertFalse(BKCropBoxContinueDrag(&b, &d, cam, 200, 0, 0, 2.0));
 
@@ -104,14 +105,14 @@ static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
     b = BKCropTestBox();
     XCTAssertTrue(BKCropBoxBeginDrag(b, cam, 200, 200, 120, 90, BKCropButtonMiddle, false, 6, NULL, 0, &d));
     XCTAssertTrue(BKCropBoxContinueDrag(&b, &d, cam, 200, 0, 20, 2.0));
-    XCTAssertTrue(BKCropClose3(b.centre, simd_make_double3(100, 40, 30), 1e-9));
+    XCTAssertTrue(BKCropClose3(b.centre, BKV3d(100, 40, 30), 1e-9));
 
     // Resize: dragging up grows, dragging down shrinks, around the centre.
     b = BKCropTestBox();
     XCTAssertTrue(BKCropBoxBeginDrag(b, cam, 200, 200, 120, 90, BKCropButtonRight, false, 6, NULL, 0, &d));
     XCTAssertTrue(BKCropBoxContinueDrag(&b, &d, cam, 200, 0, -10, 2.0));
     XCTAssertGreaterThan(b.halfSize[0], 20.0);
-    XCTAssertTrue(BKCropClose3(b.centre, simd_make_double3(100, 50, 30), 1e-9));
+    XCTAssertTrue(BKCropClose3(b.centre, BKV3d(100, 50, 30), 1e-9));
     BKOrientedBox before = b;
     XCTAssertTrue(BKCropBoxContinueDrag(&b, &d, cam, 200, 0, 10, 2.0));
     XCTAssertLessThan(b.halfSize[0], before.halfSize[0]);
@@ -120,11 +121,11 @@ static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
     b = BKCropTestBox();
     XCTAssertTrue(BKCropBoxBeginDrag(b, cam, 200, 200, 120, 90, BKCropButtonLeft, false, 6, NULL, 0, &d));
     XCTAssertTrue(BKCropBoxContinueDrag(&b, &d, cam, 200, 10, 0, 2.0));
-    XCTAssertTrue(BKCropClose3(b.centre, simd_make_double3(100, 50, 30), 1e-9));
+    XCTAssertTrue(BKCropClose3(b.centre, BKV3d(100, 50, 30), 1e-9));
     XCTAssertEqualWithAccuracy(b.halfSize[0], 20, 1e-9);
-    XCTAssertLessThan(simd_dot(b.axis[0], simd_make_double3(1, 0, 0)), 0.9999);
-    XCTAssertEqualWithAccuracy(simd_dot(b.axis[0], b.axis[1]), 0, 1e-9);
-    XCTAssertEqualWithAccuracy(simd_dot(b.axis[1], b.axis[2]), 0, 1e-9);
+    XCTAssertLessThan(BKV3dDot(b.axis[0], BKV3d(1, 0, 0)), 0.9999);
+    XCTAssertEqualWithAccuracy(BKV3dDot(b.axis[0], b.axis[1]), 0, 1e-9);
+    XCTAssertEqualWithAccuracy(BKV3dDot(b.axis[1], b.axis[2]), 0, 1e-9);
 }
 
 // All 12 edges without planes; with a slab plane keeping z <= 32 the top ring disappears and
@@ -132,7 +133,7 @@ static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
 - (void)testOutlineIsCutBySlab
 {
     BKOrientedBox b = BKCropTestBox();
-    simd_float3 pts[24];
+    BKVec3f pts[24];
     XCTAssertEqual(BKCropBoxOutline(b, NULL, 0, pts), 24u);
     float slab[4] = {0, 0, 1, -32};
     uint32_t n = BKCropBoxOutline(b, slab, 1, pts);
@@ -155,7 +156,7 @@ static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
 - (void)testFacePolygonIsCutBySlab
 {
     BKOrientedBox b = BKCropTestBox();
-    simd_float3 poly[BK_CROP_FACE_MAX_POINTS];
+    BKVec3f poly[BK_CROP_FACE_MAX_POINTS];
     XCTAssertEqual(BKCropBoxFacePolygon(b, BKBoxFacePlusZ, NULL, 0, poly), 4u);
     for (int i = 0; i < 4; i++) XCTAssertEqualWithAccuracy(poly[i].z, 35.0f, 1e-4f);
     float slab[4] = {0, 0, 1, -32};
@@ -177,7 +178,7 @@ static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
 - (void)testSixPlanesRoundTrip
 {
     BKOrientedBox b = BKCropTestBox();
-    BKBoxRotate(&b, simd_normalize(simd_make_double3(1, 2, 3)), 0.6);
+    BKBoxRotate(&b, BKV3dNormalize(BKV3d(1, 2, 3)), 0.6);
     double origins[18], normals[18];
     BKBoxKeptSidePlanes(b, 2.5, origins, normals);
     // The normal of the -X plane points into the box (along +axis 0); its origin is scaled.
@@ -209,9 +210,9 @@ static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
 // Axis-aligned bounds of a cube turned 45 degrees about z grow by sqrt(2) in x and y only.
 - (void)testAxisAlignedBounds
 {
-    BKOrientedBox b = BKBoxMakeAxisAligned(simd_make_double3(-10, -10, -10), simd_make_double3(10, 10, 10));
-    BKBoxRotate(&b, simd_make_double3(0, 0, 1), M_PI / 4);
-    simd_double3 lo, hi;
+    BKOrientedBox b = BKBoxMakeAxisAligned(BKV3d(-10, -10, -10), BKV3d(10, 10, 10));
+    BKBoxRotate(&b, BKV3d(0, 0, 1), M_PI / 4);
+    BKVec3d lo, hi;
     BKBoxAxisAlignedBounds(b, &lo, &hi);
     XCTAssertEqualWithAccuracy(hi.x, 10 * sqrt(2.0), 1e-9);
     XCTAssertEqualWithAccuracy(lo.y, -10 * sqrt(2.0), 1e-9);
@@ -232,10 +233,10 @@ static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
 - (void)testScreenRadius
 {
     BKCameraFrame cam = BKCropTestCamera();
-    XCTAssertEqualWithAccuracy(BKCropBoxScreenRadius(cam, 200, simd_make_double3(0, 0, 0), 5), 2.5, 1e-9);
+    XCTAssertEqualWithAccuracy(BKCropBoxScreenRadius(cam, 200, BKV3d(0, 0, 0), 5), 2.5, 1e-9);
     cam.perspective = true;
-    double nearR = BKCropBoxScreenRadius(cam, 200, simd_make_double3(100, 50, 100), 5);
-    double farR = BKCropBoxScreenRadius(cam, 200, simd_make_double3(100, 50, 0), 5);
+    double nearR = BKCropBoxScreenRadius(cam, 200, BKV3d(100, 50, 100), 5);
+    double farR = BKCropBoxScreenRadius(cam, 200, BKV3d(100, 50, 0), 5);
     XCTAssertEqualWithAccuracy(farR, 2 * nearR, 1e-9);
 }
 
@@ -243,9 +244,9 @@ static BOOL BKCropClose3(simd_double3 a, simd_double3 b, double tol)
 - (void)testKeepPoint
 {
     float slab[4] = {0, 0, 1, -32};
-    XCTAssertTrue(BKCutPlanesKeepPoint(NULL, 0, simd_make_double3(0, 0, 1000)));
-    XCTAssertTrue(BKCutPlanesKeepPoint(slab, 1, simd_make_double3(0, 0, 32)));
-    XCTAssertFalse(BKCutPlanesKeepPoint(slab, 1, simd_make_double3(0, 0, 32.1)));
+    XCTAssertTrue(BKCutPlanesKeepPoint(NULL, 0, BKV3d(0, 0, 1000)));
+    XCTAssertTrue(BKCutPlanesKeepPoint(slab, 1, BKV3d(0, 0, 32)));
+    XCTAssertFalse(BKCutPlanesKeepPoint(slab, 1, BKV3d(0, 0, 32.1)));
 }
 
 @end

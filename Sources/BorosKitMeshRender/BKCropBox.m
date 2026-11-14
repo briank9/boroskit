@@ -3,6 +3,7 @@
 // See include/BKCropBox.h; the maths is in BKBoxWidgetMath.c and BKCropBoxCore.c (plain C).
 
 #import "BKCropBox.h"
+#import "BKVecSimd.h"   // neutral core vectors <-> simd (Apple glue)
 #import "BKMeshRenderer.h"
 #import "BKMesh.h"
 #include <math.h>
@@ -176,8 +177,11 @@ static simd_float4x4 BKCropBoxPlacement(simd_double3 centre, double s)
     simd_float4x4 world = BKCropBoxPlacement(simd_make_double3(0, 0, 0), _worldScale);
 
     // Edges.
+    // The plain-C core works in BorosKit's neutral vectors (BKVec.h); convert to simd for Metal.
+    BKVec3f corePoints[24];
     simd_float3 points[24];
-    uint32_t n = _visible ? BKCropBoxOutline(_box, cut, cutCount, points) : 0;
+    uint32_t n = _visible ? BKCropBoxOutline(_box, cut, cutCount, corePoints) : 0;
+    for (uint32_t i = 0; i < n; i++) points[i] = BKV3fToSimd(corePoints[i]);
     [_outline setPoints:points count:n];
     _outline.transform = world;
     _outline.lineWidth = _lineWidth;
@@ -187,18 +191,20 @@ static simd_float4x4 BKCropBoxPlacement(simd_double3 centre, double s)
     // Handles.
     for (int h = 0; h < BKBoxHandleCount; h++) {
         BKMeshObject *o = _handles[h];
-        simd_double3 p = BKBoxHandlePosition(_box, h);
+        BKVec3d p = BKBoxHandlePosition(_box, h);
         BOOL shown = _visible && BKCutPlanesKeepPoint(cut, cutCount, p) && viewHeight > 0;
         o.visible = shown;
         if (!shown) continue;
         double r = BKCropBoxScreenRadius(camera, viewHeight, p, _handleRadiusPoints);
-        o.transform = BKCropBoxPlacement(p * _worldScale, r * _worldScale);
+        o.transform = BKCropBoxPlacement(BKV3dToSimd(p) * _worldScale, r * _worldScale);
         o.color = (h == _drag.highlightHandle) ? _selectedHandleColor : _handleColor;
     }
 
     // Highlighted face: a fan of triangles over the (cut) convex polygon.
+    BKVec3f corePoly[BK_CROP_FACE_MAX_POINTS];
     simd_float3 poly[BK_CROP_FACE_MAX_POINTS];
-    uint32_t corners = (_visible && _drag.highlightFace >= 0) ? BKCropBoxFacePolygon(_box, _drag.highlightFace, cut, cutCount, poly) : 0;
+    uint32_t corners = (_visible && _drag.highlightFace >= 0) ? BKCropBoxFacePolygon(_box, _drag.highlightFace, cut, cutCount, corePoly) : 0;
+    for (uint32_t i = 0; i < corners; i++) poly[i] = BKV3fToSimd(corePoly[i]);
     if (corners >= 3) {
         uint32_t indices[3 * (BK_CROP_FACE_MAX_POINTS - 2)];
         uint32_t k = 0;

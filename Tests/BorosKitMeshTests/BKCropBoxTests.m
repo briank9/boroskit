@@ -14,9 +14,9 @@
 static BKCameraFrame BKCropBoxTestCamera(void)
 {
     BKCameraFrame f;
-    f.position = simd_make_double3(100, 50, 200);
-    f.direction = simd_make_double3(0, 0, -1);
-    f.up = simd_make_double3(0, 1, 0);
+    f.position = BKV3d(100, 50, 200);
+    f.direction = BKV3d(0, 0, -1);
+    f.up = BKV3d(0, 1, 0);
     f.parallelScale = 50;
     f.viewAngle = 30;
     f.perspective = false;
@@ -28,7 +28,7 @@ static BKCameraFrame BKCropBoxTestCamera(void)
 // What: a new box around x 80..120, y 40..60, z 25..35, minimum edge 2 mm.
 - (BKCropBox *)makeBox
 {
-    BKOrientedBox b = BKBoxMakeAxisAligned(simd_make_double3(80, 40, 25), simd_make_double3(120, 60, 35));
+    BKOrientedBox b = BKBoxMakeAxisAligned(BKV3d(80, 40, 25), BKV3d(120, 60, 35));
     return [[BKCropBox alloc] initWithDefaultBox:b minimumEdge:2.0];
 }
 
@@ -118,7 +118,7 @@ static BKCameraFrame BKCropBoxTestCamera(void)
     XCTAssertEqual(outline.segmentCount, 8u);
 
     BKOrientedBox turned = box.box;
-    BKBoxRotate(&turned, simd_make_double3(0, 0, 1), 0.3);
+    BKBoxRotate(&turned, BKV3d(0, 0, 1), 0.3);
     [box setBox:turned cropsVolume:YES];
     box.visible = NO;
     [box updateDrawingWithCamera:cam viewHeight:200 cutPlanes:NULL count:0];

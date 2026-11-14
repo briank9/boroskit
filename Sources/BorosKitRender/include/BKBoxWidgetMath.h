@@ -1,7 +1,7 @@
 // BorosKitRender: maths of the 3D window's cropping box (plain C, no GPU code).
 //
 // PORTING NOTES (Vulkan / other backends):
-// - Pure C with <simd/simd.h> vector types only; no Objective-C, no Metal, no VTK and no
+// - Pure C99 with BorosKit vector types (BKVec.h; moved off Apple simd 2026-11-14); no Objective-C, no Metal, no VTK and no
 //   Horos-derived (LGPL) types such as N3Vector/N3Plane. A Vulkan build uses it unchanged.
 // - The only GPU-facing output is BKBoxClipPlanes(): 6 planes as plain float4 (x, y, z, w),
 //   std430 friendly and identical to BKClipPlanesPack()'s packing.
@@ -20,7 +20,7 @@
 #ifndef BK_BOX_WIDGET_MATH_H
 #define BK_BOX_WIDGET_MATH_H
 
-#include <simd/simd.h>
+#include "BKVec.h"   // BorosKit neutral vectors (no Apple simd: VULKAN-PORT-PLAN rule 1)
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -41,28 +41,28 @@ enum {
 // centre: middle of the box. axis[0..2]: unit vectors along its edges, perpendicular to
 // each other. halfSize[k]: half the edge length along axis[k] (>= 0).
 typedef struct {
-    simd_double3 centre;
-    simd_double3 axis[3];
+    BKVec3d centre;
+    BKVec3d axis[3];
     double halfSize[3];
 } BKOrientedBox;
 
 // What: an axis-aligned box from its corners (min, max).
-BKOrientedBox BKBoxMakeAxisAligned(simd_double3 boxMin, simd_double3 boxMax);
+BKOrientedBox BKBoxMakeAxisAligned(BKVec3d boxMin, BKVec3d boxMax);
 
 // What: the box from its 6 face centres (order -X, +X, -Y, +Y, -Z, +Z) and its centre,
 // i.e. exactly the 7 handle positions VTK's box widget keeps. Returns false if a pair of
 // opposite faces coincides (no direction can be found).
-bool BKBoxFromHandles(const simd_double3 faceCentres[6], simd_double3 centre, BKOrientedBox *out);
+bool BKBoxFromHandles(const BKVec3d faceCentres[6], BKVec3d centre, BKOrientedBox *out);
 
 // What: position of handle `handle` (0..5 = face centres, 6 = box centre).
-simd_double3 BKBoxHandlePosition(BKOrientedBox box, int handle);
+BKVec3d BKBoxHandlePosition(BKOrientedBox box, int handle);
 
 // What: unit normal of `face` pointing OUT of the box.
-simd_double3 BKBoxFaceNormal(BKOrientedBox box, int face);
+BKVec3d BKBoxFaceNormal(BKOrientedBox box, int face);
 
 // What: the 8 corners. Order: corner i uses -/+ along axis 0, 1, 2 following VTK's
 // hexahedron numbering (0: ---, 1: +--, 2: ++-, 3: -+-, 4: --+, 5: +-+, 6: +++, 7: -++).
-void BKBoxCorners(BKOrientedBox box, simd_double3 out[8]);
+void BKBoxCorners(BKOrientedBox box, BKVec3d out[8]);
 
 // What: length of the box's diagonal (corner to opposite corner).
 double BKBoxDiagonal(BKOrientedBox box);
@@ -72,39 +72,39 @@ double BKBoxDiagonal(BKOrientedBox box);
 // along the ray (so a handle drawn at a fixed size on screen is hit at that size: for an
 // orthographic view use radiusPerDistance 0, for a perspective view radiusAtOrigin 0).
 // The handle nearest to the ray's origin wins. *distance (optional) gets its t.
-int BKBoxPickHandle(BKOrientedBox box, simd_double3 origin, simd_double3 direction,
+int BKBoxPickHandle(BKOrientedBox box, BKVec3d origin, BKVec3d direction,
                     double radiusAtOrigin, double radiusPerDistance, double *distance);
 
 // What: the face through which a ray ENTERS the box, or -1 if it misses the box (or starts
 // inside it and never enters). *distance (optional) gets the entry distance along the ray.
-int BKBoxPickFace(BKOrientedBox box, simd_double3 origin, simd_double3 direction, double *distance);
+int BKBoxPickFace(BKOrientedBox box, BKVec3d origin, BKVec3d direction, double *distance);
 
 // What: moves `face` along its own normal by the part of `motion` that points along that
 // normal (the opposite face stays where it is). The box never gets thinner than
 // 2 * minHalfSize. Why: dragging a face handle.
-void BKBoxMoveFace(BKOrientedBox *box, int face, simd_double3 motion, double minHalfSize);
+void BKBoxMoveFace(BKOrientedBox *box, int face, BKVec3d motion, double minHalfSize);
 
 // What: moves the whole box by `motion`. Why: centre handle / middle button.
-void BKBoxTranslate(BKOrientedBox *box, simd_double3 motion);
+void BKBoxTranslate(BKOrientedBox *box, BKVec3d motion);
 
 // What: grows (factor > 1) or shrinks the box around its centre; no edge gets shorter than
 // 2 * minHalfSize. Why: right-button drag.
 void BKBoxScale(BKOrientedBox *box, double factor, double minHalfSize);
 
 // What: turns the box around its centre by `radians` around `axis` (right-hand rule).
-void BKBoxRotate(BKOrientedBox *box, simd_double3 axis, double radians);
+void BKBoxRotate(BKOrientedBox *box, BKVec3d axis, double radians);
 
 // What: the turn for a drag on a face: the axis lies in the screen, perpendicular to the
 // mouse motion (motion x viewDirection), and a drag as long as the box's diagonal turns it
 // once all the way round: angle = 2*pi * |motion| / diagonal (the feel of the classic
 // window's box). Returns false when there is nothing to turn (no motion, or motion along
 // the view).
-bool BKBoxRotationForDrag(BKOrientedBox box, simd_double3 viewDirection, simd_double3 motion,
-                          simd_double3 *axis, double *radians);
+bool BKBoxRotationForDrag(BKOrientedBox box, BKVec3d viewDirection, BKVec3d motion,
+                          BKVec3d *axis, double *radians);
 
 // What: the size factor for a right-button drag: 1 + |motion| / diagonal when the mouse moved
 // up on the screen (upwards > 0), 1 - |motion| / diagonal when it moved down; never below 0.1.
-double BKBoxScaleFactorForDrag(BKOrientedBox box, simd_double3 motion, double upwards);
+double BKBoxScaleFactorForDrag(BKOrientedBox box, BKVec3d motion, double upwards);
 
 // What: the affine map that carries box `from` onto box `to` (each axis of `from` onto the
 // same axis of `to`, stretched by the ratio of the half sizes), as a 4x4 row-major matrix
@@ -117,7 +117,7 @@ bool BKBoxAffineMap(BKOrientedBox from, BKOrientedBox to, double m[16]);
 void BKBoxClipPlanes(BKOrientedBox box, float out[24]);
 
 // What: YES when p is inside the box or on its surface (tolerance 1e-9 mm).
-bool BKBoxContainsPoint(BKOrientedBox box, simd_double3 p);
+bool BKBoxContainsPoint(BKOrientedBox box, BKVec3d p);
 
 #ifdef __cplusplus
 }

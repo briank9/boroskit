@@ -21,6 +21,14 @@ let package = Package(
         .library(name: "BorosKitSurface", targets: ["BorosKitSurface"]),
     ],
     targets: [
+        // BorosKitVec (2026-11-14): BorosKit's own neutral vector types for the plain-C cores
+        // (pure C99, header-only). No Apple simd, no Objective-C, no LGPL N3 types: the portable
+        // base layer shared with the future Vulkan engine (VULKAN-PORT-PLAN.md sections 14 / R1).
+        .target(
+            name: "BorosKitVec",
+            path: "Sources/BorosKitVec",
+            publicHeadersPath: "include"
+        ),
         .target(
             name: "BorosKitCore",
             path: "Sources/BorosKitCore",
@@ -39,7 +47,7 @@ let package = Package(
         ),
         .target(
             name: "BorosKitRender",
-            dependencies: ["BorosKitCore"],
+            dependencies: ["BorosKitCore", "BorosKitVec"],
             path: "Sources/BorosKitRender",
             publicHeadersPath: "include",
             cSettings: [
@@ -125,7 +133,7 @@ let package = Package(
         .target(
             name: "BorosKitMeshRender",
             // Render: BKVolumeCamera / BKRenderResult, so meshes use the volume's camera.
-            dependencies: ["BorosKitMesh", "BorosKitRender", "BorosKitCore"],
+            dependencies: ["BorosKitMesh", "BorosKitRender", "BorosKitCore", "BorosKitVec"],
             path: "Sources/BorosKitMeshRender",
             publicHeadersPath: "include",
             cSettings: [.unsafeFlags(["-fobjc-arc"])],

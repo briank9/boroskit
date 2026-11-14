@@ -15,18 +15,20 @@
 static BKCameraFrame BKTestOrthoCamera(void)
 {
     BKCameraFrame c;
-    c.position = simd_make_double3(0, 0, -100);
-    c.direction = simd_make_double3(0, 0, 1);
-    c.up = simd_make_double3(0, 1, 0);
+    c.position = BKV3d(0, 0, -100);
+    c.direction = BKV3d(0, 0, 1);
+    c.up = BKV3d(0, 1, 0);
     c.parallelScale = 50;
     c.viewAngle = 30;
     c.perspective = false;
     return c;
 }
 
-static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
+// (The cores use BorosKit's neutral vectors, BKVec.h - plain C, no Apple simd - so these tests
+// are written with them too, ready for a portable test runner.)
+static BOOL BKClose3(BKVec3d a, BKVec3d b, double tol)
 {
-    return simd_length(a - b) <= tol;
+    return BKV3dDistance(a, b) <= tol;
 }
 
 @implementation BKCameraMathTests
@@ -44,17 +46,17 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
         double pts[4][2] = {{0, 0}, {200, 100}, {399, 7}, {13.5, 187.25}};
         for (int i = 0; i < 4; i++)
             for (double t = 5; t < 400; t *= 3) {
-                simd_double3 o, d;
+                BKVec3d o, d;
                 BKCameraRayThroughViewPoint(c, 400, 200, pts[i][0], pts[i][1], &o, &d);
                 double x = -1, y = -1, depth = 0;
-                XCTAssertTrue(BKCameraProjectPoint(c, 400, 200, o + d * t, &x, &y, &depth));
+                XCTAssertTrue(BKCameraProjectPoint(c, 400, 200, BKV3dAddScaled(o, d, t), &x, &y, &depth));
                 XCTAssertEqualWithAccuracy(x, pts[i][0], 1e-6);
                 XCTAssertEqualWithAccuracy(y, pts[i][1], 1e-6);
                 XCTAssertGreaterThan(depth, perspective ? 0.0 : -1e9);
             }
         if (perspective) {
             double x = 0, y = 0;
-            XCTAssertFalse(BKCameraProjectPoint(c, 400, 200, c.position - c.direction * 10, &x, &y, NULL));
+            XCTAssertFalse(BKCameraProjectPoint(c, 400, 200, BKV3dAddScaled(c.position, c.direction, -10), &x, &y, NULL));
         }
     }
 }
@@ -62,7 +64,7 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
 - (void)testRightVector
 {
     BKCameraFrame c = BKTestOrthoCamera();
-    XCTAssertTrue(BKClose3(BKCameraRight(c), simd_make_double3(-1, 0, 0), 1e-12));
+    XCTAssertTrue(BKClose3(BKCameraRight(c), BKV3d(-1, 0, 0), 1e-12));
 }
 
 // The view is 100 mm high on 200 points -> 0.5 mm per point; the top-left corner of a
@@ -71,10 +73,10 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
 {
     BKCameraFrame c = BKTestOrthoCamera();
     XCTAssertEqualWithAccuracy(BKCameraMillimetresPerViewPoint(c, 200, 0), 0.5, 1e-12);
-    simd_double3 o, d;
+    BKVec3d o, d;
     BKCameraRayThroughViewPoint(c, 400, 200, 0, 0, &o, &d);
-    XCTAssertTrue(BKClose3(o, simd_make_double3(100, 50, -100), 1e-9));
-    XCTAssertTrue(BKClose3(d, simd_make_double3(0, 0, 1), 1e-12));
+    XCTAssertTrue(BKClose3(o, BKV3d(100, 50, -100), 1e-9));
+    XCTAssertTrue(BKClose3(d, BKV3d(0, 0, 1), 1e-12));
     // Centre of the view: the camera position itself.
     BKCameraRayThroughViewPoint(c, 400, 200, 200, 100, &o, &d);
     XCTAssertTrue(BKClose3(o, c.position, 1e-9));
@@ -87,10 +89,10 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
     BKCameraFrame c = BKTestOrthoCamera();
     c.perspective = true;
     c.viewAngle = 90;
-    simd_double3 o, d;
+    BKVec3d o, d;
     BKCameraRayThroughViewPoint(c, 200, 200, 100, 0, &o, &d);
     XCTAssertTrue(BKClose3(o, c.position, 1e-12));
-    XCTAssertTrue(BKClose3(d, simd_normalize(simd_make_double3(0, 1, 1)), 1e-9));
+    XCTAssertTrue(BKClose3(d, BKV3dNormalize(BKV3d(0, 1, 1)), 1e-9));
     // At 10 mm depth the 200-point view is 20 mm high -> 0.1 mm per point.
     XCTAssertEqualWithAccuracy(BKCameraMillimetresPerViewPoint(c, 200, 10), 0.1, 1e-9);
 }
@@ -99,8 +101,8 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
 - (void)testWorldDelta
 {
     BKCameraFrame c = BKTestOrthoCamera();
-    simd_double3 m = BKCameraWorldDeltaForViewDelta(c, 200, 0, 10, 4);
-    XCTAssertTrue(BKClose3(m, simd_make_double3(-5, -2, 0), 1e-9));
+    BKVec3d m = BKCameraWorldDeltaForViewDelta(c, 200, 0, 10, 4);
+    XCTAssertTrue(BKClose3(m, BKV3d(-5, -2, 0), 1e-9));
 }
 
 // Slab [0, 20] mm in front of the camera: centre plane 10 mm ahead, facing the view,
@@ -109,17 +111,17 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
 - (void)testSlabFromCamera
 {
     BKCameraFrame c = BKTestOrthoCamera();
-    simd_double3 centre, normal;
+    BKVec3d centre, normal;
     double thickness = 0;
     XCTAssertTrue(BKCameraSlab(c, 0, 20, &centre, &normal, &thickness));
-    XCTAssertTrue(BKClose3(centre, simd_make_double3(0, 0, -90), 1e-12));
-    XCTAssertTrue(BKClose3(normal, simd_make_double3(0, 0, 1), 1e-12));
+    XCTAssertTrue(BKClose3(centre, BKV3d(0, 0, -90), 1e-12));
+    XCTAssertTrue(BKClose3(normal, BKV3d(0, 0, 1), 1e-12));
     XCTAssertEqualWithAccuracy(thickness, 20, 1e-12);
     XCTAssertFalse(BKCameraSlab(c, 5, 5, NULL, NULL, NULL));   // empty slab refused
 
-    XCTAssertTrue(BKCameraSlabContainsPoint(c, 0, 20, simd_make_double3(30, -7, -95)));
-    XCTAssertFalse(BKCameraSlabContainsPoint(c, 0, 20, simd_make_double3(0, 0, -101)));
-    XCTAssertFalse(BKCameraSlabContainsPoint(c, 0, 20, simd_make_double3(0, 0, -79)));
+    XCTAssertTrue(BKCameraSlabContainsPoint(c, 0, 20, BKV3d(30, -7, -95)));
+    XCTAssertFalse(BKCameraSlabContainsPoint(c, 0, 20, BKV3d(0, 0, -101)));
+    XCTAssertFalse(BKCameraSlabContainsPoint(c, 0, 20, BKV3d(0, 0, -79)));
 
     float planes[8];
     XCTAssertTrue(BKCameraSlabPlanes(c, 0, 20, planes));
@@ -139,10 +141,10 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
 {
     BKCameraFrame c = BKTestOrthoCamera();
     BKCameraYawPitchAboutPivot(&c, NULL, c.position, 90, 0);
-    simd_double3 centre, normal;
+    BKVec3d centre, normal;
     XCTAssertTrue(BKCameraSlab(c, 0, 10, &centre, &normal, NULL));
     XCTAssertTrue(BKClose3(normal, c.direction, 1e-12));
-    XCTAssertTrue(BKClose3(centre, c.position + c.direction * 5, 1e-9));
+    XCTAssertTrue(BKClose3(centre, BKV3dAddScaled(c.position, c.direction, 5), 1e-9));
 }
 
 // Yaw +90 about the camera position turns the view to the camera's left (+x here, since
@@ -151,15 +153,15 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
 {
     BKCameraFrame c = BKTestOrthoCamera();
     BKCameraYawPitchAboutPivot(&c, NULL, c.position, 90, 0);
-    XCTAssertTrue(BKClose3(c.direction, simd_make_double3(1, 0, 0), 1e-9));
-    XCTAssertTrue(BKClose3(c.up, simd_make_double3(0, 1, 0), 1e-9));
-    XCTAssertTrue(BKClose3(c.position, simd_make_double3(0, 0, -100), 1e-9));   // pivot = position: it stays
+    XCTAssertTrue(BKClose3(c.direction, BKV3d(1, 0, 0), 1e-9));
+    XCTAssertTrue(BKClose3(c.up, BKV3d(0, 1, 0), 1e-9));
+    XCTAssertTrue(BKClose3(c.position, BKV3d(0, 0, -100), 1e-9));   // pivot = position: it stays
 
     c = BKTestOrthoCamera();
     BKCameraYawPitchAboutPivot(&c, NULL, c.position, 0, 90);
-    XCTAssertTrue(BKClose3(c.direction, simd_make_double3(0, 1, 0), 1e-9));
-    XCTAssertTrue(BKClose3(c.up, simd_make_double3(0, 0, -1), 1e-9));
-    XCTAssertEqualWithAccuracy(simd_dot(c.direction, c.up), 0, 1e-12);
+    XCTAssertTrue(BKClose3(c.direction, BKV3d(0, 1, 0), 1e-9));
+    XCTAssertTrue(BKClose3(c.up, BKV3d(0, 0, -1), 1e-9));
+    XCTAssertEqualWithAccuracy(BKV3dDot(c.direction, c.up), 0, 1e-12);
 }
 
 // Turning around a pivot keeps the pivot's place relative to the camera: the pivot stays at
@@ -167,16 +169,16 @@ static BOOL BKClose3(simd_double3 a, simd_double3 b, double tol)
 - (void)testPivotIsKept
 {
     BKCameraFrame c = BKTestOrthoCamera();
-    simd_double3 focal = simd_make_double3(0, 0, 0);
-    simd_double3 pivot = simd_make_double3(10, 5, -100);   // a point on the near plane, off centre
-    double pivotDistance = simd_length(pivot - c.position);
+    BKVec3d focal = BKV3d(0, 0, 0);
+    BKVec3d pivot = BKV3d(10, 5, -100);   // a point on the near plane, off centre
+    double pivotDistance = BKV3dDistance(pivot, c.position);
     BKCameraYawPitchAboutPivot(&c, &focal, pivot, 25, -13);
-    XCTAssertEqualWithAccuracy(simd_length(focal - c.position), 100, 1e-9);
-    XCTAssertEqualWithAccuracy(simd_length(pivot - c.position), pivotDistance, 1e-9);
+    XCTAssertEqualWithAccuracy(BKV3dDistance(focal, c.position), 100, 1e-9);
+    XCTAssertEqualWithAccuracy(BKV3dDistance(pivot, c.position), pivotDistance, 1e-9);
     // The focal point still lies straight ahead of the camera.
-    XCTAssertTrue(BKClose3(simd_normalize(focal - c.position), c.direction, 1e-9));
+    XCTAssertTrue(BKClose3(BKV3dNormalize(BKV3dSub(focal, c.position)), c.direction, 1e-9));
     // The pivot is still on the camera's near plane (depth 0 along the view).
-    XCTAssertEqualWithAccuracy(simd_dot(pivot - c.position, c.direction), 0, 1e-9);
+    XCTAssertEqualWithAccuracy(BKV3dDot(BKV3dSub(pivot, c.position), c.direction), 0, 1e-9);
 }
 
 // GPU: a MIP of a volume whose value grows with z (value = z mm). Without slab the

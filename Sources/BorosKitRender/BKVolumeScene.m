@@ -375,9 +375,9 @@ static BKCameraFrame BKSceneCameraFrame(BKVolumeCamera *camera)
 {
     N3Vector p = camera.position, d = camera.direction, u = camera.viewUp;
     BKCameraFrame f;
-    f.position = simd_make_double3(p.x, p.y, p.z);
-    f.direction = simd_make_double3(d.x, d.y, d.z);
-    f.up = simd_make_double3(u.x, u.y, u.z);
+    f.position = BKV3d(p.x, p.y, p.z);
+    f.direction = BKV3d(d.x, d.y, d.z);
+    f.up = BKV3d(u.x, u.y, u.z);
     f.parallelScale = camera.parallelScale;
     f.viewAngle = camera.viewAngle;
     f.perspective = camera.projection == BKProjectionPerspective;
@@ -389,7 +389,7 @@ static BKCameraFrame BKSceneCameraFrame(BKVolumeCamera *camera)
 - (void)applyViewSlab
 {
     if (!_viewSlabEnabled) return;
-    simd_double3 point, normal;
+    BKVec3d point, normal;   // BorosKit neutral vectors (BKCameraMath is plain C99)
     double thickness;
     if (!BKCameraSlab(BKSceneCameraFrame(_camera), _viewSlabNear, _viewSlabFar, &point, &normal, &thickness)) {
         _renderer.slabEnabled = NO;   // empty slab settings: show nothing special rather than garbage

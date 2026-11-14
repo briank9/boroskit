@@ -4,9 +4,9 @@
 // Original BorosKit code written for this project; contains no third-party code.
 //
 // PORTING NOTES (Vulkan / other backends):
-// - Pure C with <simd/simd.h> vector types only; no Objective-C, Foundation, Metal, VTK or
-//   Horos-derived (LGPL) types such as N3Vector/N3Plane. A Vulkan build uses it unchanged
-//   (simd_double3 / simd_float3 can be swapped for any 3-component struct of the same meaning).
+// - Pure C99 with BorosKit vector types (BKVec.h; moved off Apple simd 2026-11-14); no Objective-C,
+//   Foundation, Metal, VTK, Apple simd or Horos-derived (LGPL) types such as N3Vector/N3Plane.
+//   A Vulkan build uses it unchanged. Apple callers convert with BKVecSimd.h.
 // - Nothing in this file is uploaded to the GPU as a struct. Planes come in and go out as plain
 //   float4 (nx, ny, nz, w), cut where nx*x + ny*y + nz*z + w > 0 - the std430-friendly packing
 //   of BKClipPlanesPack() / BKCameraSlabPlanes() / BKBoxClipPlanes(), so a Vulkan shader reads
@@ -35,7 +35,7 @@
 #ifndef BK_CROP_BOX_CORE_H
 #define BK_CROP_BOX_CORE_H
 
-#include <simd/simd.h>
+#include "BKVec.h"   // BorosKit neutral vectors (no Apple simd: VULKAN-PORT-PLAN rule 1)
 #include <stdbool.h>
 #include <stdint.h>
 #include "BKBoxWidgetMath.h"
@@ -84,11 +84,11 @@ typedef struct {
 
 // What: YES when p is kept by every plane (planes packed as float4: cut where n.p + w > 0).
 // count 0 keeps everything. Why: hides / ignores the parts of the box outside the thick slab.
-bool BKCutPlanesKeepPoint(const float *planes, uint32_t count, simd_double3 p);
+bool BKCutPlanesKeepPoint(const float *planes, uint32_t count, BKVec3d p);
 
 // What: radius in mm that a handle at `point` needs to look `radiusPoints` view points big.
 // Why: handles keep the same size on screen whatever the zoom (like the classic window's).
-double BKCropBoxScreenRadius(BKCameraFrame camera, double viewHeight, simd_double3 point, double radiusPoints);
+double BKCropBoxScreenRadius(BKCameraFrame camera, double viewHeight, BKVec3d point, double radiusPoints);
 
 // What: starts a drag at view point (x, yDown): finds the handle or face under the mouse and the
 // kind of drag, as the classic box widget does:
@@ -112,13 +112,13 @@ bool BKCropBoxContinueDrag(BKOrientedBox *box, const BKCropBoxDrag *drag, BKCame
 // What: the 12 edges of the box, each cut by the planes (parts outside any plane removed), as
 // pairs of points in `out` (room for 24 points). Returns the number of points written (2 per
 // visible segment).
-uint32_t BKCropBoxOutline(BKOrientedBox box, const float *cutPlanes, uint32_t cutPlaneCount, simd_float3 out[24]);
+uint32_t BKCropBoxOutline(BKOrientedBox box, const float *cutPlanes, uint32_t cutPlaneCount, BKVec3f out[24]);
 
 // What: face `face` (0..5) as a convex polygon cut by the planes, corners in order (room for
 // BK_CROP_FACE_MAX_POINTS points). Returns the number of corners (0 when nothing is left, or for a
 // bad face number). Why: the highlighted (yellow) face while it is dragged.
 uint32_t BKCropBoxFacePolygon(BKOrientedBox box, int32_t face, const float *cutPlanes, uint32_t cutPlaneCount,
-                              simd_float3 out[BK_CROP_FACE_MAX_POINTS]);
+                              BKVec3f out[BK_CROP_FACE_MAX_POINTS]);
 
 // What: the box from 6 planes given as origins / normals (3 doubles each, any normal direction),
 // in the order -X, +X, -Y, +Y, -Z, +Z (opposite faces in pairs), multiplied by `scale` (to turn
@@ -133,7 +133,7 @@ bool BKBoxFromSixPlanes(const double origins[18], const double normals[18], doub
 void BKBoxKeptSidePlanes(BKOrientedBox box, double scale, double origins[18], double normals[18]);
 
 // What: the smallest axis-aligned box that holds the (possibly turned) box.
-void BKBoxAxisAlignedBounds(BKOrientedBox box, simd_double3 *boxMin, simd_double3 *boxMax);
+void BKBoxAxisAlignedBounds(BKOrientedBox box, BKVec3d *boxMin, BKVec3d *boxMax);
 
 // What: YES when the two boxes are the same within `tolerance` mm (centre, half sizes, and the
 // face directions, where the axes may be listed in the same order only).

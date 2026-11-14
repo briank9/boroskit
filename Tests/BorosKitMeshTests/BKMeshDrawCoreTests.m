@@ -83,7 +83,7 @@ static BKMeshObject *BKFacingSquare(float h, BOOL withTextureCoordinates)
 
 - (void)testFacingRule
 {
-    simd_float2 a = simd_make_float2(0, 0), b = simd_make_float2(1, 0), c = simd_make_float2(0, 1);
+    BKVec2f a = BKV2f(0, 0), b = BKV2f(1, 0), c = BKV2f(0, 1);   // core types (BKVec.h)
     XCTAssertEqual(BKMeshTriangleIsFrontFacing(a, b, c), 1);    // anticlockwise, y up
     XCTAssertEqual(BKMeshTriangleIsFrontFacing(a, c, b), 0);    // clockwise
     XCTAssertEqual(BKMeshTriangleIsFrontFacing(a, a, b), 0);    // no area
@@ -119,7 +119,7 @@ static BKMeshObject *BKFacingSquare(float h, BOOL withTextureCoordinates)
     // 2 x 2 picture: row 0 (t = 0): black, red; row 1: green, blue.
     const uint8_t px[16] = { 0, 0, 0, 255,   255, 0, 0, 255,   0, 255, 0, 255,   0, 0, 255, 255 };
     // Nearest: the texel the position falls into; row 0 is at small t.
-    simd_float4 c = BKMeshTextureSample(px, 2, 2, 0.75f, 0.25f, 0, BKMeshTextureWrapRepeat);
+    BKVec4f c = BKMeshTextureSample(px, 2, 2, 0.75f, 0.25f, 0, BKMeshTextureWrapRepeat);
     XCTAssertEqualWithAccuracy(c.x, 1, 1e-6);   // red
     c = BKMeshTextureSample(px, 2, 2, 0.25f, 0.75f, 0, BKMeshTextureWrapRepeat);
     XCTAssertEqualWithAccuracy(c.y, 1, 1e-6);   // green
@@ -138,12 +138,12 @@ static BKMeshObject *BKFacingSquare(float h, BOOL withTextureCoordinates)
     c = BKMeshTextureSample(px, 2, 2, 0.0f, 0.25f, 1, BKMeshTextureWrapRepeat);
     XCTAssertEqualWithAccuracy(c.x, 0.5, 1e-6);
     // Modulate: clamped lit colour times texel, premultiplied.
-    simd_float4 m = BKMeshTextureModulate(simd_make_float4(2.0f, 0.5f, 1.0f, 0.5f), simd_make_float4(0.5f, 1.0f, 1.0f, 0.5f));
+    BKVec4f m = BKMeshTextureModulate(BKV4f(2.0f, 0.5f, 1.0f, 0.5f), BKV4f(0.5f, 1.0f, 1.0f, 0.5f));
     XCTAssertEqualWithAccuracy(m.w, 0.25, 1e-6);
     XCTAssertEqualWithAccuracy(m.x, 0.5 * 0.25, 1e-6);
     XCTAssertEqualWithAccuracy(m.y, 0.5 * 0.25, 1e-6);
     // Point square.
-    simd_float2 lo, hi;
+    BKVec2f lo, hi;
     BKMeshPointSquare(10, 20, 4, &lo, &hi);
     XCTAssertTrue(lo.x == 8 && lo.y == 18 && hi.x == 12 && hi.y == 22);
 }
@@ -228,7 +228,7 @@ static BKMeshObject *BKFacingSquare(float h, BOOL withTextureCoordinates)
             // Screen positions of the first triangle (x right = +x mm, y up = +z mm; the turn
             // mirrors x on screen).
             float sx = turned ? -1 : 1;
-            simd_float2 a = simd_make_float2(-10 * sx, -10), b = simd_make_float2(10 * sx, -10), c = simd_make_float2(10 * sx, 10);
+            BKVec2f a = BKV2f(-10 * sx, -10), b = BKV2f(10 * sx, -10), c = BKV2f(10 * sx, 10);
             int32_t cullModes[3] = { BKMeshCullNone, BKMeshCullBack, BKMeshCullFront };
             for (int m = 0; m < 3; m++) {
                 square.faceCulling = (BKMeshFaceCulling)cullModes[m];
@@ -262,9 +262,10 @@ static BKMeshObject *BKFacingSquare(float h, BOOL withTextureCoordinates)
     for (NSUInteger y = 0; y < 64; y++)
         for (NSUInteger x = 0; x < 64; x++) {
             float s = (x + 0.5f) / 64.0f, t = 1.0f - (y + 0.5f) / 64.0f;
-            simd_float4 texel = BKMeshTextureSample(texture.rgba8Data.bytes, (uint32_t)texture.width, (uint32_t)texture.height, s, t,
+            BKVec4f texel = BKMeshTextureSample(texture.rgba8Data.bytes, (uint32_t)texture.width, (uint32_t)texture.height, s, t,
                                                     texture.interpolate, texture.repeat ? BKMeshTextureWrapRepeat : BKMeshTextureWrapClampToEdge);
-            simd_float4 expect = BKMeshTextureModulate(simd_make_float4(1, 1, 1, 1), texel) * 255.0f;
+            BKVec4f e = BKMeshTextureModulate(BKV4f(1, 1, 1, 1), texel);
+            float expect[4] = { e.x * 255.0f, e.y * 255.0f, e.z * 255.0f, e.w * 255.0f };
             uint8_t px[4];
             [res getRGBA8:px atX:x y:y];
             for (int k = 0; k < 4; k++) worst = MAX(worst, abs((int)px[k] - (int)lroundf(expect[k])));
@@ -344,7 +345,7 @@ static BKMeshObject *BKFacingSquare(float h, BOOL withTextureCoordinates)
         NSUInteger expectedCount = 0;
         float centres[2][2] = { { 60.25f, 29.75f }, { 29.75f, 60.25f } };
         for (int k = 0; k < 2; k++) {
-            simd_float2 lo, hi;
+            BKVec2f lo, hi;
             BKMeshPointSquare(centres[k][0], centres[k][1], size, &lo, &hi);
             for (int y = 0; y < 100; y++)
                 for (int x = 0; x < 100; x++) {

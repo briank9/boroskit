@@ -7,7 +7,8 @@
 //   picking, drags, clipping the drawing by the slab, saving / restoring as 6 planes). This class
 //   only keeps the state and turns the C results into drawable objects. A Vulkan backend reuses
 //   the C files unchanged and replaces BKLineObject / BKMeshObject by its own drawables.
-// - simd types only (no N3Vector / N3Plane). Planes in and out are simd_float4 in the GPU
+// - Apple glue: simd types here (no N3Vector / N3Plane); the plain-C core (BKCropBoxCore) uses
+//   BorosKit neutral vectors (BKVec.h), converted with BKVecSimd.h. Planes in and out are simd_float4 in the GPU
 //   packing (nx, ny, nz, w; cut where n.x + w > 0), std430 friendly.
 // - No AppKit / UIKit / VTK: the app hands in the camera (BKCameraFrame, mm), the view size in
 //   points and the mouse positions; it gets back "did the box change" and the 6 clip planes.

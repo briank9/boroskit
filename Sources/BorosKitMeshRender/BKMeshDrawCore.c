@@ -5,14 +5,19 @@
 #include "BKMeshDrawCore.h"
 #include <math.h>
 
-int32_t BKMeshTriangleIsFrontFacing(simd_float2 a, simd_float2 b, simd_float2 c)
+// Small RGBA helpers (component-wise, same order of operations as before).
+static BKVec4f BKMeshV4Scale(BKVec4f a, float s) { return BKV4f(a.x * s, a.y * s, a.z * s, a.w * s); }
+static BKVec4f BKMeshV4Add(BKVec4f a, BKVec4f b) { return BKV4f(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w); }
+static float BKMeshClamp01(float v) { return fminf(fmaxf(v, 0.0f), 1.0f); }
+
+int32_t BKMeshTriangleIsFrontFacing(BKVec2f a, BKVec2f b, BKVec2f c)
 {
     // Twice the signed area (cross product of two edges): > 0 = anticlockwise with y up.
     float area2 = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
     return area2 > 0.0f ? 1 : 0;
 }
 
-int32_t BKMeshTriangleIsCulled(int32_t cullMode, simd_float2 a, simd_float2 b, simd_float2 c)
+int32_t BKMeshTriangleIsCulled(int32_t cullMode, BKVec2f a, BKVec2f b, BKVec2f c)
 {
     if (cullMode == BKMeshCullNone) return 0;
     float area2 = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
@@ -49,16 +54,16 @@ static int32_t BKMeshWrapIndex(int32_t i, uint32_t size, int32_t wrap)
 }
 
 // What: one texel as RGBA 0..1.
-static simd_float4 BKMeshTexel(const uint8_t *rgba, uint32_t width, int32_t x, int32_t y)
+static BKVec4f BKMeshTexel(const uint8_t *rgba, uint32_t width, int32_t x, int32_t y)
 {
     const uint8_t *p = rgba + 4 * ((size_t)y * width + (size_t)x);
-    return simd_make_float4(p[0], p[1], p[2], p[3]) / 255.0f;
+    return BKV4f(p[0] / 255.0f, p[1] / 255.0f, p[2] / 255.0f, p[3] / 255.0f);
 }
 
-simd_float4 BKMeshTextureSample(const uint8_t *rgba, uint32_t width, uint32_t height,
+BKVec4f BKMeshTextureSample(const uint8_t *rgba, uint32_t width, uint32_t height,
                                 float s, float t, int32_t linear, int32_t wrap)
 {
-    if (rgba == NULL || width == 0 || height == 0) return simd_make_float4(0, 0, 0, 0);
+    if (rgba == NULL || width == 0 || height == 0) return BKV4f(0, 0, 0, 0);
     if (wrap != BKMeshTextureWrapRepeat) {
         // Clamp to the edge: positions outside 0..1 act like the nearest edge position.
         s = fminf(fmaxf(s, 0.0f), 1.0f);
@@ -77,20 +82,21 @@ simd_float4 BKMeshTextureSample(const uint8_t *rgba, uint32_t width, uint32_t he
     float ax = u - fx, ay = v - fy;
     int32_t x0 = BKMeshWrapIndex((int32_t)fx, width, wrap), x1 = BKMeshWrapIndex((int32_t)fx + 1, width, wrap);
     int32_t y0 = BKMeshWrapIndex((int32_t)fy, height, wrap), y1 = BKMeshWrapIndex((int32_t)fy + 1, height, wrap);
-    simd_float4 top = BKMeshTexel(rgba, width, x0, y0) * (1.0f - ax) + BKMeshTexel(rgba, width, x1, y0) * ax;
-    simd_float4 bottom = BKMeshTexel(rgba, width, x0, y1) * (1.0f - ax) + BKMeshTexel(rgba, width, x1, y1) * ax;
-    return top * (1.0f - ay) + bottom * ay;
+    BKVec4f top = BKMeshV4Add(BKMeshV4Scale(BKMeshTexel(rgba, width, x0, y0), 1.0f - ax), BKMeshV4Scale(BKMeshTexel(rgba, width, x1, y0), ax));
+    BKVec4f bottom = BKMeshV4Add(BKMeshV4Scale(BKMeshTexel(rgba, width, x0, y1), 1.0f - ax), BKMeshV4Scale(BKMeshTexel(rgba, width, x1, y1), ax));
+    return BKMeshV4Add(BKMeshV4Scale(top, 1.0f - ay), BKMeshV4Scale(bottom, ay));
 }
 
-simd_float4 BKMeshTextureModulate(simd_float4 litColor, simd_float4 texel)
+BKVec4f BKMeshTextureModulate(BKVec4f litColor, BKVec4f texel)
 {
-    simd_float4 c = simd_clamp(litColor, simd_make_float4(0, 0, 0, 0), simd_make_float4(1, 1, 1, 1)) * texel;
-    return simd_make_float4(c.x * c.w, c.y * c.w, c.z * c.w, c.w);
+    BKVec4f c = BKV4f(BKMeshClamp01(litColor.x) * texel.x, BKMeshClamp01(litColor.y) * texel.y,
+                      BKMeshClamp01(litColor.z) * texel.z, BKMeshClamp01(litColor.w) * texel.w);
+    return BKV4f(c.x * c.w, c.y * c.w, c.z * c.w, c.w);
 }
 
-void BKMeshPointSquare(float cx, float cy, float pointSize, simd_float2 *min, simd_float2 *max)
+void BKMeshPointSquare(float cx, float cy, float pointSize, BKVec2f *min, BKVec2f *max)
 {
     float h = 0.5f * fmaxf(pointSize, 0.0f);
-    if (min) *min = simd_make_float2(cx - h, cy - h);
-    if (max) *max = simd_make_float2(cx + h, cy + h);
+    if (min) *min = BKV2f(cx - h, cy - h);
+    if (max) *max = BKV2f(cx + h, cy + h);
 }

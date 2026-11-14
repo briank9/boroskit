@@ -641,6 +641,9 @@ Plain-C/C++ cores (BKCameraMath, BKBoxWidgetMath, BKCropBoxCore, BKMeshDrawCore,
 must not use Apple `<simd/simd.h>`: it does not exist on Windows/Linux. An older licence note said
 "use simd instead of the LGPL N3 types"; that was about leaving N3 behind, not a portability rule.
 Cores use BorosKit's own neutral vector types (to be added: BKVec3d / BKVec3f / BKMat4, step R1);
-simd stays only in Objective-C / Metal glue. Today the four cores above still use simd (debt, listed
-in VULKAN-PREP-AUDIT-2026-11-14.md step 1); BKCameraProjectPoint (added 2026-11-14) joined them by
-mistake and moves with them.
+simd stays only in Objective-C / Metal glue. DONE 2026-11-14: new pure-C target BorosKitVec (BKVec.h: BKVec2f/3f/3d/4f + static inline maths;
+its own target because a C file importing BorosKitCore pulls in Objective-C headers). BKCameraMath,
+BKBoxWidgetMath, BKCropBoxCore and BKMeshDrawCore (incl. BKCameraProjectPoint) now use it; Apple glue
+converts with BorosKitRender/include/BKVecSimd.h. Their tests use BKVec too. Check: all five cores
+(+ BKRenderCore) compile with `clang -std=c99 -pedantic -Werror -fno-modules` and no Apple headers.
+Full suite 244 tests passed, golden references unchanged. Still open from R1: BKPlane / BKMat4d.

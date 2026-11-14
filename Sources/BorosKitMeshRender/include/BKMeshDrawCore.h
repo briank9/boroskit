@@ -3,7 +3,7 @@
 // Original BorosKit code written for this project; contains no third-party code.
 //
 // PORTING NOTES (Vulkan / other backends):
-// - Pure C with <simd/simd.h> vector types and fixed-size integers only: no Objective-C,
+// - Pure C99 with BorosKit vector types (BKVec.h; moved off Apple simd 2026-11-14) and fixed-size integers only: no Objective-C,
 //   Foundation, Metal, VTK or Horos-derived (LGPL) types. A Vulkan build uses it unchanged.
 // - These functions are the CPU REFERENCE of what the GPU does (the Metal shaders in
 //   BKMeshShaderSource.mm follow them line for line; a GLSL port must too). The tests compare
@@ -31,7 +31,7 @@
 #ifndef BK_MESH_DRAW_CORE_H
 #define BK_MESH_DRAW_CORE_H
 
-#include <simd/simd.h>
+#include "BKVec.h"   // BorosKit neutral vectors (no Apple simd: VULKAN-PORT-PLAN rule 1)
 #include <stdint.h>
 #include <stddef.h>
 
@@ -49,12 +49,12 @@ enum {
 // What: 1 when the triangle a, b, c (screen positions, x right, y UP, any common scale - e.g.
 // the normalised -1..1 drawing-area coordinates) runs anticlockwise, i.e. shows its front side;
 // 0 when it runs clockwise (back side) or has no area.
-int32_t BKMeshTriangleIsFrontFacing(simd_float2 a, simd_float2 b, simd_float2 c);
+int32_t BKMeshTriangleIsFrontFacing(BKVec2f a, BKVec2f b, BKVec2f c);
 
 // What: 1 when a triangle with these screen positions is NOT drawn under `cullMode`.
 // Triangles without area are never drawn by GPUs anyway; here they count as culled only when
 // some culling is on (with culling off the caller decides).
-int32_t BKMeshTriangleIsCulled(int32_t cullMode, simd_float2 a, simd_float2 b, simd_float2 c);
+int32_t BKMeshTriangleIsCulled(int32_t cullMode, BKVec2f a, BKVec2f b, BKVec2f c);
 
 // What: converts `count` texels with 1..4 unsigned 8-bit components each into RGBA8, with the
 // OpenGL / VTK meaning of the components: 1 = luminance (L, L, L, 255), 2 = luminance + alpha
@@ -71,18 +71,18 @@ enum {
 // What: the texel colour (RGBA, 0..1) at texture position (s, t) of an RGBA8 picture of
 // width x height texels (row 0 = t = 0). `linear` 1 = blend the 4 nearest texels (VTK
 // InterpolateOn), 0 = nearest texel. Returns (0,0,0,0) for an empty picture.
-simd_float4 BKMeshTextureSample(const uint8_t *rgba, uint32_t width, uint32_t height,
+BKVec4f BKMeshTextureSample(const uint8_t *rgba, uint32_t width, uint32_t height,
                                 float s, float t, int32_t linear, int32_t wrap);
 
 // What: the final premultiplied colour of a textured surface point: `litColor` is the lit
 // surface colour (rgb) with its opacity (a), not premultiplied; it is clamped to 0..1,
 // multiplied by `texel`, then premultiplied ("over" blending).
-simd_float4 BKMeshTextureModulate(simd_float4 litColor, simd_float4 texel);
+BKVec4f BKMeshTextureModulate(BKVec4f litColor, BKVec4f texel);
 
 // What: the pixel rectangle a point of `pointSize` pixels covers when its centre projects to
 // pixel position (cx, cy) (any origin; the square is centred there): min and max corners.
 // Pixels whose CENTRE lies inside [min, max) are covered (the GPU's fill rule).
-void BKMeshPointSquare(float cx, float cy, float pointSize, simd_float2 *min, simd_float2 *max);
+void BKMeshPointSquare(float cx, float cy, float pointSize, BKVec2f *min, BKVec2f *max);
 
 #ifdef __cplusplus
 }
