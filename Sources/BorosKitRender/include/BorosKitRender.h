@@ -18,3 +18,4 @@
 #import "BKCropBoxCore.h"
 #import "BKGPUChoiceCore.h"   // plain-C choice of the graphics card (shared with Vulkan)
 #import "BKMetalDevice.h"     // the preferred Metal device (Settings "Graphics card")
+#import "BKOrientationCubeCore.h" // plain-C orientation cube geometry, letters, corner camera (2026-11-14)

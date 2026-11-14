@@ -3,5 +3,7 @@
 #import "BKViewTransform.h"
 #import "BKImageLayerRenderer.h"
 #import "BKOverlay.h"
+#import "BKTextLayoutCore.h"   // 2026-11-14: plain-C placement of view-pinned labels
+#import "BKTextOverlay.h"      // 2026-11-14: view-pinned text labels (WL/WW, orientation letters ...)
 #import "BKImageView.h"
 #import "BKVolumeView.h"
