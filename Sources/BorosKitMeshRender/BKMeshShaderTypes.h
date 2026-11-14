@@ -24,6 +24,12 @@
 //    flip y (negative viewport height, core since Vulkan 1.1) and keep the depth maths.
 //  - The fragment shader uses screen-space derivatives (dfdx/dfdy -> GLSL dFdx/dFdy) for
 //    flat normals when a mesh has none: core in Vulkan.
+//  - 2026-11-14: textured meshes read a second vertex stream (binding 2 in Metal): texture
+//    coordinates as tightly packed float x2 (8-byte stride; Vulkan: R32G32_SFLOAT, location 3).
+//    The texture is RGBA8 at texture slot 0 with its sampler at slot 0 (linear or nearest,
+//    repeat or clamp-to-edge, no mipmaps). Rules: BKMeshDrawCore.h.
+//  - 2026-11-14: points are expanded to two triangles per point in the vertex shader (6
+//    vertices, vertex index / 6 = point), from the same packed float x3 array as lines.
 //  - Two colour targets (RGBA8 colour + R32_SFLOAT ray distance) with premultiplied
 //    "over" blending on the first only, plus a D32_SFLOAT depth buffer.
 // ---------------------------------------------------------------------------------------
@@ -59,7 +65,7 @@ typedef simd_float4x4 bk_mesh_float4x4;
     int32_t lit;                   /* 0 = flat colour, no lighting (labels, lines) */ \
     float viewportWidth;           /* size of the drawing area in pixels (lines are sized in pixels) */ \
     float viewportHeight; \
-    float lineHalfWidth;           /* lines: half the line width in pixels */ \
+    float lineHalfWidth;           /* lines: half the line width in pixels; points: half the point size */ \
     float paddingForAlignment;
 
 typedef struct BKMeshUniforms {
