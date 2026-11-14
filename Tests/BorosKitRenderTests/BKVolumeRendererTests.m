@@ -390,4 +390,47 @@ static void BKBoxPlanes(double cz, double hx, double hy, double hz, double angle
     [tf getRGBA:rgba atValue:-128];  XCTAssertEqualWithAccuracy(rgba[3], 0.0f, 1e-4);  // x = 64, opacity 0
 }
 
+// What: a volume uploaded from plain floats + a plain column-major matrix
+// (-initWithFloatVoxels:...) renders exactly the same bytes as the same volume uploaded
+// from CPRVolumeData. Why: new code (golden tests, Vulkan prep) uses the plain path and
+// must not differ from what the app sees through the CPRVolumeData path.
+- (void)testPlainFloatUploadMatchesVolumeDataUpload
+{
+    if (![self requireGPU]) return;
+    CPRVolumeData *data = [self testVolumeWithSpacingX:0.5 y:0.75 z:1.25];
+    CPRVolumeDataInlineBuffer inlineBuffer;
+    XCTAssertTrue([data aquireInlineBuffer:&inlineBuffer]);
+    const float *voxels = CPRVolumeDataFloatBytes(&inlineBuffer);
+    // patient -> voxel for origin 0 and spacing (0.5, 0.75, 1.25): voxel = p / spacing.
+    double m[16] = {1 / 0.5, 0, 0, 0,  0, 1 / 0.75, 0, 0,  0, 0, 1 / 1.25, 0,  0, 0, 0, 1};
+    NSError *error = nil;
+    BKVolumeTexture *plain = [[BKVolumeTexture alloc] initWithFloatVoxels:voxels width:kSize height:kSize depth:kSize
+                                                           patientToVoxel:m minPixelSpacing:0.5 outOfBoundsValue:-1000
+                                                                   device:_renderer.device error:&error];
+    [data releaseInlineBuffer:&inlineBuffer];
+    XCTAssertNotNil(plain, @"%@", error);
+    BKVolumeTexture *viaData = [[BKVolumeTexture alloc] initWithVolumeData:data device:_renderer.device error:&error];
+    XCTAssertNotNil(viaData, @"%@", error);
+    XCTAssertEqual(plain.valueScale, viaData.valueScale);
+    XCTAssertEqual(plain.valueOffset, viaData.valueOffset);
+    XCTAssertEqual(plain.minPixelSpacing, viaData.minPixelSpacing);
+    XCTAssertEqual(plain.outOfBoundsValue, viaData.outOfBoundsValue);
+    XCTAssertEqual(plain.isLossless, viaData.isLossless);
+
+    _renderer.cameraPosition = N3VectorMake(15.75, 23.6, 39.4);
+    _renderer.viewWidth = 32; _renderer.viewHeight = 48;
+    NSData *images[2][2];
+    BKVolumeTexture *textures[2] = {plain, viaData};
+    for (int t = 0; t < 2; t++) {
+        _renderer.volumeTexture = textures[t];
+        _renderer.mode = BKRenderModeMIP;
+        BKRenderResult *r = [self render];
+        images[t][0] = r.floatData;
+        _renderer.mode = BKRenderModeComposite;
+        images[t][1] = [self render].rgba8Data;
+    }
+    XCTAssertEqualObjects(images[0][0], images[1][0], @"MIP values differ between the two upload paths");
+    XCTAssertEqualObjects(images[0][1], images[1][1], @"3D colours differ between the two upload paths");
+}
+
 @end

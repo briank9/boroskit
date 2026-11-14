@@ -34,9 +34,7 @@ extern "C" NSString *BKVolumeShaderSource(void)
         const char *prelude = R"METAL(
 #include <metal_stdlib>
 using namespace metal;
-typedef float3   bk_float3;
 typedef float4   bk_float4;
-typedef float3x3 bk_float3x3;
 )METAL";
 
         const char *params = "struct BKRenderParams { " BK_STRINGIFY(BK_RENDER_PARAMS_FIELDS) " };\n"
@@ -53,13 +51,59 @@ constant int BKModeMinIP     = 2;
 constant int BKModeAverage   = 3;
 constant int BKProjPerspective = 1;
 
+// The parameter block stores every 3D quantity in a float4 (std430-friendly, see
+// BKShaderTypes.h); these two helpers rebuild the 3x3 matrix and read .xyz in one place.
+static float3x3 bk_patient_to_voxel(constant BKRenderParams &p)
+{
+    return float3x3(p.patientToVoxelColumns[0].xyz, p.patientToVoxelColumns[1].xyz, p.patientToVoxelColumns[2].xyz);
+}
+
 // Reads the real (CT) value at a position given in voxel index coordinates, with
 // hardware trilinear interpolation. Voxel centres sit at whole numbers, texel centres
 // at (i + 0.5) / size, hence the +0.5.
+// PORTING NOTE: linear filtering of R16_UNORM 3D images is an OPTIONAL Vulkan format
+// feature (VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT). Where it is missing, set
+// p.manualFiltering = 1: the 8 neighbouring voxels are read exactly and blended in 32-bit
+// float. Same clamp-to-edge rule as the hardware path. (The hardware filter on some GPUs
+// uses fewer bits for the blend weights, so the two paths can differ very slightly.)
 static float bk_sample(texture3d<float> volume, sampler s, float3 voxel, constant BKRenderParams &p)
 {
-    float3 tc = (voxel + 0.5f) / p.volumeSize;
+    if (p.manualFiltering != 0) {
+        float3 last = p.volumeSize.xyz - 1.0f;
+        float3 v = clamp(voxel, float3(0.0f), last);
+        float3 base = floor(v);
+        float3 f = v - base;
+        uint3 a = uint3(base);
+        uint3 b = uint3(min(base + 1.0f, last));
+        float c000 = volume.read(uint3(a.x, a.y, a.z)).r, c100 = volume.read(uint3(b.x, a.y, a.z)).r;
+        float c010 = volume.read(uint3(a.x, b.y, a.z)).r, c110 = volume.read(uint3(b.x, b.y, a.z)).r;
+        float c001 = volume.read(uint3(a.x, a.y, b.z)).r, c101 = volume.read(uint3(b.x, a.y, b.z)).r;
+        float c011 = volume.read(uint3(a.x, b.y, b.z)).r, c111 = volume.read(uint3(b.x, b.y, b.z)).r;
+        float c0 = mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y);
+        float c1 = mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y);
+        return mix(c0, c1, f.z) * p.valueScale + p.valueOffset;
+    }
+    float3 tc = (voxel + 0.5f) / p.volumeSize.xyz;
     return volume.sample(s, tc).r * p.valueScale + p.valueOffset;
+}
+
+// The colour/opacity of a value from the 4096-entry table, blended between the two nearest
+// entries. PORTING NOTE: linear filtering of 32-bit float textures is optional in Vulkan
+// (and on some iPad GPUs: MTLDevice.supports32BitFloatFiltering); p.manualFiltering = 1
+// does the blend by hand with two exact reads, same position rule as the hardware:
+// texel position = x * entries - 0.5, clamped to the first/last entry.
+static float4 bk_transfer(texture2d<float> transferFn, sampler s, float x, constant BKRenderParams &p)
+{
+    if (p.manualFiltering != 0) {
+        float entries = (float)BKTransferFunctionEntries;
+        float t = clamp(x * entries - 0.5f, 0.0f, entries - 1.0f);
+        float i0 = floor(t);
+        float i1 = min(i0 + 1.0f, entries - 1.0f);
+        float4 c0 = transferFn.read(uint2((uint)i0, 0));
+        float4 c1 = transferFn.read(uint2((uint)i1, 0));
+        return mix(c0, c1, t - i0);
+    }
+    return transferFn.sample(s, float2(x, 0.5f));
 }
 
 // Surface normal for lighting: central differences of the value in voxel space,
@@ -71,13 +115,23 @@ static float3 bk_gradient(texture3d<float> volume, sampler s, float3 v, constant
     g.x = bk_sample(volume, s, v + float3(1,0,0), p) - bk_sample(volume, s, v - float3(1,0,0), p);
     g.y = bk_sample(volume, s, v + float3(0,1,0), p) - bk_sample(volume, s, v - float3(0,1,0), p);
     g.z = bk_sample(volume, s, v + float3(0,0,1), p) - bk_sample(volume, s, v - float3(0,0,1), p);
-    return transpose(p.patientToVoxel) * (0.5f * g);
+    return transpose(bk_patient_to_voxel(p)) * (0.5f * g);
 }
 
-// Packs a 0..1 colour into 8-bit RGBA.
-static uchar4 bk_pack(float4 c)
+// Packs a 0..1 colour into 8-bit RGBA inside one 32-bit word (r in the lowest byte, so
+// the bytes in memory are r, g, b, a). Why a uint and not uchar4: GPU buffers here hold
+// only 32-bit words, so a Vulkan device needs no optional 8-bit storage feature.
+static uint bk_pack(float4 c)
 {
-    return uchar4(clamp(c, 0.0f, 1.0f) * 255.0f + 0.5f);
+    uint4 q = uint4(clamp(c, 0.0f, 1.0f) * 255.0f + 0.5f);
+    return q.x | (q.y << 8) | (q.z << 16) | (q.w << 24);
+}
+
+// Per-brick value range, packed as (lowest | highest << 16) in one 32-bit word (raw
+// 16-bit stored steps). Same reason: only 32-bit words in GPU buffers.
+static uint2 bk_unpack_range(uint packed)
+{
+    return uint2(packed & 0xffffu, packed >> 16);
 }
 
 // ---- Empty-space skipping helpers -------------------------------------------------
@@ -90,14 +144,14 @@ static uchar4 bk_pack(float4 c)
 // the very edge of the volume use the edge brick).
 static int3 bk_brick_of(float3 v, constant BKRenderParams &p)
 {
-    int3 last = int3(p.brickGrid) - 1;
+    int3 last = int3(p.brickGrid.xyz) - 1;
     return clamp(int3(floor(v * (1.0f / (float)BKBrickSize))), int3(0), last);
 }
 
 // Position of brick b in the flat per-brick lists (x fastest, then y, then z).
 static uint bk_brick_index(int3 b, constant BKRenderParams &p)
 {
-    uint3 g = uint3(p.brickGrid);
+    uint3 g = uint3(p.brickGrid.xyz);
     return ((uint)b.z * g.y + (uint)b.y) * g.x + (uint)b.x;
 }
 
@@ -140,7 +194,7 @@ struct BKTraceResult {
 // read when p.skipEmptySpace is 1).
 static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transferFn,
                               constant BKRenderParams &p, uint2 gid,
-                              device const uchar *brickEmpty, device const ushort2 *brickRange)
+                              device const uint *brickEmpty, device const uint *brickRange)
 {
     constexpr sampler linearSampler(coord::normalized, filter::linear, address::clamp_to_edge);
     constexpr sampler tfSampler(coord::normalized, filter::linear, address::clamp_to_edge);
@@ -152,28 +206,30 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
     float3 origin, dir;
     float tLo, tHi;
     if (p.projection == BKProjPerspective) {
-        origin = p.cameraPosition;
-        dir = normalize(p.cameraForward + p.cameraRight * (u * p.viewWidth) + p.cameraUp * (w * p.viewHeight));
+        origin = p.cameraPosition.xyz;
+        dir = normalize(p.cameraForward.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight));
         tLo = 0.0f; tHi = INFINITY;
     } else {
-        origin = p.cameraPosition + p.cameraRight * (u * p.viewWidth) + p.cameraUp * (w * p.viewHeight);
-        dir = p.cameraForward;
+        origin = p.cameraPosition.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight);
+        dir = p.cameraForward.xyz;
         tLo = -INFINITY; tHi = INFINITY;
     }
 
     // Ray in voxel space.
-    float3 ov = p.patientToVoxel * origin + p.patientToVoxelTranslation;
-    float3 dv = p.patientToVoxel * dir;
+    float3x3 patientToVoxel = bk_patient_to_voxel(p);
+    float3 ov = patientToVoxel * origin + p.patientToVoxelTranslation.xyz;
+    float3 dv = patientToVoxel * dir;
 
     // Slab-test against the box (standard ray/box intersection).
     float3 inv = 1.0f / dv;
-    float3 t0 = (p.boxMin - ov) * inv;
-    float3 t1 = (p.boxMax - ov) * inv;
+    float3 boxMin = p.boxMin.xyz, boxMax = p.boxMax.xyz;
+    float3 t0 = (boxMin - ov) * inv;
+    float3 t1 = (boxMax - ov) * inv;
     float3 tSmall = min(t0, t1), tBig = max(t0, t1);
     // Axis-parallel rays: inside the box on that axis -> no constraint, outside -> miss.
     for (int k = 0; k < 3; k++) {
         if (dv[k] == 0.0f) {
-            bool inside = ov[k] >= p.boxMin[k] && ov[k] <= p.boxMax[k];
+            bool inside = ov[k] >= boxMin[k] && ov[k] <= boxMax[k];
             tSmall[k] = inside ? -INFINITY : INFINITY;
             tBig[k]   = inside ?  INFINITY : -INFINITY;
         }
@@ -184,8 +240,8 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
     bool singlePlane = false;
     if (p.useSlab != 0) {
         // Signed distance from the slab's centre plane along the ray: s(t) = s0 + t*dn.
-        float s0 = dot(origin - p.slabPoint, p.slabNormal);
-        float dn = dot(dir, p.slabNormal);
+        float s0 = dot(origin - p.slabPoint.xyz, p.slabNormal.xyz);
+        float dn = dot(dir, p.slabNormal.xyz);
         float halfThick = 0.5f * p.slabThickness;
         if (p.slabThickness <= 0.0f) {
             // Thin slice: exactly one sample where the ray crosses the plane.
@@ -203,8 +259,8 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
     if (p.useClip != 0) {
         // Clipping ("scissors") plane: keep only points with dot(x - clipPoint, n) <= 0,
         // i.e. cut away the side the normal points to. s(t) = c0 + t*cn along the ray.
-        float c0 = dot(origin - p.clipPoint, p.clipNormal);
-        float cn = dot(dir, p.clipNormal);
+        float c0 = dot(origin - p.clipPoint.xyz, p.clipNormal.xyz);
+        float cn = dot(dir, p.clipNormal.xyz);
         if (fabs(cn) < 1e-6f) {
             if (c0 > 0.0f) tHi = -INFINITY;               // ray runs parallel, on the cut side
         } else if (cn > 0.0f) {
@@ -279,7 +335,7 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
                 }
             }
             float value = bk_sample(volume, linearSampler, v, p);
-            float4 c = transferFn.sample(tfSampler, float2((value - p.tfMin) / tfRange, 0.5f));
+            float4 c = bk_transfer(transferFn, tfSampler, (value - p.tfMin) / tfRange, p);
             if (c.a <= 0.0f) continue;
             float a = 1.0f - pow(1.0f - min(c.a, 0.9999f), exponent);
             float3 rgb = c.rgb;
@@ -318,7 +374,7 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
                 brickEnd = bk_first_sample_after_brick(b, ov, dv, tLo, step, i, n);
                 // Stored range -> real values. One 16-bit step of margin on each side so
                 // that GPU rounding of an interpolated sample can never step outside it.
-                ushort2 raw = brickRange[bk_brick_index(b, p)];
+                uint2 raw = bk_unpack_range(brickRange[bk_brick_index(b, p)]);
                 brickLow  = (max((float)raw.x - 1.0f, 0.0f) / 65535.0f) * p.valueScale + p.valueOffset;
                 brickHigh = (min((float)raw.y + 1.0f, 65535.0f) / 65535.0f) * p.valueScale + p.valueOffset;
             }
@@ -346,10 +402,10 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
 kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
                        texture2d<float> transferFn   [[texture(1)]],
                        constant BKRenderParams &p    [[buffer(0)]],
-                       device uchar4 *colorOut       [[buffer(1)]],
+                       device uint   *colorOut       [[buffer(1)]],   /* RGBA8 packed in one word */
                        device float  *valueOut       [[buffer(2)]],
-                       device const uchar *brickEmpty   [[buffer(3)]],
-                       device const ushort2 *brickRange [[buffer(4)]],
+                       device const uint *brickEmpty    [[buffer(3)]],   /* 1 word per brick */
+                       device const uint *brickRange    [[buffer(4)]],   /* lowest | highest << 16 */
                        uint2 gid                     [[thread_position_in_grid]])
 {
     if (gid.x >= p.width || gid.y >= p.height) return;
@@ -367,8 +423,8 @@ kernel void bk_raycast_texture(texture3d<float> volume                      [[te
                                texture2d<float, access::write> target       [[texture(2)]],
                                constant BKRenderParams &p                   [[buffer(0)]],
                                constant float4 &background                  [[buffer(1)]],
-                               device const uchar *brickEmpty               [[buffer(2)]],
-                               device const ushort2 *brickRange             [[buffer(3)]],
+                               device const uint *brickEmpty                [[buffer(2)]],
+                               device const uint *brickRange                [[buffer(3)]],
                                uint2 gid                                    [[thread_position_in_grid]])
 {
     if (gid.x >= p.width || gid.y >= p.height) return;
@@ -396,10 +452,11 @@ kernel void bk_upscale(texture2d<float> source                 [[texture(0)]],
 // they must count as part of the brick, or a brick could wrongly look empty.
 // Values are kept as the raw 16-bit numbers, exactly as stored in the volume.
 kernel void bk_brick_ranges(texture3d<float> volume      [[texture(0)]],
-                            device ushort2 *brickRange   [[buffer(0)]],
-                            constant uint3 &grid         [[buffer(1)]],
+                            device uint *brickRange      [[buffer(0)]],   /* lowest | highest << 16 */
+                            constant uint4 &grid4        [[buffer(1)]],   /* xyz = brick counts (uint4: no 3-vectors in GPU buffers) */
                             uint3 gid                    [[thread_position_in_grid]])
 {
+    uint3 grid = grid4.xyz;
     if (any(gid >= grid)) return;
     int3 last = int3(volume.get_width(), volume.get_height(), volume.get_depth()) - 1;
     int3 lo = max(int3(gid) * BKBrickSize - 1, int3(0));
@@ -413,7 +470,7 @@ kernel void bk_brick_ranges(texture3d<float> volume      [[texture(0)]],
                 mx = max(mx, v);
             }
     uint index = (gid.z * grid.y + gid.y) * grid.x + gid.x;
-    brickRange[index] = ushort2((ushort)rint(mn * 65535.0f), (ushort)rint(mx * 65535.0f));
+    brickRange[index] = uint(rint(mn * 65535.0f)) | (uint(rint(mx * 65535.0f)) << 16);
 }
 
 // Empty-space skipping, step 2 (whenever the colour/opacity rule changes): one thread
@@ -423,16 +480,16 @@ kernel void bk_brick_ranges(texture3d<float> volume      [[texture(0)]],
 // adds one table entry of margin on each side for the table's linear blending and for
 // rounding. alphaCount[k] = how many of the first k table entries are not see-through,
 // so "any opaque entry between a and b" is a single subtraction.
-kernel void bk_classify_bricks(device const ushort2 *brickRange [[buffer(0)]],
+kernel void bk_classify_bricks(device const uint *brickRange     [[buffer(0)]],
                                device const uint *alphaCount    [[buffer(1)]],
-                               device uchar *brickEmpty         [[buffer(2)]],
+                               device uint *brickEmpty          [[buffer(2)]],
                                constant BKRenderParams &p       [[buffer(3)]],
                                uint3 gid                        [[thread_position_in_grid]])
 {
-    uint3 g = uint3(p.brickGrid);
+    uint3 g = uint3(p.brickGrid.xyz);
     if (any(gid >= g)) return;
     uint index = (gid.z * g.y + gid.y) * g.x + gid.x;
-    ushort2 raw = brickRange[index];
+    uint2 raw = bk_unpack_range(brickRange[index]);
     float tfRange = max(p.tfMax - p.tfMin, 1e-6f);
     float lowValue  = ((float)raw.x / 65535.0f) * p.valueScale + p.valueOffset;
     float highValue = ((float)raw.y / 65535.0f) * p.valueScale + p.valueOffset;

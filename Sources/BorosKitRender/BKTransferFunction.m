@@ -10,13 +10,11 @@
  */
 
 #import "BKTransferFunction.h"
+#import "BKRenderCore.h"   // the evaluation/baking maths, shared with a future Vulkan backend
 
-// One control point: a CT value and up to four components (r,g,b for colour points,
-// just [0] = opacity for opacity points).
-typedef struct {
-    float value;
-    float c[3];
-} BKTFPoint;
+// One control point: a CT value and up to three components (r,g,b for colour points,
+// just [0] = opacity for opacity points). Same type as the plain-C core uses.
+typedef BKRenderTFPoint BKTFPoint;
 
 @implementation BKTransferFunction {
     NSMutableData *_colorPoints;   // BKTFPoint array, kept sorted by value
@@ -77,51 +75,29 @@ static void BKInsertPoint(NSMutableData *points, BKTFPoint point)
     _opacityPoints.length = 0;
 }
 
+// The maths lives in the plain-C core (BKRenderCore.c); these methods only hand over
+// the point lists.
+
 // Smallest value used by any point (0 when there are no points at all).
 - (float)minimumValue
 {
-    float m = INFINITY;
-    if (self.colorPointCount) m = fminf(m, ((BKTFPoint *)_colorPoints.bytes)[0].value);
-    if (self.opacityPointCount) m = fminf(m, ((BKTFPoint *)_opacityPoints.bytes)[0].value);
-    return isinf(m) ? 0 : m;
+    return BKRenderTFMinimumValue(_colorPoints.bytes, self.colorPointCount, _opacityPoints.bytes, self.opacityPointCount);
 }
 
 // Largest value used by any point (0 when there are no points at all).
 - (float)maximumValue
 {
-    float m = -INFINITY;
-    if (self.colorPointCount) m = fmaxf(m, ((BKTFPoint *)_colorPoints.bytes)[self.colorPointCount - 1].value);
-    if (self.opacityPointCount) m = fmaxf(m, ((BKTFPoint *)_opacityPoints.bytes)[self.opacityPointCount - 1].value);
-    return isinf(m) ? 0 : m;
-}
-
-// Piecewise-linear lookup in a sorted point list; clamps to the first/last point
-// outside the defined range. Writes `components` floats into out.
-static void BKEvaluate(const BKTFPoint *p, NSUInteger count, float value, float *out, int components)
-{
-    if (count == 0) return;
-    if (value <= p[0].value) { for (int k = 0; k < components; k++) out[k] = p[0].c[k]; return; }
-    if (value >= p[count - 1].value) { for (int k = 0; k < components; k++) out[k] = p[count - 1].c[k]; return; }
-    NSUInteger i = 1;
-    while (p[i].value < value) i++;
-    float t = (value - p[i - 1].value) / (p[i].value - p[i - 1].value);
-    for (int k = 0; k < components; k++) out[k] = p[i - 1].c[k] + t * (p[i].c[k] - p[i - 1].c[k]);
+    return BKRenderTFMaximumValue(_colorPoints.bytes, self.colorPointCount, _opacityPoints.bytes, self.opacityPointCount);
 }
 
 - (void)getRGBA:(float[4])rgba atValue:(float)value
 {
-    rgba[0] = rgba[1] = rgba[2] = rgba[3] = 1.0f;
-    BKEvaluate(_colorPoints.bytes, self.colorPointCount, value, rgba, 3);
-    BKEvaluate(_opacityPoints.bytes, self.opacityPointCount, value, rgba + 3, 1);
+    BKRenderTFGetRGBA(_colorPoints.bytes, self.colorPointCount, _opacityPoints.bytes, self.opacityPointCount, value, rgba);
 }
 
 - (void)bakeIntoRGBA:(float *)rgba count:(NSUInteger)count
 {
-    float lo = self.minimumValue, hi = self.maximumValue;
-    for (NSUInteger i = 0; i < count; i++) {
-        float value = count > 1 ? lo + (hi - lo) * (float)i / (float)(count - 1) : lo;
-        [self getRGBA:rgba + 4 * i atValue:value];
-    }
+    BKRenderTFBake(_colorPoints.bytes, self.colorPointCount, _opacityPoints.bytes, self.opacityPointCount, rgba, count);
 }
 
 + (instancetype)grayscaleRampFromValue:(float)low toValue:(float)high

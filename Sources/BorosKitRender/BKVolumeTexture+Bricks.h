@@ -12,7 +12,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface BKVolumeTexture ()
 
-// One (lowest, highest) pair of raw 16-bit values per brick, filled on the GPU the
+// One (lowest, highest) pair of raw 16-bit values per brick, packed in one 32-bit word
+// (lowest | highest << 16), filled on the GPU the
 // first time a renderer needs it. nil until then.
 @property (nonatomic, strong, nullable) id<MTLBuffer> brickRangeBuffer;
 

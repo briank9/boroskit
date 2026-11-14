@@ -28,6 +28,7 @@ extern "C" NSString *BKDisplayShaderSource(void)
         const char *prelude = R"METAL(
 #include <metal_stdlib>
 using namespace metal;
+typedef int bk_i32;
 )METAL";
 
         const char *params = "struct BKDisplayParams { " BKD_STRINGIFY(BK_DISPLAY_PARAMS_FIELDS) " };\n";
