@@ -4,3 +4,4 @@
 
 #import "BKMeshRenderer.h"
 #import "BKCropBox.h"
+#import "BKMeshDrawCore.h"   // 2026-11-14: culling / texture / point rules (plain C)

@@ -40,6 +40,47 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+// --- Added 2026-11-14 (ROI volume window): face culling, textures, points -----------------
+// Original BorosKit code written for this project; contains no third-party code.
+// PORTING NOTES: the rules (which side is "front", how a texture is looked up and combined
+// with the lit colour, how big a point is) are written once in plain C in BKMeshDrawCore.h
+// with CPU reference functions; a Vulkan backend follows that file. Texture pixels are plain
+// RGBA8 rows (row 0 = texture coordinate t = 0); texture coordinates are a tightly packed
+// float x2 array per vertex (8-byte stride, std430 vec2-compatible).
+
+// Which side of each triangle is left out (same values as BKMeshCullNone/Back/Front in
+// BKMeshDrawCore.h). The front side is the one whose corners run anticlockwise on screen
+// (OpenGL / VTK rule). Why: VTK scenes copied into Metal (e.g. the ROI volume window) use
+// back-face culling, which changes the picture of open or inside-out surfaces.
+typedef NS_ENUM(NSInteger, BKMeshFaceCulling) {
+    BKMeshFaceCullingNone = 0,    // both sides drawn (default)
+    BKMeshFaceCullingBack = 1,    // back sides not drawn
+    BKMeshFaceCullingFront = 2,   // front sides not drawn
+};
+
+// A picture laid onto a surface (RGBA, 8 bits per channel). Why: VTK's textured surfaces (the
+// ROI volume window's "Textured" display) must look the same when Metal draws them.
+@interface BKMeshTexture : NSObject
+
+// `pixels`: width x height texels with `components` bytes each (1 = grey, 2 = grey + alpha,
+// 3 = RGB, 4 = RGBA - the OpenGL / VTK meaning), rows one after another, row 0 at texture
+// coordinate t = 0 (VTK image row 0). Returns nil for an empty picture or another component count.
+- (nullable instancetype)initWithPixels:(const uint8_t *)pixels components:(NSUInteger)components
+                                  width:(NSUInteger)width height:(NSUInteger)height;
+
+@property (nonatomic, readonly) NSUInteger width;
+@property (nonatomic, readonly) NSUInteger height;
+@property (nonatomic, readonly) NSData *rgba8Data;          // width * height * 4 bytes, row 0 = t = 0
+@property (nonatomic, readonly, getter=isOpaque) BOOL opaque;   // YES when every alpha is 255
+
+// YES (default) = blend the 4 nearest texels (VTK InterpolateOn); NO = nearest texel.
+@property (nonatomic) BOOL interpolate;
+// YES (default) = the picture repeats outside 0..1 (VTK RepeatOn); NO = clamp to the edge.
+@property (nonatomic) BOOL repeat;
+
+@end
+// --- end of the 2026-11-14 types ----------------------------------------------------------
+
 // One thing to draw: a mesh plus how it looks and where it is placed.
 @interface BKMeshObject : NSObject
 
@@ -84,6 +125,48 @@ NS_ASSUME_NONNULL_BEGIN
 
 // NO = drawn in its plain colour without any lighting (labels, letters). Default YES.
 @property (nonatomic, getter=isLit) BOOL lit;
+
+// --- Added 2026-11-14 ------------------------------------------------------------------
+// Which side of the triangles is left out. Default BKMeshFaceCullingNone (both sides drawn).
+@property (nonatomic) BKMeshFaceCulling faceCulling;
+
+// Texture coordinates (s, t), one per mesh vertex, in texture units (0..1 = one copy of the
+// picture). NULL / 0 removes them. Copied. Used only when `texture` is set too and the count
+// equals the mesh's vertex count (otherwise the object is drawn untextured, exactly as VTK
+// does for a textured actor without texture coordinates).
+- (void)setTextureCoordinates:(nullable const simd_float2 *)coordinates count:(NSUInteger)count;
+@property (nonatomic, readonly) NSUInteger textureCoordinateCount;
+@property (nonatomic, readonly, nullable) const simd_float2 *textureCoordinates;
+
+// The picture laid onto the surface (nil = none, the default). Its colour multiplies the lit
+// surface colour, its alpha multiplies the opacity (a picture with transparent texels makes
+// the object see-through).
+@property (nonatomic, strong, nullable) BKMeshTexture *texture;
+
+// YES when the object is drawn with its texture (texture set and one coordinate per vertex).
+@property (nonatomic, readonly, getter=isTextured) BOOL textured;
+
+@end
+
+// Added 2026-11-14: points drawn as small squares of a fixed size in PIXELS (like VTK's
+// "points" representation and vertex cells, glPointSize), depth-tested like everything else.
+// Why: a VTK scene may show an object as its points; Metal must draw them, not skip them.
+@interface BKPointObject : NSObject
+
+// `points`: `count` positions in mm (before `transform`). Copied. NULL = no points.
+- (instancetype)initWithPoints:(nullable const simd_float3 *)points count:(NSUInteger)count;
+- (void)setPoints:(nullable const simd_float3 *)points count:(NSUInteger)count;
+@property (nonatomic, readonly) NSUInteger pointCount;
+@property (nonatomic, readonly) const simd_float3 *points;
+
+@property (nonatomic) simd_float3 color;     // RGB 0..1, default white
+@property (nonatomic) float opacity;         // default 1
+@property (nonatomic) CGFloat pointSize;     // side of the square in pixels of the output image, default 1
+@property (nonatomic, getter=isVisible) BOOL visible;   // default YES
+@property (nonatomic) simd_float4x4 transform;          // placement, like BKMeshObject (default identity)
+
+// Bounding box of the placed points in patient mm.
+- (void)getPatientBoundsMin:(simd_float3 *)min max:(simd_float3 *)max;
 
 @end
 
@@ -130,6 +213,10 @@ NS_ASSUME_NONNULL_BEGIN
 // Line segments to draw with the objects (solid ones with the solid objects, see-through
 // ones after them). Default empty.
 @property (nonatomic, copy) NSArray<BKLineObject *> *lineObjects;
+
+// Added 2026-11-14: point sets to draw with the objects (solid ones with the solid lines,
+// see-through ones in the see-through pass). Default empty.
+@property (nonatomic, copy) NSArray<BKPointObject *> *pointObjects;
 
 // Part of the output image to draw into, in pixels, origin top-left (CGRectZero = the
 // whole image, the default). Why: a small orientation cube in a corner of a 3D view is

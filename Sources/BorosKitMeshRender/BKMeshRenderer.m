@@ -14,6 +14,7 @@
 #import "BKMeshRenderer.h"
 #import "BKMeshShaderTypes.h"
 #import "BKVolumeTexture.h"   // BKRenderErrorDomain
+#import "BKMeshDrawCore.h"    // 2026-11-14: culling / texture / point rules (plain C)
 
 NSString *BKMeshShaderSource(void); // BKMeshShaderSource.mm
 
@@ -36,6 +37,57 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     return simd_make_float3((float)v.x, (float)v.y, (float)v.z);
 }
 
+#pragma mark - BKMeshTexture (2026-11-14)
+
+// Renderer-only part of BKMeshTexture: its GPU copy.
+@interface BKMeshTexture ()
+- (nullable id<MTLTexture>)textureOnDevice:(id<MTLDevice>)device;
+@end
+
+@implementation BKMeshTexture {
+    id<MTLTexture> _gpuTexture;            // GPU copy (made on first use)
+    __weak id<MTLDevice> _gpuDevice;
+}
+
+// What: converts the pixels to RGBA8 (BKMeshTextureExpandToRGBA8: the OpenGL / VTK meaning of
+// 1-4 components) and notes whether any texel is see-through.
+- (instancetype)initWithPixels:(const uint8_t *)pixels components:(NSUInteger)components
+                         width:(NSUInteger)width height:(NSUInteger)height
+{
+    if (pixels == NULL || width == 0 || height == 0 || components < 1 || components > 4) return nil;
+    if (!(self = [super init])) return nil;
+    NSMutableData *rgba = [NSMutableData dataWithLength:width * height * 4];
+    if (!rgba || !BKMeshTextureExpandToRGBA8(pixels, (uint32_t)components, width * height, rgba.mutableBytes)) return nil;
+    const uint8_t *p = rgba.bytes;
+    BOOL opaque = YES;
+    for (NSUInteger i = 0; i < width * height && opaque; i++) opaque = (p[4 * i + 3] == 255);
+    _width = width;
+    _height = height;
+    _rgba8Data = rgba;
+    _opaque = opaque;
+    _interpolate = YES;
+    _repeat = YES;
+    return self;
+}
+
+// What: the GPU copy of the picture (uploaded once per GPU). Row 0 of the data becomes row 0
+// of the Metal texture, which Metal samples at t = 0 - the same rule as OpenGL / VTK.
+- (id<MTLTexture>)textureOnDevice:(id<MTLDevice>)device
+{
+    if (_gpuTexture && _gpuDevice == device) return _gpuTexture;
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                 width:_width height:_height mipmapped:NO];
+    d.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> texture = [device newTextureWithDescriptor:d];
+    if (!texture) return nil;
+    [texture replaceRegion:MTLRegionMake2D(0, 0, _width, _height) mipmapLevel:0 withBytes:_rgba8Data.bytes bytesPerRow:_width * 4];
+    _gpuTexture = texture;
+    _gpuDevice = device;
+    return texture;
+}
+
+@end
+
 #pragma mark - BKMeshObject
 
 // Renderer-only part of BKMeshObject: the GPU copy of its mesh.
@@ -43,6 +95,7 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 - (BOOL)prepareBuffersOnDevice:(id<MTLDevice>)device;
 - (id<MTLBuffer>)vertexBuffer;
 - (id<MTLBuffer>)indexBuffer;
+- (nullable id<MTLBuffer>)textureCoordinateBufferOnDevice:(id<MTLDevice>)device;   // 2026-11-14
 @end
 
 @implementation BKMeshObject {
@@ -52,6 +105,10 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     __weak BKMesh *_uploadedMesh;     // which mesh / version / GPU the buffers hold
     NSUInteger _uploadedVersion;
     __weak id<MTLDevice> _uploadedDevice;
+    // 2026-11-14: texture coordinates and their GPU copy.
+    NSData *_textureCoordinateData;    // textureCoordinateCount simd_float2
+    id<MTLBuffer> _textureCoordinateBuffer;
+    __weak id<MTLDevice> _textureCoordinateDevice;
 }
 
 - (instancetype)initWithMesh:(BKMesh *)mesh
@@ -128,6 +185,42 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 
 - (id<MTLBuffer>)vertexBuffer { return _vertexBuffer; }
 - (id<MTLBuffer>)indexBuffer { return _indexBuffer; }
+
+// What (2026-11-14): copies the texture coordinates (NULL / 0 removes them) and forgets the
+// old GPU copy.
+- (void)setTextureCoordinates:(const simd_float2 *)coordinates count:(NSUInteger)count
+{
+    _textureCoordinateData = (coordinates && count) ? [NSData dataWithBytes:coordinates length:count * sizeof(simd_float2)] : nil;
+    _textureCoordinateCount = _textureCoordinateData ? count : 0;
+    _textureCoordinateBuffer = nil;
+}
+
+- (const simd_float2 *)textureCoordinates
+{
+    return (const simd_float2 *)_textureCoordinateData.bytes;
+}
+
+// What: drawn with a texture only when there is one AND one coordinate per vertex.
+// Why: VTK draws a textured actor without texture coordinates as if it had no texture.
+- (BOOL)isTextured
+{
+    return _texture != nil && _textureCoordinateCount > 0 && _textureCoordinateCount == _mesh.vertexCount;
+}
+
+// What: the GPU copy of the texture coordinates, tightly packed float x2 (8-byte stride).
+- (id<MTLBuffer>)textureCoordinateBufferOnDevice:(id<MTLDevice>)device
+{
+    if (_textureCoordinateCount == 0) return nil;
+    if (_textureCoordinateBuffer && _textureCoordinateDevice == device) return _textureCoordinateBuffer;
+    id<MTLBuffer> buffer = [device newBufferWithLength:_textureCoordinateCount * 2 * sizeof(float) options:MTLResourceStorageModeShared];
+    if (!buffer) return nil;
+    float *out = (float *)buffer.contents;
+    const simd_float2 *tc = self.textureCoordinates;
+    for (NSUInteger i = 0; i < _textureCoordinateCount; i++) { out[2 * i] = tc[i].x; out[2 * i + 1] = tc[i].y; }
+    _textureCoordinateBuffer = buffer;
+    _textureCoordinateDevice = device;
+    return buffer;
+}
 
 @end
 
@@ -218,12 +311,98 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 
 @end
 
+#pragma mark - BKPointObject (2026-11-14)
+
+// Renderer-only part of BKPointObject: the GPU copy of its points.
+@interface BKPointObject ()
+- (BOOL)prepareBufferOnDevice:(id<MTLDevice>)device;
+- (id<MTLBuffer>)pointBuffer;
+@end
+
+@implementation BKPointObject {
+    NSData *_pointData;                // pointCount simd_float3
+    NSUInteger _version;               // goes up when the points change
+    id<MTLBuffer> _buffer;             // GPU copy (packed float3, 12 bytes per point)
+    NSUInteger _uploadedVersion;
+    __weak id<MTLDevice> _uploadedDevice;
+}
+
+- (instancetype)initWithPoints:(const simd_float3 *)points count:(NSUInteger)count
+{
+    if ((self = [super init])) {
+        _color = simd_make_float3(1, 1, 1);
+        _opacity = 1;
+        _pointSize = 1;
+        _visible = YES;
+        _transform = matrix_identity_float4x4;
+        [self setPoints:points count:count];
+    }
+    return self;
+}
+
+- (instancetype)init
+{
+    return [self initWithPoints:NULL count:0];
+}
+
+// What: copies the positions.
+- (void)setPoints:(const simd_float3 *)points count:(NSUInteger)count
+{
+    NSUInteger n = points ? count : 0;
+    _pointData = [NSData dataWithBytes:points length:n * sizeof(simd_float3)];
+    _pointCount = n;
+    _version++;
+}
+
+- (const simd_float3 *)points
+{
+    return (const simd_float3 *)_pointData.bytes;
+}
+
+// What: box around all points, pushed through `transform`.
+- (void)getPatientBoundsMin:(simd_float3 *)outMin max:(simd_float3 *)outMax
+{
+    simd_float3 mn = simd_make_float3(INFINITY, INFINITY, INFINITY), mx = -mn;
+    const simd_float3 *p = self.points;
+    for (NSUInteger i = 0; i < _pointCount; i++) {
+        simd_float4 q = simd_mul(_transform, simd_make_float4(p[i], 1));
+        if (q.w != 0 && q.w != 1) q /= q.w;
+        mn = simd_min(mn, q.xyz);
+        mx = simd_max(mx, q.xyz);
+    }
+    if (outMin) *outMin = mn;
+    if (outMax) *outMax = mx;
+}
+
+// What: makes sure the GPU holds the current points (packed, 3 floats each), like lines.
+- (BOOL)prepareBufferOnDevice:(id<MTLDevice>)device
+{
+    if (_pointCount == 0) return NO;
+    if (_buffer && _uploadedVersion == _version && _uploadedDevice == device) return YES;
+    id<MTLBuffer> buffer = [device newBufferWithLength:_pointCount * 3 * sizeof(float) options:MTLResourceStorageModeShared];
+    if (!buffer) return NO;
+    float *out = (float *)buffer.contents;
+    const simd_float3 *p = self.points;
+    for (NSUInteger i = 0; i < _pointCount; i++) {
+        out[3 * i] = p[i].x; out[3 * i + 1] = p[i].y; out[3 * i + 2] = p[i].z;
+    }
+    _buffer = buffer;
+    _uploadedVersion = _version;
+    _uploadedDevice = device;
+    return YES;
+}
+
+- (id<MTLBuffer>)pointBuffer { return _buffer; }
+
+@end
+
 #pragma mark - BKMeshRenderer
 
 // What the draw loop needs per visible object.
 @interface BKMeshDrawItem : NSObject
 @property (nonatomic, strong) BKMeshObject *object;      // a mesh, or
-@property (nonatomic, strong) BKLineObject *lineObject;  // a set of lines
+@property (nonatomic, strong) BKLineObject *lineObject;  // a set of lines, or
+@property (nonatomic, strong) BKPointObject *pointObject; // a set of points (2026-11-14)
 @property (nonatomic) float sortDistance;   // along the view direction, for back-to-front order
 @end
 @implementation BKMeshDrawItem
@@ -237,6 +416,7 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     id<MTLDepthStencilState> _opaqueDepthState;       // test + write depth
     id<MTLDepthStencilState> _transparentDepthState;  // test only
     id<MTLTexture> _depthTexture;                     // reused while the size stays the same
+    id<MTLSamplerState> _samplers[4];                 // 2026-11-14: [interpolate * 2 + repeat]
 }
 
 // Compiles the shader library once per GPU and shares it between renderers (compiling
@@ -280,6 +460,21 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 
     _objects = @[];
     _lineObjects = @[];
+    _pointObjects = @[];
+    // 2026-11-14: texture samplers (BKMeshTextureSample's rules): linear or nearest, repeat or
+    // clamp to the edge, no mipmaps.
+    for (int i = 0; i < 4; i++) {
+        MTLSamplerDescriptor *sd = [[MTLSamplerDescriptor alloc] init];
+        sd.minFilter = sd.magFilter = (i & 2) ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+        sd.mipFilter = MTLSamplerMipFilterNotMipmapped;
+        sd.sAddressMode = sd.tAddressMode = (i & 1) ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
+        sd.normalizedCoordinates = YES;
+        _samplers[i] = [_device newSamplerStateWithDescriptor:sd];
+        if (!_samplers[i]) {
+            if (error) *error = BKMeshRenderError(40, @"The GPU could not create a texture sampler.");
+            return nil;
+        }
+    }
     _viewport = CGRectZero;
     // Defaults: the same as BKVolumeRenderer (front view, head up, 100 mm, its lighting).
     _projection = BKProjectionOrthographic;
@@ -360,12 +555,21 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 - (id<MTLRenderPipelineState>)pipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance
                                          transparent:(BOOL)transparent error:(NSError **)error
 {
-    NSString *key = [NSString stringWithFormat:@"%lu-%d-%d", (unsigned long)format, withDistance, transparent];
+    return [self pipelineForColorFormat:format withDistance:withDistance transparent:transparent textured:NO error:error];
+}
+
+// What (2026-11-14): the same, optionally for textured meshes (extra texture-coordinate stream,
+// texture lookup in the fragment function).
+- (id<MTLRenderPipelineState>)pipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance
+                                         transparent:(BOOL)transparent textured:(BOOL)textured error:(NSError **)error
+{
+    NSString *key = [NSString stringWithFormat:@"%lu-%d-%d%@", (unsigned long)format, withDistance, transparent, textured ? @"-tex" : @""];
     id<MTLRenderPipelineState> pipeline = _pipelines[key];
     if (pipeline) return pipeline;
     MTLRenderPipelineDescriptor *d = [[MTLRenderPipelineDescriptor alloc] init];
-    d.vertexFunction = [_library newFunctionWithName:@"bk_mesh_vertex"];
-    d.fragmentFunction = [_library newFunctionWithName:withDistance ? @"bk_mesh_fragment_distance" : @"bk_mesh_fragment"];
+    d.vertexFunction = [_library newFunctionWithName:textured ? @"bk_mesh_vertex_textured" : @"bk_mesh_vertex"];
+    NSString *fragment = withDistance ? @"bk_mesh_fragment_distance" : @"bk_mesh_fragment";
+    d.fragmentFunction = [_library newFunctionWithName:textured ? [fragment stringByAppendingString:@"_textured"] : fragment];
     [self configurePipeline:d colorFormat:format withDistance:withDistance transparent:transparent];
     pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
     if (pipeline) _pipelines[key] = pipeline;
@@ -376,11 +580,19 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 - (id<MTLRenderPipelineState>)linePipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance
                                              transparent:(BOOL)transparent error:(NSError **)error
 {
-    NSString *key = [NSString stringWithFormat:@"line-%lu-%d-%d", (unsigned long)format, withDistance, transparent];
+    return [self linePipelineForColorFormat:format withDistance:withDistance transparent:transparent points:NO error:error];
+}
+
+// What (2026-11-14): the same, optionally for points (squares built by bk_point_vertex, drawn
+// with the line fragment functions).
+- (id<MTLRenderPipelineState>)linePipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance
+                                             transparent:(BOOL)transparent points:(BOOL)points error:(NSError **)error
+{
+    NSString *key = [NSString stringWithFormat:@"%@-%lu-%d-%d", points ? @"point" : @"line", (unsigned long)format, withDistance, transparent];
     id<MTLRenderPipelineState> pipeline = _pipelines[key];
     if (pipeline) return pipeline;
     MTLRenderPipelineDescriptor *d = [[MTLRenderPipelineDescriptor alloc] init];
-    d.vertexFunction = [_library newFunctionWithName:@"bk_line_vertex"];
+    d.vertexFunction = [_library newFunctionWithName:points ? @"bk_point_vertex" : @"bk_line_vertex"];
     d.fragmentFunction = [_library newFunctionWithName:withDistance ? @"bk_line_fragment_distance" : @"bk_line_fragment"];
     [self configurePipeline:d colorFormat:format withDistance:withDistance transparent:transparent];
     pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
@@ -469,7 +681,9 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         BKMeshDrawItem *item = [[BKMeshDrawItem alloc] init];
         item.object = object;
         item.sortDistance = simd_dot((lo + hi) * 0.5f - camera, forward);
-        [(object.opacity >= 1 ? opaque : transparent) addObject:item];
+        // 2026-11-14: a texture with see-through texels makes the object see-through (as in VTK).
+        BOOL solid = object.opacity >= 1 && !(object.textured && !object.texture.opaque);
+        [(solid ? opaque : transparent) addObject:item];
     }
     // Lines: same depth extent bookkeeping; solid ones go with the solid pass.
     NSMutableArray<BKMeshDrawItem *> *opaqueLines = [NSMutableArray array];
@@ -488,6 +702,23 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         item.lineObject = lines;
         item.sortDistance = simd_dot((lo + hi) * 0.5f - camera, forward);
         [(lines.opacity >= 1 ? opaqueLines : transparent) addObject:item];
+    }
+    // Points (2026-11-14): same bookkeeping as lines; solid ones are drawn with the solid lines.
+    for (BKPointObject *points in _pointObjects) {
+        if (!points.visible || !(points.opacity > 0) || !(points.pointSize > 0)) continue;
+        if (![points prepareBufferOnDevice:_device]) continue;
+        simd_float3 lo, hi;
+        [points getPatientBoundsMin:&lo max:&hi];
+        for (int i = 0; i < 8; i++) {
+            simd_float3 c = simd_make_float3((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
+            float z = simd_dot(c - camera, forward);
+            nearest = MIN(nearest, z);
+            farthest = MAX(farthest, z);
+        }
+        BKMeshDrawItem *item = [[BKMeshDrawItem alloc] init];
+        item.pointObject = points;
+        item.sortDistance = simd_dot((lo + hi) * 0.5f - camera, forward);
+        [(points.opacity >= 1 ? opaqueLines : transparent) addObject:item];
     }
     // See-through objects: farthest first, so nearer ones are blended over farther ones.
     [transparent sortUsingComparator:^NSComparisonResult(BKMeshDrawItem *a, BKMeshDrawItem *b) {
@@ -526,6 +757,22 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     id<MTLRenderPipelineState> opaqueLinePipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO error:error];
     id<MTLRenderPipelineState> transparentLinePipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES error:error];
     if (!opaquePipeline || !transparentPipeline || !opaqueLinePipeline || !transparentLinePipeline) return NO;
+    // 2026-11-14: textured-mesh and point pipelines, made only when the scene has such objects.
+    BOOL anyTextured = NO, anyPoints = NO;
+    for (BKMeshObject *object in _objects) if (object.visible && object.textured) { anyTextured = YES; break; }
+    for (BKPointObject *points in _pointObjects) if (points.visible && points.pointCount) { anyPoints = YES; break; }
+    id<MTLRenderPipelineState> opaqueTexturedPipeline = nil, transparentTexturedPipeline = nil;
+    id<MTLRenderPipelineState> opaquePointPipeline = nil, transparentPointPipeline = nil;
+    if (anyTextured) {
+        opaqueTexturedPipeline = [self pipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO textured:YES error:error];
+        transparentTexturedPipeline = [self pipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES textured:YES error:error];
+        if (!opaqueTexturedPipeline || !transparentTexturedPipeline) return NO;
+    }
+    if (anyPoints) {
+        opaquePointPipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO points:YES error:error];
+        transparentPointPipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES points:YES error:error];
+        if (!opaquePointPipeline || !transparentPointPipeline) return NO;
+    }
 
     id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     if (!enc) {
@@ -533,8 +780,14 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         return NO;
     }
     enc.label = @"BKMeshRenderer";
-    // Both sides of every triangle are drawn: mesh files often have mixed-up sides.
+    // Both sides of every triangle are drawn: mesh files often have mixed-up sides (unless an
+    // object asks for culling, 2026-11-14: set per object below).
     [enc setCullMode:MTLCullModeNone];
+    // Front side = anticlockwise on screen with y up (BKMeshTriangleIsFrontFacing). Metal judges
+    // the winding in its normalised device coordinates, whose y axis points UP like ours, so
+    // "anticlockwise = front" is exactly our rule (checked by BKMeshDrawCoreTests against the
+    // plain-C reference; Metal's default would be clockwise).
+    [enc setFrontFacingWinding:MTLWindingCounterClockwise];
     // Only the drawing area (whole image unless a viewport was set).
     [enc setViewport:(MTLViewport){area.origin.x, area.origin.y, area.size.width, area.size.height, 0.0, 1.0}];
     [enc setScissorRect:(MTLScissorRect){(NSUInteger)area.origin.x, (NSUInteger)area.origin.y,
@@ -580,6 +833,23 @@ static simd_float3 BKMeshFloat3(N3Vector v)
             BOOL see = (p == 2);
             [enc setDepthStencilState:see ? _transparentDepthState : _opaqueDepthState];
             for (BKMeshDrawItem *item in passes[p]) {
+                if (item.pointObject) {
+                    // 2026-11-14: points, squares of pointSize pixels (flat colour, never culled).
+                    BKPointObject *pts = item.pointObject;
+                    BKMeshUniforms u = base;
+                    u.model = pts.transform;
+                    u.normalMatrix = matrix_identity_float4x4;
+                    u.color = simd_make_float4(pts.color, MIN(MAX(pts.opacity, 0.0f), 1.0f));
+                    u.lit = 0;
+                    u.lineHalfWidth = (float)(0.5 * pts.pointSize);
+                    [enc setCullMode:MTLCullModeNone];
+                    [enc setRenderPipelineState:see ? transparentPointPipeline : opaquePointPipeline];
+                    [enc setVertexBuffer:[pts pointBuffer] offset:0 atIndex:0];
+                    [enc setVertexBytes:&u length:sizeof u atIndex:1];
+                    [enc setFragmentBytes:&u length:sizeof u atIndex:1];
+                    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:pts.pointCount * 6];
+                    continue;
+                }
                 if (item.lineObject) {
                     BKLineObject *l = item.lineObject;
                     BKMeshUniforms u = base;
@@ -588,6 +858,7 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                     u.color = simd_make_float4(l.color, MIN(MAX(l.opacity, 0.0f), 1.0f));
                     u.lit = 0;
                     u.lineHalfWidth = (float)(0.5 * l.lineWidth);
+                    [enc setCullMode:MTLCullModeNone];   // 2026-11-14: lines are never culled (as in OpenGL)
                     [enc setRenderPipelineState:see ? transparentLinePipeline : opaqueLinePipeline];
                     [enc setVertexBuffer:[l pointBuffer] offset:0 atIndex:0];
                     [enc setVertexBytes:&u length:sizeof u atIndex:1];
@@ -595,9 +866,28 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:l.segmentCount * 6];
                     continue;
                 }
-                [enc setRenderPipelineState:see ? transparentPipeline : opaquePipeline];
                 BKMeshObject *o = item.object;
                 BKMesh *mesh = o.mesh;
+                // 2026-11-14: per-object face culling and texture.
+                switch (o.faceCulling) {
+                    case BKMeshFaceCullingBack: [enc setCullMode:MTLCullModeBack]; break;
+                    case BKMeshFaceCullingFront: [enc setCullMode:MTLCullModeFront]; break;
+                    default: [enc setCullMode:MTLCullModeNone]; break;
+                }
+                BOOL textured = NO;
+                if (o.textured) {
+                    BKMeshTexture *texture = o.texture;
+                    id<MTLTexture> gpuTexture = [texture textureOnDevice:_device];
+                    id<MTLBuffer> tcBuffer = [o textureCoordinateBufferOnDevice:_device];
+                    if (gpuTexture && tcBuffer) {
+                        textured = YES;
+                        [enc setVertexBuffer:tcBuffer offset:0 atIndex:2];
+                        [enc setFragmentTexture:gpuTexture atIndex:0];
+                        [enc setFragmentSamplerState:_samplers[(texture.interpolate ? 2 : 0) + (texture.repeat ? 1 : 0)] atIndex:0];
+                    }
+                }
+                if (textured) [enc setRenderPipelineState:see ? transparentTexturedPipeline : opaqueTexturedPipeline];
+                else [enc setRenderPipelineState:see ? transparentPipeline : opaquePipeline];
                 BKMeshUniforms u = base;
                 u.model = o.transform;
                 simd_float3x3 linear = simd_matrix(o.transform.columns[0].xyz, o.transform.columns[1].xyz, o.transform.columns[2].xyz);
