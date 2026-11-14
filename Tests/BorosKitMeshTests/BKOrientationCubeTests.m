@@ -14,6 +14,7 @@
 //    patient's left the blue "L", from above the red "S" are seen on a white cube.
 
 #import <XCTest/XCTest.h>
+#import <ImageIO/ImageIO.h>
 #import <Metal/Metal.h>
 #import "BorosKitMeshRender.h"
 #import "BorosKitMesh.h"
@@ -302,6 +303,66 @@ static void BKTestCount(BKRenderResult *res, CGRect corner, NSUInteger *white, N
     // nil restores L R P A S I.
     [cube setLabels:nil];
     XCTAssertEqualObjects(cube.labels, (@[@"L", @"R", @"P", @"A", @"S", @"I"]));
+}
+
+// System-font letters (2026-11-14): every letter square lies ON its face (0.501 from the centre
+// along the face normal, the classic letter offset) and inside the face (|other coords| < 0.5).
+// Why: the first version put them 0.5 too far out (user screenshot: letters floating off the cube).
+- (void)testFontLettersLieOnTheirFaces
+{
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) return;
+    NSError *error = nil;
+    BKOrientationCube *cube = [[BKOrientationCube alloc] initWithDevice:device error:&error];
+    XCTAssertNotNil(cube, @"%@", error);
+    XCTAssertTrue(cube.usesSystemFont);
+    NSUInteger letters = 0;
+    for (BKMeshObject *o in cube.meshObjects) {
+        if (!o.textured) continue;   // the cube itself is not textured
+        letters++;
+        BKMesh *m = o.mesh;
+        XCTAssertEqual(m.vertexCount, 4u);
+        simd_float3 n = m.normals[0];
+        for (NSUInteger i = 0; i < m.vertexCount; i++) {
+            simd_float3 p = m.vertices[i];
+            XCTAssertEqualWithAccuracy(simd_dot(p, n), BK_ORIENTATION_CUBE_TEXT_OFFSET, 1e-5, @"on the face plane");
+            simd_float3 inPlane = p - n * simd_dot(p, n);
+            XCTAssertLessThan(fabsf(inPlane.x), 0.5f, @"inside the face");
+            XCTAssertLessThan(fabsf(inPlane.y), 0.5f, @"inside the face");
+            XCTAssertLessThan(fabsf(inPlane.z), 0.5f, @"inside the face");
+        }
+    }
+    XCTAssertEqual(letters, 6u, @"one letter square per face");
+}
+
+// Opt-in picture for a person to look at (BK_CUBE_PNG=/path/prefix): the cube from an angled view
+// (front-left, slightly above) and face-on from the front, written as PNG files.
+- (void)testWriteCubePictureForReview
+{
+    NSString *prefix = [NSProcessInfo processInfo].environment[@"BK_CUBE_PNG"];
+    if (prefix.length == 0) return;
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) return;
+    BKOrientationCube *cube = [[BKOrientationCube alloc] initWithDevice:device error:NULL];
+    struct { const char *name; BKVec3d dir, up; } views[2] = {
+        { "angled", { 0.55, 0.75, -0.37 }, { 0, 0, 1 } },   // looking from front-left, a little above
+        { "front", { 0, 1, 0 }, { 0, 0, 1 } },               // anterior view: A face-on
+    };
+    for (int v = 0; v < 2; v++) {
+        BKCameraFrame cam;
+        double len = sqrt(views[v].dir.x * views[v].dir.x + views[v].dir.y * views[v].dir.y + views[v].dir.z * views[v].dir.z);
+        cam.direction = BKV3d(views[v].dir.x / len, views[v].dir.y / len, views[v].dir.z / len);
+        cam.up = views[v].up;
+        cam.position = BKV3d(0, 0, 0);
+        cam.parallelScale = 1; cam.viewAngle = 30; cam.perspective = false;
+        BKRenderResult *r = [cube renderWithWidth:300 height:300 viewport:CGRectZero mainCamera:cam error:NULL];
+        CGImageRef image = [r newCGImage];
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithFormat:@"%@-%s.png", prefix, views[v].name]];
+        CGImageDestinationRef dest = CGImageDestinationCreateWithURL((__bridge CFURLRef)url, CFSTR("public.png"), 1, NULL);
+        CGImageDestinationAddImage(dest, image, NULL);
+        CGImageDestinationFinalize(dest);
+        CFRelease(dest); CGImageRelease(image);
+    }
 }
 
 @end

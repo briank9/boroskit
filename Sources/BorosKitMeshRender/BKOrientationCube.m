@@ -54,21 +54,21 @@ static NSData *BKCubeLetterPicture(NSString *label, simd_float3 color, simd_floa
         CGContextSetTextPosition(ctx, pad - ink.origin.x, pad - ink.origin.y);
         CTLineDraw(line, ctx);   // fill
         if (withEdge) {
-            // Thin grey edge around the letters (the classic cube's letter outlines).
-            CGContextSetTextDrawingMode(ctx, kCGTextStroke);
-            CGContextSetRGBStrokeColor(ctx, edge.x, edge.y, edge.z, 1);
-            CGContextSetLineWidth(ctx, fontSize * 0.025);
+            // Thin grey edge around the letters (the classic cube's letter outlines): the same line
+            // drawn again as outline only (Core Text stroke attributes), at the same position.
+            CGFloat edgeRGBA[4] = { edge.x, edge.y, edge.z, 1 };
+            CGColorRef edgeColor = CGColorCreate(rgb, edgeRGBA);
+            CGFloat strokeWidth = 2.5;   // percent of the font size; positive = outline only
+            CFNumberRef widthNumber = CFNumberCreate(NULL, kCFNumberCGFloatType, &strokeWidth);
+            CFStringRef edgeKeys[] = { kCTFontAttributeName, kCTStrokeColorAttributeName, kCTStrokeWidthAttributeName };
+            CFTypeRef edgeValues[] = { font, edgeColor, widthNumber };
+            CFDictionaryRef edgeAttributes = CFDictionaryCreate(NULL, (const void **)edgeKeys, (const void **)edgeValues, 3,
+                                                                &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+            CFAttributedStringRef edgeText = CFAttributedStringCreate(NULL, (__bridge CFStringRef)label, edgeAttributes);
+            CTLineRef edgeLine = CTLineCreateWithAttributedString(edgeText);
             CGContextSetTextPosition(ctx, pad - ink.origin.x, pad - ink.origin.y);
-            CFArrayRef runs = CTLineGetGlyphRuns(line);
-            for (CFIndex r = 0; r < CFArrayGetCount(runs); r++) {
-                CTRunRef run = (CTRunRef)CFArrayGetValueAtIndex(runs, r);
-                CFIndex count = CTRunGetGlyphCount(run);
-                CGGlyph glyphs[count]; CGPoint positions[count];
-                CTRunGetGlyphs(run, CFRangeMake(0, count), glyphs);
-                CTRunGetPositions(run, CFRangeMake(0, count), positions);
-                for (CFIndex g = 0; g < count; g++) { positions[g].x += pad - ink.origin.x; positions[g].y += pad - ink.origin.y; }
-                CTFontDrawGlyphs(font, glyphs, positions, count, ctx);
-            }
+            CTLineDraw(edgeLine, ctx);
+            CFRelease(edgeLine); CFRelease(edgeText); CFRelease(edgeAttributes); CFRelease(widthNumber); CGColorRelease(edgeColor);
         }
         CGContextRelease(ctx);
         // Premultiplied (Core Graphics) -> straight alpha (BKMeshTexture modulates like VTK).
@@ -225,7 +225,7 @@ static NSData *BKCubeLetterPicture(NSString *label, simd_float3 color, simd_floa
         if (inkH * aspect > BK_ORIENTATION_CUBE_MAX_TEXT_WIDTH) inkH = BK_ORIENTATION_CUBE_MAX_TEXT_WIDTH / aspect;
         double halfH = 0.5 * inkH * (1 + 2 * margin);               // the picture includes its margin
         double halfW = halfH * (double)w / (double)h;
-        BKVec3d c = BKV3dScale(normal, 0.5 + BK_ORIENTATION_CUBE_TEXT_OFFSET);
+        BKVec3d c = BKV3dScale(normal, BK_ORIENTATION_CUBE_TEXT_OFFSET);   // 0.501 from the CENTRE = just in front of the face
         BKVec3d corners[4] = {
             BKV3dAdd(BKV3dAdd(c, BKV3dScale(right, -halfW)), BKV3dScale(up, -halfH)),   // bottom-left
             BKV3dAdd(BKV3dAdd(c, BKV3dScale(right, halfW)), BKV3dScale(up, -halfH)),    // bottom-right
