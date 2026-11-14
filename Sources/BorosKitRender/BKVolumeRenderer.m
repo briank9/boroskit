@@ -111,6 +111,10 @@ static simd_float4 BKFloat4(simd_float3 v)
     id<MTLBuffer> _classifiedAlphaCount;            // which table _brickEmptyBuffer was made for
     __weak BKVolumeTexture *_classifiedVolume;      // ...and which volume
     id<MTLBuffer> _placeholderBuffer;   // bound instead when skipping is off (the GPU wants something there)
+    // Embedded objects (2026-11-14): 1 x 1 pictures bound when there are none (every kernel
+    // argument must be bound; the shader does not read them then, p.useGeometry == 0).
+    id<MTLTexture> _noGeometryColor;
+    id<MTLTexture> _noGeometryDistance;
 
     // --- Extra clipping planes (see -setPackedClipPlanes:count: / -setClipPlanes:count:) ---
     // Kept in the GPU packing (nx, ny, nz, w; cut where n.x + w > 0), so the simd setter needs no
@@ -159,6 +163,9 @@ static simd_float4 BKFloat4(simd_float3 v)
     if (!_raycastPipeline || !_sizePipeline || !_texturePipeline || !_upscalePipeline
         || !_brickRangePipeline || !_classifyPipeline) return nil;
     _placeholderBuffer = [_device newBufferWithLength:16 options:MTLResourceStorageModeShared];
+    _noGeometryColor = [_device newTextureWithDescriptor:[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO]];
+    _noGeometryDistance = [_device newTextureWithDescriptor:[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:1 height:1 mipmapped:NO]];
+    if (!_noGeometryColor || !_noGeometryDistance) return nil;
     _queue = [_device newCommandQueue];
 
     // Defaults (documented in the header).
@@ -407,7 +414,27 @@ static simd_float4 BKFloat4(simd_float3 v)
     p->projection = _projection;
     p->shading = _shadingEnabled ? 1 : 0;
     p->manualFiltering = _manualFiltering ? 1 : 0;
+    p->useGeometry = [self hasGeometry] ? 1 : 0;   // embedded objects (2026-11-14)
     return YES;
+}
+
+#pragma mark - Embedded objects
+
+// What: YES when both object pictures are set, are the same size and have the right formats.
+// Why: a half-set or mismatched pair would read garbage on the GPU; it is ignored instead.
+- (BOOL)hasGeometry
+{
+    id<MTLTexture> c = _geometryColorTexture, d = _geometryRayDistanceTexture;
+    return c && d && c.width == d.width && c.height == d.height && d.pixelFormat == MTLPixelFormatR32Float
+        && c.width > 0 && c.height > 0;
+}
+
+// What: binds the object pictures (or the 1 x 1 placeholders) at the kernels' slots 3 and 4.
+- (void)bindGeometryToEncoder:(id<MTLComputeCommandEncoder>)enc
+{
+    BOOL has = [self hasGeometry];
+    [enc setTexture:has ? _geometryColorTexture : _noGeometryColor atIndex:3];
+    [enc setTexture:has ? _geometryRayDistanceTexture : _noGeometryDistance atIndex:4];
 }
 
 #pragma mark - Empty-space skipping
@@ -541,6 +568,7 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     [enc setBuffer:valueBuffer offset:0 atIndex:2];
     [enc setBuffer:brickEmpty offset:0 atIndex:3];
     [enc setBuffer:brickRange offset:0 atIndex:4];
+    [self bindGeometryToEncoder:enc];   // embedded objects (2026-11-14)
     // 8x8 tiles: neighbouring rays read neighbouring voxels, which keeps the texture
     // cache warm. Thread groups are dispatched to cover the image; the kernel skips
     // threads that fall outside it.
@@ -601,6 +629,7 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     [enc setBytes:&backgroundColor length:sizeof(backgroundColor) atIndex:1];
     [enc setBuffer:brickEmpty offset:0 atIndex:2];
     [enc setBuffer:brickRange offset:0 atIndex:3];
+    [self bindGeometryToEncoder:enc];   // embedded objects (2026-11-14)
     [enc dispatchThreadgroups:MTLSizeMake((width + 7) / 8, (height + 7) / 8, 1)
         threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
     [enc endEncoding];

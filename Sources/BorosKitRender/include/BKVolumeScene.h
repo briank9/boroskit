@@ -18,6 +18,7 @@
 #import <simd/simd.h>
 #import "BKVolumeRenderer.h"
 #import "BKVolumeCamera.h"
+#import "BKVolumeGeometryLayer.h"
 
 @class CPRVolumeData, BKPreset, BKVolumeTexture;
 
@@ -137,9 +138,25 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
 // Encodes one frame into `target` (needs MTLTextureUsageShaderWrite) at the current
 // quality level, without waiting. Measures the GPU time when the command buffer
 // completes. Returns NO + error if nothing can be drawn (e.g. no volume).
+// The embedded objects (geometryLayer) are NOT drawn by this form (e.g. preset thumbnails,
+// which share the main view's scene and never showed them).
 - (BOOL)encodeFrameToTexture:(id<MTLTexture>)target
                commandBuffer:(id<MTLCommandBuffer>)commandBuffer
                        error:(NSError * _Nullable * _Nullable)error;
+
+// Same, with includeGeometry YES = the geometryLayer's objects drawn inside the volume (on-screen
+// view, screen captures). The objects are drawn at `target`'s full size (sharp edges) even when
+// the volume is ray-cast at reduced size during a drag.
+- (BOOL)encodeFrameToTexture:(id<MTLTexture>)target
+               commandBuffer:(id<MTLCommandBuffer>)commandBuffer
+             includeGeometry:(BOOL)includeGeometry
+                       error:(NSError * _Nullable * _Nullable)error;
+
+// --- Embedded objects (2026-11-14) --------------------------------------------------------
+// Opaque objects shown INSIDE the volume picture (hidden by bone in front, hiding bone behind),
+// e.g. the 3D window's 3D point balls. nil (default) = none. Drawn with the scene camera on
+// every frame, so they always turn with the volume. See BKVolumeGeometryLayer.h.
+@property (nonatomic, strong, nullable) id<BKVolumeGeometryLayer> geometryLayer;
 
 // Renders one full-quality image of width x height pixels with the scene's camera, view
 // slab, clipping and appearance, and waits for the GPU (CPU-readable result, top row

@@ -182,6 +182,27 @@ typedef NS_ENUM(int32_t, BKProjection) {
 // cannot filter 32-bit float textures (MTLDevice.supports32BitFloatFiltering == NO).
 @property (nonatomic) BOOL manualFiltering;
 
+// --- Embedded objects (2026-11-14) ------------------------------------------------------
+// Opaque objects (meshes, lines, points: e.g. the 3D window's 3D point balls) drawn INSIDE the
+// volume picture, as VTK's ray caster does with its geometry: each ray stops where the nearest
+// opaque object starts, and the object's colour is laid under what the ray passed, so bone in
+// front hides the object and the object hides the bone behind it.
+// The objects come as two pictures, drawn beforehand with exactly this renderer's camera (see
+// BKVolumeGeometryLayer.h and BKMeshGeometryLayer in BorosKitMeshRender, which makes them):
+//   geometryColorTexture       colour premultiplied by opacity, transparent where nothing is
+//                              (RGBA, any float-readable format, e.g. MTLPixelFormatRGBA8Unorm)
+//   geometryRayDistanceTexture MTLPixelFormatR32Float: ray distance (mm) of the nearest opaque
+//                              object, +infinity where none, measured like this renderer's ray
+//                              (orthographic: from the image plane along the view direction;
+//                              perspective: from the eye) - BKMeshRenderer's rayDistanceTexture.
+// Both the same size; it may differ from the output size (the texel under each output pixel's
+// centre is used, e.g. full-size objects over a reduced-size ray-cast while dragging).
+// MIP / MinIP / average: no depth, the objects are laid over the picture. The slab cuts objects
+// (like VTK's clipping range); the crop box and clip planes do not (like VTK). Values in the
+// float output (exports) are never changed by objects. nil (default) = no objects.
+@property (nonatomic, strong, nullable) id<MTLTexture> geometryColorTexture;
+@property (nonatomic, strong, nullable) id<MTLTexture> geometryRayDistanceTexture;
+
 // Renders one image of width x height pixels and waits for the GPU to finish.
 // Returns nil + error if no volume is set or the GPU work fails.
 - (nullable BKRenderResult *)renderWithWidth:(NSUInteger)width

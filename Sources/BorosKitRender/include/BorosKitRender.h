@@ -9,6 +9,7 @@
 #import "BKPresetLoader.h"
 #import "BKVolumeCamera.h"
 #import "BKVolumeScene.h"
+#import "BKVolumeGeometryLayer.h"   // objects drawn inside the volume picture (2026-11-14)
 #import "BKRenderCore.h"      // plain-C maths shared with a future Vulkan backend
 #import "BKCameraMath.h"
 #import "BKBoxWidgetMath.h"

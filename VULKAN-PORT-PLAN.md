@@ -616,3 +616,21 @@ not an index or registry id, because it stays the same across restarts and backe
 - Applies to windows opened after the change. Objects that share GPU data must be made on the same
   device (a texture of one card cannot be used by another), so app-wide GPU workers are kept per
   card and a window keeps the card it started on.
+
+## 13. Objects inside the volume picture (added 2026-11-14)
+
+What: opaque meshes / lines / points (e.g. the 3D window's 3D point balls) are hidden by bone in
+front of them and hide bone behind them, like VTK's GPU ray caster with geometry.
+How (Metal, to copy as is):
+1. `BKVolumeGeometryLayer` (protocol, BorosKitRender) / `BKMeshGeometryLayer` (BorosKitMeshRender)
+   draws the objects with the volume's camera into two images: RGBA8 colour premultiplied by
+   opacity, and R32F ray distance in mm (+infinity = nothing), measured like the ray parameter t
+   of `bk_trace` (orthographic: from the image plane along the view; perspective: from the eye).
+2. The ray-cast kernels read both images at slots 3 / 4 (`p.useGeometry`, the former `reserved1`
+   field: the parameter block is still 464 bytes). Composite: the ray ends at the object, then
+   `color += (1 - alpha) * geomColor`. MIP / MinIP / average: objects laid over. The slab drops
+   objects outside it; crop planes do not cut objects (both as in VTK).
+Vulkan: same two images; a pipeline barrier (COLOR_ATTACHMENT_WRITE -> SHADER_READ, fragment ->
+compute) between the object pass and the ray-cast (Metal orders them inside one command buffer).
+Tests: `Tests/BorosKitMeshTests/BKVolumeGeometryTests.m` (ball in front seen, behind hidden, half
+buried, outside the scan, empty pictures change nothing, slab, MIP, scene thumbnails exclude).

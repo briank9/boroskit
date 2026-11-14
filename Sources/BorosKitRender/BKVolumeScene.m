@@ -403,6 +403,15 @@ static BKCameraFrame BKSceneCameraFrame(BKVolumeCamera *camera)
 // Why: never blocks; quality adapts to the measured cost.
 - (BOOL)encodeFrameToTexture:(id<MTLTexture>)target commandBuffer:(id<MTLCommandBuffer>)commandBuffer error:(NSError **)error
 {
+    return [self encodeFrameToTexture:target commandBuffer:commandBuffer includeGeometry:NO error:error];
+}
+
+// What: see the header. The objects are encoded first (same command buffer, so the GPU finishes
+// them before the ray-cast reads them), at the target's full size, with exactly the camera the
+// volume uses for this frame.
+- (BOOL)encodeFrameToTexture:(id<MTLTexture>)target commandBuffer:(id<MTLCommandBuffer>)commandBuffer
+             includeGeometry:(BOOL)includeGeometry error:(NSError **)error
+{
     NSInteger level;
     @synchronized (self) {
         level = _interacting ? _nextLevel : 0;
@@ -420,6 +429,19 @@ static BKCameraFrame BKSceneCameraFrame(BKVolumeCamera *camera)
     [_camera applyToRenderer:_renderer aspectRatio:full.width / MAX(full.height, 1.0)];
     [self applyViewSlab];
 
+    // Embedded objects (2026-11-14): drawn into two pictures the ray-cast reads (see
+    // BKVolumeRenderer geometry*Texture). Cleared again after encoding, so a later frame without
+    // objects (e.g. a preset thumbnail sharing this scene) never sees them.
+    id<MTLTexture> geometryColor = nil, geometryDistance = nil;
+    if (includeGeometry && _geometryLayer &&
+        ![_geometryLayer encodeGeometryWithCamera:_camera width:target.width height:target.height
+                                    commandBuffer:commandBuffer colorTexture:&geometryColor
+                               rayDistanceTexture:&geometryDistance]) {
+        geometryColor = geometryDistance = nil;   // nothing to draw (or failed): volume alone
+    }
+    _renderer.geometryColorTexture = geometryColor;
+    _renderer.geometryRayDistanceTexture = geometryDistance;
+
     BOOL ok;
     if (size.width >= full.width && size.height >= full.height) {
         ok = [_renderer encodeRenderToTexture:target commandBuffer:commandBuffer backgroundColor:_backgroundColor error:error];
@@ -436,6 +458,8 @@ static BKCameraFrame BKSceneCameraFrame(BKVolumeCamera *camera)
         ok = [_renderer encodeRenderToTexture:_lowResTexture commandBuffer:commandBuffer backgroundColor:_backgroundColor error:error];
         if (ok) [_renderer encodeUpscaleFromTexture:_lowResTexture toTexture:target commandBuffer:commandBuffer];
     }
+    _renderer.geometryColorTexture = nil;        // encoded above; the command buffer keeps them
+    _renderer.geometryRayDistanceTexture = nil;
     if (!ok) return NO;
 
     __weak BKVolumeScene *weakSelf = self;

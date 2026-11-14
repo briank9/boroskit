@@ -192,9 +192,13 @@ struct BKTraceResult {
 // and to the clipping plane, then marches through what is left.
 // brickEmpty / brickRange: the per-brick lists used for empty-space skipping (only
 // read when p.skipEmptySpace is 1).
+// geomT / geomColor: the embedded objects at this pixel (see bk_geometry_at): ray distance (mm,
+// same parameter t as this ray) of the nearest opaque object, +infinity if none, and their colour
+// premultiplied by opacity (0 = none). Without objects: INFINITY and float4(0).
 static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transferFn,
                               constant BKRenderParams &p, uint2 gid,
-                              device const uint *brickEmpty, device const uint *brickRange)
+                              device const uint *brickEmpty, device const uint *brickRange,
+                              float geomT, float4 geomColor)
 {
     constexpr sampler linearSampler(coord::normalized, filter::linear, address::clamp_to_edge);
     constexpr sampler tfSampler(coord::normalized, filter::linear, address::clamp_to_edge);
@@ -238,6 +242,10 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
     tHi = min(tHi, min(tBig.x, min(tBig.y, tBig.z)));
 
     bool singlePlane = false;
+    // Embedded objects and the slab (2026-11-14): VTK cuts objects with the camera clipping
+    // range, i.e. the slab. An object whose nearest surface lies outside the slab is dropped.
+    // (Crop box / clip planes do NOT cut objects, as in VTK: they only crop the volume.)
+    float slabLo = -INFINITY, slabHi = INFINITY;
     if (p.useSlab != 0) {
         // Signed distance from the slab's centre plane along the ray: s(t) = s0 + t*dn.
         float s0 = dot(origin - p.slabPoint.xyz, p.slabNormal.xyz);
@@ -245,14 +253,15 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
         float halfThick = 0.5f * p.slabThickness;
         if (p.slabThickness <= 0.0f) {
             // Thin slice: exactly one sample where the ray crosses the plane.
-            if (fabs(dn) < 1e-6f) { tHi = -INFINITY; }
-            else { float t = -s0 / dn; tLo = max(tLo, t); tHi = min(tHi, t); singlePlane = true; }
+            if (fabs(dn) < 1e-6f) { tHi = -INFINITY; slabHi = -INFINITY; }
+            else { float t = -s0 / dn; tLo = max(tLo, t); tHi = min(tHi, t); singlePlane = true; slabLo = slabHi = t; }
         } else if (fabs(dn) < 1e-6f) {
-            if (fabs(s0) > halfThick) tHi = -INFINITY;   // ray runs parallel, outside the slab
+            if (fabs(s0) > halfThick) { tHi = -INFINITY; slabHi = -INFINITY; }   // ray runs parallel, outside the slab
         } else {
             float ta = (-halfThick - s0) / dn, tb = (halfThick - s0) / dn;
             tLo = max(tLo, min(ta, tb));
             tHi = min(tHi, max(ta, tb));
+            slabLo = min(ta, tb); slabHi = max(ta, tb);
         }
     }
 
@@ -291,10 +300,23 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
     bool composite = (p.mode == BKModeComposite);
     BKTraceResult r;
 
+    // Embedded objects (2026-11-14, e.g. the 3D window's 3D point balls): drop them outside the
+    // slab (see slabLo / slabHi above); a pixel with only see-through objects (no opaque distance)
+    // is dropped too while a slab is on, since it can't be placed. In 3D (composite) mode the ray
+    // then ends where the nearest opaque object starts, so bone in front hides the object and the
+    // object hides the bone behind it - the classic VTK picture (VTK's GPU ray caster does the same
+    // with the depth of its opaque geometry).
+    if (p.useGeometry != 0 && p.useSlab != 0 && !(geomT >= slabLo && geomT <= slabHi)) {
+        geomT = INFINITY;
+        geomColor = float4(0.0f);
+    }
+    if (composite && geomT < tHi) tHi = geomT;
+
     if (!(tHi >= tLo) || isinf(tLo) || isinf(tHi)) {
-        // Ray misses the volume (or the slab).
-        r.value = composite ? 0.0f : p.outOfBoundsValue;
-        r.color = composite ? float4(0.0f) : float4(0.0f, 0.0f, 0.0f, 1.0f);
+        // Ray misses the volume (or the slab), or an object lies in front of the volume:
+        // only the object (if any) is seen.
+        r.value = composite ? geomColor.a : p.outOfBoundsValue;
+        r.color = composite ? geomColor : float4(geomColor.rgb + (1.0f - geomColor.a) * float3(0.0f), 1.0f);
         return r;
     }
 
@@ -354,6 +376,10 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
             color += (1.0f - alpha) * a * rgb;   // front-to-back compositing
             alpha += (1.0f - alpha) * a;
         }
+        // The embedded objects lie behind everything the ray passed (it stopped at them):
+        // laid under the volume's colour with the same front-to-back rule (colour premultiplied).
+        color += (1.0f - alpha) * geomColor.rgb;
+        alpha += (1.0f - alpha) * geomColor.a;
         r.value = alpha;
         r.color = float4(color, alpha);
         return r;
@@ -393,8 +419,30 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
 
     float gray = clamp((result - (p.windowCenter - 0.5f * p.windowWidth)) / max(p.windowWidth, 1e-6f), 0.0f, 1.0f);
     r.value = result;
-    r.color = float4(gray, gray, gray, 1.0f);
+    // MIP / MinIP / average have no depth: embedded objects are laid over the picture (as the
+    // overlay drew them before 2026-11-14). The value (export) is never changed by objects.
+    r.color = float4(geomColor.rgb + (1.0f - geomColor.a) * float3(gray), 1.0f);
     return r;
+}
+
+// What: the embedded objects under output pixel `gid` (see bk_trace): their ray distance (mm)
+// and premultiplied colour, read from the geometry pictures. Those may be bigger than the output
+// (e.g. full size while the volume is ray-cast at reduced size during a drag): the texel under
+// the output pixel's centre is used. p.useGeometry == 0: no objects (INFINITY, 0).
+// PORTING NOTE: plain image reads (no sampler), R32F + RGBA8/RGBA16F: core Vulkan formats.
+static void bk_geometry_at(constant BKRenderParams &p, uint2 gid,
+                           texture2d<float> geometryColor, texture2d<float> geometryDistance,
+                           thread float &geomT, thread float4 &geomColor)
+{
+    geomT = INFINITY;
+    geomColor = float4(0.0f);
+    if (p.useGeometry == 0) return;
+    uint gw = geometryDistance.get_width(), gh = geometryDistance.get_height();
+    if (gw == 0 || gh == 0) return;
+    uint gx = min((uint)(((float)gid.x + 0.5f) * (float)gw / (float)p.width), gw - 1);
+    uint gy = min((uint)(((float)gid.y + 0.5f) * (float)gh / (float)p.height), gh - 1);
+    geomT = geometryDistance.read(uint2(gx, gy)).r;
+    geomColor = geometryColor.read(uint2(gx, gy));
 }
 
 // One thread = one output pixel, written to CPU-readable buffers (8-bit RGBA + float).
@@ -406,11 +454,15 @@ kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
                        device float  *valueOut       [[buffer(2)]],
                        device const uint *brickEmpty    [[buffer(3)]],   /* 1 word per brick */
                        device const uint *brickRange    [[buffer(4)]],   /* lowest | highest << 16 */
+                       texture2d<float> geometryColor    [[texture(3)]],  /* embedded objects (p.useGeometry) */
+                       texture2d<float> geometryDistance [[texture(4)]],
                        uint2 gid                     [[thread_position_in_grid]])
 {
     if (gid.x >= p.width || gid.y >= p.height) return;
     uint index = gid.y * p.width + gid.x;
-    BKTraceResult r = bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange);
+    float geomT; float4 geomColor;
+    bk_geometry_at(p, gid, geometryColor, geometryDistance, geomT, geomColor);
+    BKTraceResult r = bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange, geomT, geomColor);
     valueOut[index] = r.value;
     colorOut[index] = bk_pack(r.color);
 }
@@ -425,10 +477,14 @@ kernel void bk_raycast_texture(texture3d<float> volume                      [[te
                                constant float4 &background                  [[buffer(1)]],
                                device const uint *brickEmpty                [[buffer(2)]],
                                device const uint *brickRange                [[buffer(3)]],
+                               texture2d<float> geometryColor               [[texture(3)]],  /* embedded objects (p.useGeometry) */
+                               texture2d<float> geometryDistance            [[texture(4)]],
                                uint2 gid                                    [[thread_position_in_grid]])
 {
     if (gid.x >= p.width || gid.y >= p.height) return;
-    BKTraceResult r = bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange);
+    float geomT; float4 geomColor;
+    bk_geometry_at(p, gid, geometryColor, geometryDistance, geomT, geomColor);
+    BKTraceResult r = bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange, geomT, geomColor);
     float3 rgb = r.color.rgb + (1.0f - r.color.a) * background.rgb;  // colour is premultiplied
     target.write(float4(clamp(rgb, 0.0f, 1.0f), 1.0f), gid);
 }

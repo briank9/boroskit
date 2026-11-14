@@ -322,7 +322,7 @@ static const NSUInteger kBKIdleTicksBeforePause = 30;
 
     id<MTLCommandBuffer> commandBuffer = [_scene.renderer.commandQueue commandBuffer];
     NSError *error = nil;
-    if (![_scene encodeFrameToTexture:drawable.texture commandBuffer:commandBuffer error:&error]) {
+    if (![_scene encodeFrameToTexture:drawable.texture commandBuffer:commandBuffer includeGeometry:YES error:&error]) {
         NSLog(@"BKVolumeView: cannot render (%@)", error);
         return;
     }

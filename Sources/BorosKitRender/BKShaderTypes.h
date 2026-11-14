@@ -76,7 +76,7 @@ typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment in C, Metal a
     int32_t skipEmptySpace;       /* 1 = jump over bricks that cannot change the picture (see BK_BRICK_SIZE) */ \
     int32_t clipPlaneCount;       /* number of valid entries in clipPlanes (0..BK_MAX_CLIP_PLANES) */ \
     int32_t manualFiltering;      /* 1 = interpolate the volume and the colour table by hand (8 / 2 exact reads) instead of the GPU's linear filter */ \
-    int32_t reserved1; \
+    int32_t useGeometry;          /* 1 = embedded opaque objects (meshes / lines / points) are given as a colour + ray-distance picture; each ray stops at them (see BKVolumeGeometryLayer.h) */ \
     int32_t reserved2;
 
 // Empty-space skipping (plain language): the volume is divided into small cubes
