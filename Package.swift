@@ -139,7 +139,8 @@ let package = Package(
             publicHeadersPath: "include",
             cSettings: [.unsafeFlags(["-fobjc-arc"])],
             cxxSettings: [.unsafeFlags(["-fobjc-arc"])],
-            linkerSettings: [.linkedFramework("Metal"), .linkedFramework("Foundation")]
+            linkerSettings: [.linkedFramework("Metal"), .linkedFramework("Foundation"),
+                             .linkedFramework("CoreText"), .linkedFramework("CoreGraphics")]   // system-font cube letters (2026-11-14)
         ),
         .testTarget(
             name: "BorosKitMeshTests",

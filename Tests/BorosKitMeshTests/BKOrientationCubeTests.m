@@ -290,9 +290,16 @@ static void BKTestCount(BKRenderResult *res, CGRect corner, NSUInteger *white, N
         XCTAssertGreaterThan(letter, 150u, @"view %d: the face's letter in its colour", v);
         XCTAssertLessThan(others, 20u, @"view %d: no other letter seen face-on", v);
     }
-    // Unknown characters are counted (the app logs them); nil restores L R P A S I.
+    // System-font letters (default since 2026-11-14): every character can be drawn, none skipped.
+    XCTAssertTrue(cube.usesSystemFont);
+    [cube setLabels:@[@"L", @"R", @"P", @"A", @"H", @"F"]];
+    XCTAssertEqual(cube.skippedCharacterCount, 0u);
+    // Hand-drawn core letters: unknown characters are counted (the app logs them).
+    cube.usesSystemFont = NO;
     [cube setLabels:@[@"L", @"R", @"P", @"A", @"H", @"F"]];
     XCTAssertEqual(cube.skippedCharacterCount, 2u);
+    cube.usesSystemFont = YES;
+    // nil restores L R P A S I.
     [cube setLabels:nil];
     XCTAssertEqualObjects(cube.labels, (@[@"L", @"R", @"P", @"A", @"S", @"I"]));
 }

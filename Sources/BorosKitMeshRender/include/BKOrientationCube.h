@@ -57,6 +57,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) simd_float3 cubeColor;
 @property (nonatomic) simd_float3 outlineColor;
 @property (nonatomic) BOOL showsOutlines;
+// YES (default, 2026-11-14 user choice): the letters are drawn with the system font (Helvetica Bold,
+// closest to the classic VTK cube letters; Core Text, Apple-only) as textured squares on the faces,
+// any label works. NO: the hand-drawn plain-C letters of BKOrientationCubeCore (A I L P R S only).
+@property (nonatomic) BOOL usesSystemFont;
 @property (nonatomic) CGFloat outlineWidth;
 
 // The drawable objects (cube, 6 letters, outlines), e.g. for an exporter or a test.

@@ -8,11 +8,84 @@
 #import "BKMetalDevice.h"
 #import "BKVolumeCamera.h"
 #import "BKVecSimd.h"
+#import <CoreText/CoreText.h>   // system-font cube letters (2026-11-14)
 #include <stdlib.h>
 
 // The letter outlines lie a hair in front of the letters (which lie 0.001 in front of the
 // faces), so the depth test never lets the letter fill flicker over its own edge.
 static const double BKCubeOutlineOffset = BK_ORIENTATION_CUBE_TEXT_OFFSET + 0.0005;
+
+// --- Letters from the system font (2026-11-14, user choice "A") --------------------------------------
+// What: one face label drawn with Core Text in Helvetica Bold (system bold if missing): the letter in
+// its classic colour with a thin grey edge (the classic cube's outline colour), on a see-through
+// background, as an 8-bit RGBA picture (straight alpha, row 0 = top). *glyphAspect = width / height
+// of the drawn letters' ink box (the picture has a small margin around it, *margin of the height).
+// Why: the user wanted the cube letters to look like the classic (VTK) ones; VTK's own vector font may
+// not be copied (licence rule: no third-party code/tables), and a plain bold sans-serif is the closest
+// match. The font outline comes from the operating system at run time; nothing is copied into BorosKit.
+// PORTING NOTE: Apple-only (Core Text). A Windows/Linux backend rasterises the same label with its
+// platform font into the same kind of picture; the plain-C core (face frames, sizes, corner camera)
+// is unchanged.
+static NSData *BKCubeLetterPicture(NSString *label, simd_float3 color, simd_float3 edge, BOOL withEdge,
+                                   NSUInteger *outWidth, NSUInteger *outHeight, double *glyphAspect, double *margin)
+{
+    if (label.length == 0) return nil;
+    const CGFloat fontSize = 160;
+    CTFontRef font = CTFontCreateWithName(CFSTR("Helvetica-Bold"), fontSize, NULL);
+    if (font == NULL) font = CTFontCreateUIFontForLanguage(kCTFontUIFontEmphasizedSystem, fontSize, NULL);
+    if (font == NULL) return nil;
+    CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+    CGFloat fill[4] = { color.x, color.y, color.z, 1 };
+    CGColorRef fillColor = CGColorCreate(rgb, fill);
+    CFStringRef keys[] = { kCTFontAttributeName, kCTForegroundColorAttributeName };
+    CFTypeRef values[] = { font, fillColor };
+    CFDictionaryRef attributes = CFDictionaryCreate(NULL, (const void **)keys, (const void **)values, 2,
+                                                    &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFAttributedStringRef text = CFAttributedStringCreate(NULL, (__bridge CFStringRef)label, attributes);
+    CTLineRef line = CTLineCreateWithAttributedString(text);
+    CGRect ink = CTLineGetImageBounds(line, NULL);   // the letters' ink box (baseline origin)
+    CGFloat pad = ceil(fontSize * 0.08);
+    size_t w = (size_t)ceil(ink.size.width + 2 * pad), h = (size_t)ceil(ink.size.height + 2 * pad);
+    NSMutableData *pixels = nil;
+    if (w > 0 && h > 0 && ink.size.width > 0 && ink.size.height > 0) {
+        pixels = [NSMutableData dataWithLength:w * h * 4];
+        CGContextRef ctx = CGBitmapContextCreate(pixels.mutableBytes, w, h, 8, w * 4, rgb, kCGImageAlphaPremultipliedLast);
+        CGContextSetShouldAntialias(ctx, true);
+        CGContextSetTextPosition(ctx, pad - ink.origin.x, pad - ink.origin.y);
+        CTLineDraw(line, ctx);   // fill
+        if (withEdge) {
+            // Thin grey edge around the letters (the classic cube's letter outlines).
+            CGContextSetTextDrawingMode(ctx, kCGTextStroke);
+            CGContextSetRGBStrokeColor(ctx, edge.x, edge.y, edge.z, 1);
+            CGContextSetLineWidth(ctx, fontSize * 0.025);
+            CGContextSetTextPosition(ctx, pad - ink.origin.x, pad - ink.origin.y);
+            CFArrayRef runs = CTLineGetGlyphRuns(line);
+            for (CFIndex r = 0; r < CFArrayGetCount(runs); r++) {
+                CTRunRef run = (CTRunRef)CFArrayGetValueAtIndex(runs, r);
+                CFIndex count = CTRunGetGlyphCount(run);
+                CGGlyph glyphs[count]; CGPoint positions[count];
+                CTRunGetGlyphs(run, CFRangeMake(0, count), glyphs);
+                CTRunGetPositions(run, CFRangeMake(0, count), positions);
+                for (CFIndex g = 0; g < count; g++) { positions[g].x += pad - ink.origin.x; positions[g].y += pad - ink.origin.y; }
+                CTFontDrawGlyphs(font, glyphs, positions, count, ctx);
+            }
+        }
+        CGContextRelease(ctx);
+        // Premultiplied (Core Graphics) -> straight alpha (BKMeshTexture modulates like VTK).
+        uint8_t *p = pixels.mutableBytes;
+        for (size_t i = 0; i < w * h; i++) {
+            uint8_t a = p[4 * i + 3];
+            if (a > 0 && a < 255)
+                for (int k = 0; k < 3; k++) p[4 * i + k] = (uint8_t)MIN(255, (p[4 * i + k] * 255 + a / 2) / a);
+        }
+    }
+    if (glyphAspect) *glyphAspect = ink.size.height > 0 ? ink.size.width / ink.size.height : 1;
+    if (margin) *margin = ink.size.height > 0 ? pad / ink.size.height : 0;
+    if (outWidth) *outWidth = w;
+    if (outHeight) *outHeight = h;
+    CFRelease(line); CFRelease(text); CFRelease(attributes); CGColorRelease(fillColor); CGColorSpaceRelease(rgb); CFRelease(font);
+    return pixels;
+}
 
 @implementation BKOrientationCube
 {
@@ -43,6 +116,7 @@ static const double BKCubeOutlineOffset = BK_ORIENTATION_CUBE_TEXT_OFFSET + 0.00
         _cubeColor = BKV3fToSimd(BKOrientationCubeDefaultCubeColor());
         _outlineColor = BKV3fToSimd(BKOrientationCubeDefaultOutlineColor());
         [self buildCube];
+        _usesSystemFont = YES;   // 2026-11-14: letters from the system font (user choice); NO = hand-drawn core letters
         [self setLabels:nil];
     }
     return self;
@@ -91,6 +165,11 @@ static const double BKCubeOutlineOffset = BK_ORIENTATION_CUBE_TEXT_OFFSET + 0.00
     for (int32_t f = 0; f < BKCubeFaceCount; f++) {
         const char *label = _labels[f].UTF8String ?: "";
         BKOrientationLabelSize size = BKOrientationCubeLabelSize(label);
+        if (_usesSystemFont) {
+            // 2026-11-14: system-font letters (see BKCubeLetterPicture) - any label works.
+            [_letterObjects addObject:[self fontLetterForFace:f label:_labels[f]]];
+            continue;
+        }
         _skipped += size.skippedCount;
         float *v = calloc(MAX(size.vertexCount, 1u) * 3, sizeof(float));
         uint32_t *t = calloc(MAX(size.triangleCount, 1u) * 3, sizeof(uint32_t));
@@ -130,6 +209,58 @@ static const double BKCubeOutlineOffset = BK_ORIENTATION_CUBE_TEXT_OFFSET + 0.00
     [self updateRendererObjects];
 }
 
+// What: the face's label as one textured square lying just in front of the face (offset as the
+// classic letters), the letters' ink box BK_ORIENTATION_CUBE_TEXT_SCALE high (shrunk to at most
+// BK_ORIENTATION_CUBE_MAX_TEXT_WIDTH wide), centred, readable from outside (face frame of the core).
+- (BKMeshObject *)fontLetterForFace:(int32_t)f label:(NSString *)label
+{
+    NSUInteger w = 0, h = 0;
+    double aspect = 1, margin = 0;
+    NSData *pixels = BKCubeLetterPicture(label, _letterColors[f], _outlineColor, _showsOutlines, &w, &h, &aspect, &margin);
+    BKMeshObject *letter = nil;
+    if (pixels && w && h) {
+        BKVec3d normal, up, right;
+        BKOrientationCubeFaceFrame(f, &normal, &up, &right);
+        double inkH = BK_ORIENTATION_CUBE_TEXT_SCALE;
+        if (inkH * aspect > BK_ORIENTATION_CUBE_MAX_TEXT_WIDTH) inkH = BK_ORIENTATION_CUBE_MAX_TEXT_WIDTH / aspect;
+        double halfH = 0.5 * inkH * (1 + 2 * margin);               // the picture includes its margin
+        double halfW = halfH * (double)w / (double)h;
+        BKVec3d c = BKV3dScale(normal, 0.5 + BK_ORIENTATION_CUBE_TEXT_OFFSET);
+        BKVec3d corners[4] = {
+            BKV3dAdd(BKV3dAdd(c, BKV3dScale(right, -halfW)), BKV3dScale(up, -halfH)),   // bottom-left
+            BKV3dAdd(BKV3dAdd(c, BKV3dScale(right, halfW)), BKV3dScale(up, -halfH)),    // bottom-right
+            BKV3dAdd(BKV3dAdd(c, BKV3dScale(right, halfW)), BKV3dScale(up, halfH)),     // top-right
+            BKV3dAdd(BKV3dAdd(c, BKV3dScale(right, -halfW)), BKV3dScale(up, halfH)),    // top-left
+        };
+        simd_float3 p[4], n[4];
+        for (int i = 0; i < 4; i++) {
+            p[i] = simd_make_float3((float)corners[i].x, (float)corners[i].y, (float)corners[i].z);
+            n[i] = simd_make_float3((float)normal.x, (float)normal.y, (float)normal.z);
+        }
+        uint32_t idx[6] = { 0, 1, 2, 0, 2, 3 };   // anticlockwise seen from outside (right x up = normal)
+        BKMesh *mesh = [[BKMesh alloc] initWithVertices:p vertexCount:4 indices:idx indexCount:6 normals:n colors:NULL error:NULL];
+        if (mesh) {
+            mesh.name = [NSString stringWithFormat:@"orientation letter %@", label];
+            letter = [[BKMeshObject alloc] initWithMesh:mesh];
+            simd_float2 tc[4] = { simd_make_float2(0, 1), simd_make_float2(1, 1), simd_make_float2(1, 0), simd_make_float2(0, 0) };   // row 0 = top
+            [letter setTextureCoordinates:tc count:4];
+            BKMeshTexture *texture = [[BKMeshTexture alloc] initWithPixels:pixels.bytes components:4 width:w height:h];
+            texture.interpolate = YES;
+            texture.repeat = NO;
+            letter.texture = texture;
+            letter.color = simd_make_float3(1, 1, 1);   // colours are in the picture
+            letter.lit = NO;
+            letter.useVertexColors = NO;
+            letter.faceCulling = BKMeshFaceCullingBack;   // never seen mirrored from inside
+        }
+    }
+    if (letter == nil) {
+        letter = [[BKMeshObject alloc] initWithMesh:[[BKMesh alloc] init]];
+        letter.visible = NO;
+    }
+    return letter;
+}
+
 - (void)updateRendererObjects
 {
     _renderer.objects = [@[_cubeObject] arrayByAddingObjectsFromArray:_letterObjects];
@@ -140,6 +271,7 @@ static const double BKCubeOutlineOffset = BK_ORIENTATION_CUBE_TEXT_OFFSET + 0.00
 {
     if (face < 0 || face >= BKCubeFaceCount) return;
     _letterColors[face] = color;
+    if (_usesSystemFont) { [self setLabels:_labels]; return; }   // colour is in the letter picture
     if ((NSUInteger)face < _letterObjects.count) _letterObjects[face].color = color;
 }
 
@@ -149,8 +281,14 @@ static const double BKCubeOutlineOffset = BK_ORIENTATION_CUBE_TEXT_OFFSET + 0.00
 }
 
 - (void)setCubeColor:(simd_float3)cubeColor { _cubeColor = cubeColor; _cubeObject.color = cubeColor; }
-- (void)setOutlineColor:(simd_float3)outlineColor { _outlineColor = outlineColor; _outlineObject.color = outlineColor; }
-- (void)setShowsOutlines:(BOOL)shows { _showsOutlines = shows; _outlineObject.visible = shows && _outlineObject.segmentCount > 0; }
+- (void)setOutlineColor:(simd_float3)outlineColor { _outlineColor = outlineColor; _outlineObject.color = outlineColor; if (_usesSystemFont) [self setLabels:_labels]; }
+- (void)setShowsOutlines:(BOOL)shows
+{
+    _showsOutlines = shows;
+    _outlineObject.visible = shows && _outlineObject.segmentCount > 0;
+    if (_usesSystemFont) [self setLabels:_labels];   // the edge is part of the letter picture
+}
+- (void)setUsesSystemFont:(BOOL)usesSystemFont { _usesSystemFont = usesSystemFont; [self setLabels:_labels]; }
 - (void)setOutlineWidth:(CGFloat)width { _outlineWidth = MAX(width, 0.1); _outlineObject.lineWidth = _outlineWidth; }
 
 - (NSArray<BKMeshObject *> *)meshObjects { return _renderer.objects; }
