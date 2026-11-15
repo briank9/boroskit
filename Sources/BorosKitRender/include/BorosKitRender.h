@@ -13,6 +13,7 @@
 #import "BKRenderCore.h"      // plain-C maths shared with a future Vulkan backend
 #import "BKCameraMath.h"
 #import "BKSlabGeometryCore.h" // MPR / curved-MPR slab picture geometry (plain C, 2026-11-14)
+#import "BKSlabCameraCore.h"   // MPR / curved-MPR slab camera + mouse tools (plain C, 2026-11-15)
 #import "BKVecSimd.h"        // Apple glue: BorosKit neutral vectors (BorosKitVec) <-> simd
 #import "BKBoxWidgetMath.h"
 #import "BKCropBoxCore.h"
