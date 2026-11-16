@@ -79,6 +79,21 @@ static const BKVec3d kNodes[7] = { {-40, -20, 900}, {-30, 5, 901}, {-15, 22, 902
     XCTAssertEqualWithAccuracy(split.length, path.length, 0.02);
 }
 
+- (void)testPlaneIntersections
+{
+    BKCurvePath *path = [BKCurvePath pathThroughNodes:kNodes count:7];
+    NSArray<NSNumber *> *rel = nil;
+    NSArray<NSValue *> *hits = [path intersectionsWithPlanePoint:BKV3d(0, 0, 0) normal:BKV3d(0, 1, 0) relativePositions:&rel];
+    XCTAssertEqual(hits.count, (NSUInteger)2);   // the arch crosses y = 0 on both sides
+    BKVec3d first;
+    [hits[0] getValue:&first];
+    XCTAssertEqualWithAccuracy(first.y, 0, 1e-9);
+    XCTAssertLessThan(first.x, 0);               // left side first (in order along the curve)
+    XCTAssertLessThan(rel[0].doubleValue, rel[1].doubleValue);
+    BKVec3d back = [path vectorAtRelativePosition:rel[0].doubleValue];
+    XCTAssertEqualWithAccuracy(BKV3dDistance(back, first), 0, 1e-6);
+}
+
 - (void)testOutlines
 {
     BKCurvePath *path = [BKCurvePath pathThroughNodes:kNodes count:7];

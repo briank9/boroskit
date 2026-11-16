@@ -126,6 +126,12 @@ double BKCurvePolylineClosestToLine(const BKCurvePolyline *polyline, BKVec3d lin
 int BKCurvePolylineSplitAtPlane(const BKCurvePolyline *polyline, BKVec3d planePoint, BKVec3d planeNormal,
                                 BKCurvePolyline *out);
 
+// What: the points where the polyline crosses or touches the plane (point, normal), in order along it,
+// and their relative positions (0..1 of the length); either output may be NULL; returns how many (at most
+// maxResults). A vertex lying exactly on the plane counts once.
+size_t BKCurvePolylinePlaneIntersections(const BKCurvePolyline *polyline, BKVec3d planePoint, BKVec3d planeNormal,
+                                         BKVec3d *points, double *relativePositions, size_t maxResults);
+
 // What: the polyline moved `distance` mm along its normal (initialNormal as in BKCurvePolylineSample),
 // sampled every `spacing` mm (the slab borders drawn beside the curve). Returns 0 on bad input.
 int BKCurvePolylineOutline(const BKCurvePolyline *polyline, double distance, double spacing,

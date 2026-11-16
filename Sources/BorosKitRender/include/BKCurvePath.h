@@ -79,6 +79,11 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p);
                        relativePositions:(nullable double *)relativePositions maxSamples:(NSUInteger)maxSamples;
 - (double)projectedLengthAlongDirection:(BKVec3d)direction;
 
+// What: where the path crosses the plane (BKCurvePolylinePlaneIntersections), in order: NSValues of
+// BKVec3d ("{BKVec3d=ddd}" encoded) and, optionally, NSNumbers of the relative positions.
+- (NSArray<NSValue *> *)intersectionsWithPlanePoint:(BKVec3d)planePoint normal:(BKVec3d)normal
+                                  relativePositions:(NSArray<NSNumber *> * _Nullable * _Nullable)relativePositions;
+
 // --- planes -----------------------------------------------------------------------------------
 @property (nonatomic, readonly) BOOL isPlanar;   // all points within 1e-4 mm of one plane
 - (BOOL)getLeastSquaresPlanePoint:(BKVec3d *)point normal:(BKVec3d *)normal;

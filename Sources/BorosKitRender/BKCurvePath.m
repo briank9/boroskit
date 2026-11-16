@@ -256,6 +256,25 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
     return length;
 }
 
+- (NSArray<NSValue *> *)intersectionsWithPlanePoint:(BKVec3d)planePoint normal:(BKVec3d)normal
+                                  relativePositions:(NSArray<NSNumber *> **)relativePositions
+{
+    const BKCurvePolyline *p = [self polyline];
+    size_t max = p->count + 1;
+    BKVec3d *pts = malloc(sizeof(BKVec3d) * max);
+    double *rel = malloc(sizeof(double) * max);
+    size_t n = (pts && rel) ? BKCurvePolylinePlaneIntersections(p, planePoint, normal, pts, rel, max) : 0;
+    NSMutableArray *points = [NSMutableArray arrayWithCapacity:n];
+    NSMutableArray *positions = [NSMutableArray arrayWithCapacity:n];
+    for (size_t i = 0; i < n; i++) {
+        [points addObject:[NSValue valueWithBytes:&pts[i] objCType:@encode(BKVec3d)]];
+        [positions addObject:@(rel[i])];
+    }
+    free(pts); free(rel);
+    if (relativePositions) *relativePositions = positions;
+    return points;
+}
+
 #pragma mark - Planes
 
 - (BOOL)isPlanar { return BKCurvePolylineIsPlanar([self polyline], 1e-4) ? YES : NO; }

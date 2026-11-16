@@ -485,6 +485,35 @@ int BKCurvePolylineSplitAtPlane(const BKCurvePolyline *p, BKVec3d planePoint, BK
     return 1;
 }
 
+size_t BKCurvePolylinePlaneIntersections(const BKCurvePolyline *p, BKVec3d planePoint, BKVec3d planeNormal,
+                                         BKVec3d *points, double *relativePositions, size_t maxResults)
+{
+    if (p == NULL || p->points == NULL || p->count == 0 || maxResults == 0) return 0;
+    BKVec3d n = BKCUnit(planeNormal);
+    if (BKV3dLength(n) == 0) return 0;
+    double total = BKCurvePolylineLength(p), walked = 0;
+    size_t found = 0;
+    #define BKC_EMIT(v, at) do { if (points) points[found] = (v); \
+        if (relativePositions) relativePositions[found] = total > 0 ? (at) / total : 0.0; \
+        if (++found >= maxResults) return found; } while (0)
+    double s0 = BKV3dDot(BKV3dSub(p->points[0], planePoint), n);
+    if (s0 == 0) BKC_EMIT(p->points[0], 0.0);
+    for (size_t i = 1; i < p->count; i++) {
+        BKVec3d a = p->points[i - 1], b = p->points[i];
+        double l = BKV3dDistance(a, b);
+        double s1 = BKV3dDot(BKV3dSub(b, planePoint), n);
+        if ((s0 < 0 && s1 > 0) || (s0 > 0 && s1 < 0)) {
+            double t = s0 / (s0 - s1);
+            BKC_EMIT(BKV3dAdd(a, BKV3dScale(BKV3dSub(b, a), t)), walked + t * l);
+        }
+        if (s1 == 0) BKC_EMIT(b, walked + l);
+        walked += l;
+        s0 = s1;
+    }
+    #undef BKC_EMIT
+    return found;
+}
+
 int BKCurvePolylineOutline(const BKCurvePolyline *p, double distance, double spacing, BKVec3d initialNormal,
                            BKCurvePolyline *out)
 {
