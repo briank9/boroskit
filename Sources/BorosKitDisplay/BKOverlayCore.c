@@ -536,7 +536,17 @@ void BKOverlayDrawImage(BKOverlayList *l, int32_t image, BKVec2f origin, BKVec2f
 }
 
 // --- CPU reference rasteriser -------------------------------------------------------------------------
-static float Edge2(BKVec2f a, BKVec2f b, float px, float py) { return (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x); }
+// Which side of edge a->b the point is on (> 0 / < 0, 0 on the edge). The edge is always evaluated with
+// its two ends in one fixed order (and the sign flipped back), so two triangles sharing an edge get
+// exactly opposite values - otherwise rounding can make both miss a pixel centre lying on the edge
+// (seen 2026-11-16: a hole at the centre of a round dot, where its fan triangles meet).
+static float Edge2(BKVec2f a, BKVec2f b, float px, float py)
+{
+    int swap = (b.x < a.x) || (b.x == a.x && b.y < a.y);
+    BKVec2f p = swap ? b : a, q = swap ? a : b;
+    float e = (q.x - p.x) * (py - p.y) - (q.y - p.y) * (px - p.x);
+    return swap ? -e : e;
+}
 // Top-left rule (as GPUs fill, y down): a pixel centre exactly on an edge belongs to the triangle when
 // the edge is a "top" edge (horizontal, triangle below it) or a "left" edge (triangle to its right).
 // `c` is the triangle's third corner (tells on which side the triangle lies).
