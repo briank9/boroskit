@@ -552,15 +552,15 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
 // What: encodes + runs the CPU-readable ray cast into `colorBuffer` / `valueBuffer` and waits for it.
 // `valuesOnly` = the kernel skips the RGBA picture (colorBuffer may then be a tiny placeholder).
 // Shared by -renderWithWidth:... and -renderValuesInto:... .
-- (BOOL)runRaycastWidth:(NSUInteger)width height:(NSUInteger)height
-            colorBuffer:(id<MTLBuffer>)colorBuffer valueBuffer:(id<MTLBuffer>)valueBuffer
-             valuesOnly:(BOOL)valuesOnly error:(NSError **)error
+- (id<MTLCommandBuffer>)commitRaycastWidth:(NSUInteger)width height:(NSUInteger)height
+                               colorBuffer:(id<MTLBuffer>)colorBuffer valueBuffer:(id<MTLBuffer>)valueBuffer
+                                valuesOnly:(BOOL)valuesOnly error:(NSError **)error
 {
     BKTransferFunction *tf = [self effectiveTransferFunction];
     [self updateTransferFunctionTexture:tf];
 
     BKRenderParams params;
-    if (![self fillParams:&params width:width height:height tf:tf error:error]) return NO;
+    if (![self fillParams:&params width:width height:height tf:tf error:error]) return nil;
     params.valuesOnly = valuesOnly ? 1 : 0;
 
     id<MTLCommandBuffer> cb = [_queue commandBuffer];
@@ -584,6 +584,17 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     [enc dispatchThreadgroups:groups threadsPerThreadgroup:group];
     [enc endEncoding];
     [cb commit];
+    return cb;
+}
+
+// What: the same, waiting for the GPU (the synchronous renders).
+- (BOOL)runRaycastWidth:(NSUInteger)width height:(NSUInteger)height
+            colorBuffer:(id<MTLBuffer>)colorBuffer valueBuffer:(id<MTLBuffer>)valueBuffer
+             valuesOnly:(BOOL)valuesOnly error:(NSError **)error
+{
+    id<MTLCommandBuffer> cb = [self commitRaycastWidth:width height:height colorBuffer:colorBuffer
+                                           valueBuffer:valueBuffer valuesOnly:valuesOnly error:error];
+    if (cb == nil) return NO;
     [cb waitUntilCompleted];
     if (cb.status == MTLCommandBufferStatusError) {
         if (error) *error = cb.error ?: BKRendererError(16, @"The GPU failed to render the image.");
@@ -652,6 +663,29 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     if (!direct)
         memcpy(destination, valueBuffer.contents, bytes);
     return YES;
+}
+
+- (id<MTLCommandBuffer>)commitValuesInto:(float *)destination capacity:(NSUInteger)capacityBytes
+                                   width:(NSUInteger)width height:(NSUInteger)height error:(NSError **)error
+{
+    NSUInteger page = (NSUInteger)getpagesize();
+    if (!_volumeTexture || width == 0 || height == 0 || destination == NULL ||
+        capacityBytes < width * height * sizeof(float) ||
+        ((uintptr_t)destination % page) != 0 || capacityBytes % page != 0) {
+        if (error) *error = BKRendererError(14, @"Render-ahead needs a volume and page-aligned memory of whole pages.");
+        return nil;
+    }
+    id<MTLBuffer> valueBuffer = [_device newBufferWithBytesNoCopy:destination length:capacityBytes
+                                                          options:MTLResourceStorageModeShared deallocator:nil];
+    if (_valuesOnlyColorPlaceholder == nil)
+        _valuesOnlyColorPlaceholder = [_device newBufferWithLength:16 options:MTLResourceStorageModePrivate];
+    if (!valueBuffer || !_valuesOnlyColorPlaceholder) {
+        if (error) *error = BKRendererError(15, @"Not enough memory for the output image.");
+        return nil;
+    }
+    // The command buffer keeps valueBuffer (and so the wrapped memory reference) alive while it runs.
+    return [self commitRaycastWidth:width height:height colorBuffer:_valuesOnlyColorPlaceholder
+                        valueBuffer:valueBuffer valuesOnly:YES error:error];
 }
 
 // Exposes the queue for on-screen views (see header).

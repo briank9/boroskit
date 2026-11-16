@@ -190,6 +190,42 @@ static const NSUInteger kSize = 64;
     free(plain);
 }
 
+// What (2026-11-15): render-ahead - two pictures committed back to back without waiting, then the
+// renderer set up differently; after waiting, each buffer holds exactly its own synchronous result.
+- (void)testCommitValuesIntoRendersAhead
+{
+    if (![self requireGPU]) return;
+    _renderer.mode = BKRenderModeMIP;
+    _renderer.slabEnabled = YES;
+    _renderer.slabThickness = 4;
+    NSUInteger bytes = kSize * kSize * sizeof(float), page = (NSUInteger)getpagesize();
+    NSUInteger rounded = (bytes + page - 1) / page * page;
+
+    _renderer.slabPlane = N3PlaneMake(N3VectorMake(0, 0, 5), N3VectorMake(0, 0, 1));
+    NSData *expectedA = [[self render].floatData copy];
+    _renderer.slabPlane = N3PlaneMake(N3VectorMake(0, 0, 31), N3VectorMake(0, 0, 1));
+    NSData *expectedB = [[self render].floatData copy];
+
+    float *a = NULL, *b = NULL;
+    XCTAssertEqual(posix_memalign((void **)&a, page, rounded), 0);
+    XCTAssertEqual(posix_memalign((void **)&b, page, rounded), 0);
+    NSError *error = nil;
+    _renderer.slabPlane = N3PlaneMake(N3VectorMake(0, 0, 5), N3VectorMake(0, 0, 1));
+    id<MTLCommandBuffer> cbA = [_renderer commitValuesInto:a capacity:rounded width:kSize height:kSize error:&error];
+    _renderer.slabPlane = N3PlaneMake(N3VectorMake(0, 0, 31), N3VectorMake(0, 0, 1));
+    id<MTLCommandBuffer> cbB = [_renderer commitValuesInto:b capacity:rounded width:kSize height:kSize error:&error];
+    _renderer.slabPlane = N3PlaneMake(N3VectorMake(0, 0, 50), N3VectorMake(0, 0, 1));   // must not affect a / b
+    XCTAssertNotNil(cbA, @"%@", error);
+    XCTAssertNotNil(cbB, @"%@", error);
+    [cbA waitUntilCompleted];
+    [cbB waitUntilCompleted];
+    XCTAssertEqual(memcmp(a, expectedA.bytes, bytes), 0);
+    XCTAssertEqual(memcmp(b, expectedB.bytes, bytes), 0);
+    free(a); free(b);
+    float unaligned[16];
+    XCTAssertNil([_renderer commitValuesInto:unaligned capacity:sizeof(unaligned) width:2 height:2 error:&error]);
+}
+
 // Zero-thickness slab = one interpolated sample on the plane (a classic MPR slice).
 // z = 10.25 lies between voxels, so this also checks trilinear interpolation:
 // -1000 + 10 * 10.25 = -897.5.

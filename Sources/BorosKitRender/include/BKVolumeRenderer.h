@@ -226,6 +226,19 @@ typedef NS_ENUM(int32_t, BKProjection) {
                   height:(NSUInteger)height
                    error:(NSError * _Nullable * _Nullable)error;
 
+// What (2026-11-15): like -renderValuesInto:... but returns as soon as the work is on the GPU
+// ("render-ahead"): the returned command buffer finishes later; the caller must keep `destination`
+// alive and call -waitUntilCompleted on it (and check its status) before reading the values. Needs
+// page-aligned memory of whole pages (the GPU writes it directly); returns nil (and sets error)
+// otherwise or on failure. The renderer's settings are captured when this returns, so it may be
+// set up for the next picture right away. Why: the MPR / curved-MPR windows can start the other
+// views' pictures while the CPU still works on the current one, instead of waiting for each.
+- (nullable id<MTLCommandBuffer>)commitValuesInto:(float *)destination
+                                         capacity:(NSUInteger)capacityBytes
+                                            width:(NSUInteger)width
+                                           height:(NSUInteger)height
+                                            error:(NSError * _Nullable * _Nullable)error;
+
 // --- GPU-only output (on-screen views) ----------------------------------------------
 // The command queue this renderer submits to. On-screen views create their command
 // buffers here so the 3D image and its presentation are ordered on one queue.
