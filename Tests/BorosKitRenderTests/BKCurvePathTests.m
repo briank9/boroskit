@@ -134,6 +134,39 @@ static const BKVec3d kNodes[7] = { {-40, -20, 900}, {-30, 5, 901}, {-15, 22, 902
     XCTAssertEqual([square elementAtIndex:3 control1:NULL control2:NULL endpoint:&end], BKCurvePathLineTo);
     XCTAssertEqualWithAccuracy(BKV3dDistance(end, BKV3d(0, 0, 0)), 0, 0);
     XCTAssertEqualWithAccuracy(square.length, 10 + 10 + sqrt(200), 1e-9);
+    [square setElementAtIndex:2 control1:BKV3d(0, 0, 0) control2:BKV3d(0, 0, 0) endpoint:BKV3d(10, 20, 0)];   // cache must refresh
+    XCTAssertEqualWithAccuracy(square.length, 10 + 20 + sqrt(500), 1e-9);
+    [square setElementAtIndex:99 control1:BKV3d(0, 0, 0) control2:BKV3d(0, 0, 0) endpoint:BKV3d(0, 0, 0)];    // ignored
+    XCTAssertEqual(square.elementCount, (NSUInteger)4);
+}
+
+// What: the classic half-open rule at vertices (even counts for ROI scan-line fills) and no crossing on
+// the jump between subpaths.
+- (void)testIntersectionVertexRuleAndSubpaths
+{
+    // a triangle whose top vertex (5, 10) touches the scan line y = 10 from below: classic counts 2
+    BKCurvePath *tri = [[BKCurvePath alloc] init];
+    [tri moveTo:BKV3d(0, 0, 0)]; [tri lineTo:BKV3d(5, 10, 0)]; [tri lineTo:BKV3d(10, 0, 0)]; [tri close];
+    XCTAssertEqual([tri intersectionsWithPlanePoint:BKV3d(0, 10, 0) normal:BKV3d(0, 1, 0) relativePositions:NULL].count, (NSUInteger)2);
+    // the bottom edge lies ON the scan line y = 0 (counts as above): entering/leaving from above = 0
+    XCTAssertEqual([tri intersectionsWithPlanePoint:BKV3d(0, 0, 0) normal:BKV3d(0, 1, 0) relativePositions:NULL].count, (NSUInteger)0);
+    // pass-through vertex: a zig-zag crossing y = 5 exactly at its middle vertex counts once
+    BKCurvePath *zig = [[BKCurvePath alloc] init];
+    [zig moveTo:BKV3d(0, 0, 0)]; [zig lineTo:BKV3d(5, 5, 0)]; [zig lineTo:BKV3d(10, 10, 0)];
+    XCTAssertEqual([zig intersectionsWithPlanePoint:BKV3d(0, 5, 0) normal:BKV3d(0, 1, 0) relativePositions:NULL].count, (NSUInteger)1);
+    // two subpaths, both below y = 5, the jump between them crosses nothing visible: 0 hits; the
+    // second one crosses y = 5 itself: 1 hit, relative position along the joined path
+    BKCurvePath *two = [[BKCurvePath alloc] init];
+    [two moveTo:BKV3d(0, 0, 0)]; [two lineTo:BKV3d(10, 0, 0)];
+    [two moveTo:BKV3d(10, 20, 0)]; [two lineTo:BKV3d(0, 20, 0)];
+    XCTAssertEqual([two intersectionsWithPlanePoint:BKV3d(0, 5, 0) normal:BKV3d(0, 1, 0) relativePositions:NULL].count, (NSUInteger)0);
+    [two lineTo:BKV3d(0, 0, 0)];
+    NSArray<NSNumber *> *rel = nil;
+    NSArray<NSValue *> *hits = [two intersectionsWithPlanePoint:BKV3d(0, 5, 0) normal:BKV3d(0, 1, 0) relativePositions:&rel];
+    XCTAssertEqual(hits.count, (NSUInteger)1);
+    BKVec3d h; [hits[0] getValue:&h];
+    XCTAssertEqualWithAccuracy(BKV3dDistance(h, BKV3d(0, 5, 0)), 0, 1e-12);
+    XCTAssertEqualWithAccuracy(BKV3dDistance([two vectorAtRelativePosition:rel[0].doubleValue], h), 0, 1e-9);
 }
 
 @end

@@ -507,29 +507,30 @@ int BKCurvePolylineSplitAtPlane(const BKCurvePolyline *p, BKVec3d planePoint, BK
 size_t BKCurvePolylinePlaneIntersections(const BKCurvePolyline *p, BKVec3d planePoint, BKVec3d planeNormal,
                                          BKVec3d *points, double *relativePositions, size_t maxResults)
 {
-    if (p == NULL || p->points == NULL || p->count == 0 || maxResults == 0) return 0;
+    if (p == NULL || p->points == NULL || p->count < 2 || maxResults == 0) return 0;
     BKVec3d n = BKCUnit(planeNormal);
     if (BKV3dLength(n) == 0) return 0;
     double total = BKCurvePolylineLength(p), walked = 0;
     size_t found = 0;
-    #define BKC_EMIT(v, at) do { if (points) points[found] = (v); \
-        if (relativePositions) relativePositions[found] = total > 0 ? (at) / total : 0.0; \
-        if (++found >= maxResults) return found; } while (0)
+    // Half-open rule (the classic one, recorded from the old engine 2026-11-15): a point is "below" when
+    // its signed distance is < 0, otherwise "above" (a point ON the plane counts as above). A piece is
+    // crossed when its two ends are on different sides. So a curve passing through the plane at a vertex
+    // counts once, and a vertex that only touches the plane from below counts twice (from above: zero) -
+    // the even/odd count a scan-line fill (ROI masks) needs to pair crossings into runs.
     double s0 = BKV3dDot(BKV3dSub(p->points[0], planePoint), n);
-    if (s0 == 0) BKC_EMIT(p->points[0], 0.0);
-    for (size_t i = 1; i < p->count; i++) {
+    for (size_t i = 1; i < p->count && found < maxResults; i++) {
         BKVec3d a = p->points[i - 1], b = p->points[i];
         double l = BKV3dDistance(a, b);
         double s1 = BKV3dDot(BKV3dSub(b, planePoint), n);
-        if ((s0 < 0 && s1 > 0) || (s0 > 0 && s1 < 0)) {
-            double t = s0 / (s0 - s1);
-            BKC_EMIT(BKV3dAdd(a, BKV3dScale(BKV3dSub(b, a), t)), walked + t * l);
+        if ((s0 < 0) != (s1 < 0)) {
+            double t = s0 / (s0 - s1);   // s0 != s1 here, so no division by zero
+            if (points) points[found] = BKV3dAdd(a, BKV3dScale(BKV3dSub(b, a), t));
+            if (relativePositions) relativePositions[found] = total > 0 ? (walked + t * l) / total : 0.0;
+            found++;
         }
-        if (s1 == 0) BKC_EMIT(b, walked + l);
         walked += l;
         s0 = s1;
     }
-    #undef BKC_EMIT
     return found;
 }
 

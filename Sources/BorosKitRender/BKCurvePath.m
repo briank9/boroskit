@@ -86,6 +86,18 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
     [self changed];
 }
 
+// What: replaces the points of one element (its type stays); out-of-range indices are ignored.
+// For a line or move element only the endpoint matters (the controls are stored equal to it).
+- (void)setElementAtIndex:(NSUInteger)index control1:(BKVec3d)control1 control2:(BKVec3d)control2 endpoint:(BKVec3d)endpoint
+{
+    if (index >= self.elementCount) return;
+    BKCurvePathItem *it = (BKCurvePathItem *)_items.mutableBytes + index;
+    if (it->type == BKCurvePathCurveTo) { it->control1 = control1; it->control2 = control2; }
+    else { it->control1 = endpoint; it->control2 = endpoint; }
+    it->endpoint = endpoint;
+    [self changed];
+}
+
 - (void)moveTo:(BKVec3d)p { [self addItem:(BKCurvePathItem){ BKCurvePathMoveTo, p, p, p }]; }
 - (void)lineTo:(BKVec3d)p { [self addItem:(BKCurvePathItem){ BKCurvePathLineTo, p, p, p }]; }
 - (void)curveTo:(BKVec3d)e control1:(BKVec3d)c1 control2:(BKVec3d)c2 { [self addItem:(BKCurvePathItem){ BKCurvePathCurveTo, c1, c2, e }]; }
@@ -281,6 +293,7 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
 - (NSArray<NSValue *> *)intersectionsWithPlanePoint:(BKVec3d)planePoint normal:(BKVec3d)normal
                                   relativePositions:(NSArray<NSNumber *> **)relativePositions
 {
+    if (self.subpathCount > 1) return [self intersectionsBySubpathWithPlanePoint:planePoint normal:normal relativePositions:relativePositions];
     const BKCurvePolyline *p = [self polyline];
     size_t max = p->count + 1;
     BKVec3d *pts = malloc(sizeof(BKVec3d) * max);
@@ -293,6 +306,45 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
         [positions addObject:@(rel[i])];
     }
     free(pts); free(rel);
+    if (relativePositions) *relativePositions = positions;
+    return points;
+}
+
+// What: intersections of a path with several subpaths (moveTo elements after the first). Each subpath is
+// intersected on its own, so the invisible jump from one subpath's end to the next moveTo is never
+// counted as a crossing (as the classic engine did). Relative positions stay along the whole path's
+// joined polyline (the one -length measures), so they agree with -vectorAtRelativePosition:.
+- (NSArray<NSValue *> *)intersectionsBySubpathWithPlanePoint:(BKVec3d)planePoint normal:(BKVec3d)normal
+                                           relativePositions:(NSArray<NSNumber *> **)relativePositions
+{
+    NSMutableArray *points = [NSMutableArray array], *positions = [NSMutableArray array];
+    double total = self.length, offset = 0;
+    BOOL haveEnd = NO;
+    BKVec3d previousEnd = BKV3d(0, 0, 0);
+    NSUInteger n = self.elementCount, i = 0;
+    while (i < n) {
+        // one subpath: its moveTo (or the path's first element) up to the next moveTo
+        BKCurvePath *sub = [[BKCurvePath alloc] init];
+        BKVec3d c1, c2, e;
+        for (NSUInteger k = i; k < n; k++) {
+            BKCurvePathElement type = [self elementAtIndex:k control1:&c1 control2:&c2 endpoint:&e];
+            if (k > i && type == BKCurvePathMoveTo) break;
+            if (k == i) {
+                if (haveEnd) offset += BKV3dDistance(previousEnd, e);   // the jump is part of the joined polyline
+                [sub moveTo:e];
+            } else if (type == BKCurvePathCurveTo) [sub curveTo:e control1:c1 control2:c2];
+            else [sub lineTo:e];
+            i = k + 1;
+        }
+        NSArray<NSNumber *> *subRel = nil;
+        NSArray<NSValue *> *subHits = [sub intersectionsWithPlanePoint:planePoint normal:normal relativePositions:&subRel];
+        double subLength = sub.length;
+        [points addObjectsFromArray:subHits];
+        for (NSNumber *r in subRel) [positions addObject:@(total > 0 ? (offset + r.doubleValue * subLength) / total : 0.0)];
+        offset += subLength;
+        previousEnd = sub.vectorAtEnd;
+        haveEnd = YES;
+    }
     if (relativePositions) *relativePositions = positions;
     return points;
 }

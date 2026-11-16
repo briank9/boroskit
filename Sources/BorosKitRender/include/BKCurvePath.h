@@ -53,6 +53,8 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p);
 - (void)curveTo:(BKVec3d)endpoint control1:(BKVec3d)control1 control2:(BKVec3d)control2;
 // What: a straight line back to the start of the current subpath (stored as a line element).
 - (void)close;
+// What: replaces the points of element `index` (its type stays the same); out-of-range is ignored.
+- (void)setElementAtIndex:(NSUInteger)index control1:(BKVec3d)control1 control2:(BKVec3d)control2 endpoint:(BKVec3d)endpoint;
 
 // --- reading ----------------------------------------------------------------------------------
 @property (nonatomic, readonly) NSUInteger elementCount;

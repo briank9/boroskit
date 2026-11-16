@@ -134,7 +134,9 @@ int BKCurvePolylineSplitAtPlane(const BKCurvePolyline *polyline, BKVec3d planePo
 
 // What: the points where the polyline crosses or touches the plane (point, normal), in order along it,
 // and their relative positions (0..1 of the length); either output may be NULL; returns how many (at most
-// maxResults). A vertex lying exactly on the plane counts once.
+// maxResults). Half-open rule as the classic engine: a point on the plane counts as the +normal side, so
+// a pass-through vertex counts once and a vertex touching the plane from the -normal side counts twice
+// (even/odd counts for scan-line ROI filling).
 size_t BKCurvePolylinePlaneIntersections(const BKCurvePolyline *polyline, BKVec3d planePoint, BKVec3d planeNormal,
                                          BKVec3d *points, double *relativePositions, size_t maxResults);
 
