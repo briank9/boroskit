@@ -105,7 +105,7 @@ kernel void bk_curved_reformat(texture3d<float, access::read> vol [[texture(0)]]
         else if (p.projection == 2) acc = (z == 0 || value < acc) ? value : acc;                     // MinIP
         else if (p.projection == 3) acc = (z == 0) ? value : (acc * float(z) + value) / float(z + 1); // running mean
         else if (p.projection == 4) acc += (max(value, -1000.0f) + 1000.0f) * p.radiographK;        // radiograph sum
-        else acc = value;
+        else if (z == 0) acc = value;   // no projection: the first slab sample (classic)
     }
     if (p.projection == 4) acc = 3000.0f - 4000.0f * exp(-acc);
     outValues[gid.y * p.width + gid.x] = acc;

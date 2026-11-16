@@ -94,7 +94,7 @@ void BKReformatComputeRows(const BKReformatParams *p, const BKReformatFrame *fra
                         acc += (hu + 1000.0f) * p->radiographK;            // sum of mu * ds
                         break;
                     }
-                    default: acc = value; break;
+                    default: if (z == 0) acc = value; break;   // no projection: the first slab sample (classic)
                 }
             }
             if (p->projection == BKReformatRadiograph)

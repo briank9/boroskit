@@ -46,6 +46,8 @@ typedef enum {
 } BKReformatInterpolation;
 
 typedef enum {
+    BKReformatFirstSample = 0,   // no projection: the first slab sample (callers wanting every plane draw
+                                 // them one at a time with depth 1)
     BKReformatMIP = 1,
     BKReformatMinIP = 2,
     BKReformatMean = 3,
