@@ -49,9 +49,25 @@ static simd_float4 BKFloat4(simd_float3 v)
 - (instancetype)initWithWidth:(NSUInteger)width height:(NSUInteger)height rgba:(NSData *)rgba floats:(NSData *)floats;
 @end
 
+// What: an NSData that reads the GPU buffer's own memory (shared storage) instead of a copy; the
+// buffer stays alive until the NSData is released (the deallocator block holds it).
+// Why (Boros 6 profile 2026-11-15, curved-MPR scrolling): every slab picture was copied twice after
+// the GPU finished (colours + values, ~14 MB each at 3040 x 1192) - ~350 ms of main-thread copying
+// per 25 s of scrolling. The buffers are made fresh for each render and never written again, so
+// handing them over unchanged is safe.
+// Vulkan note: the equivalent is a host-visible, host-coherent VkBuffer kept mapped for the result's
+// lifetime (no staging copy).
+static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
+{
+    return [[NSData alloc] initWithBytesNoCopy:buffer.contents length:length deallocator:^(void *bytes, NSUInteger size) {
+        (void)bytes; (void)size;
+        (void)buffer;   // captured: keeps the MTLBuffer (and its memory) alive until now
+    }];
+}
+
 @implementation BKRenderResult
 
-// Wraps the two output buffers copied back from the GPU.
+// Wraps the two output buffers (since 2026-11-15 the GPU buffers themselves, not copies).
 - (instancetype)initWithWidth:(NSUInteger)width height:(NSUInteger)height rgba:(NSData *)rgba floats:(NSData *)floats
 {
     if ((self = [super init])) {
@@ -584,8 +600,8 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     }
 
     return [[BKRenderResult alloc] initWithWidth:width height:height
-                                            rgba:[NSData dataWithBytes:colorBuffer.contents length:pixels * 4]
-                                          floats:[NSData dataWithBytes:valueBuffer.contents length:pixels * sizeof(float)]];
+                                            rgba:BKDataWrappingBuffer(colorBuffer, pixels * 4)
+                                          floats:BKDataWrappingBuffer(valueBuffer, pixels * sizeof(float))];
 }
 
 // Exposes the queue for on-screen views (see header).
