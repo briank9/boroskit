@@ -34,8 +34,11 @@ typedef struct {
     float thick;              // the ROI's line thickness setting
     float backing;            // screen pixels per point (2 on Retina)
     int highlight;            // the view shows selection handles
-    int selected;             // the ROI is selected (or being drawn / edited)
+    int selected;             // the ROI is selected (selected or being edited)
+    int drawing;              // the ROI is being drawn
     int32_t hotA, hotB;       // point being moved / under the mouse (-1: none) - drawn red
+    float scale;              // image zoom before the view's matrices (the old code's "scaleValue"): some
+                              // kinds size or shape themselves in that space (oval point count, arrow head)
 } BKROIDrawContext;
 
 // What: the view position of image point p.
@@ -63,6 +66,29 @@ void BKROIDrawHandles(BKOverlayList *list, const BKROIDrawContext *ctx, const BK
 // Sizes x backing. Points: the ROI's points (usually 2).
 void BKROIDrawLength(BKOverlayList *list, const BKROIDrawContext *ctx, const BKROIPoint *pts, uint32_t n,
                      int cobbHighlight, float along);
+
+// What: a rectangle ROI (old look): corners (x, y), (x, y+h), (x+w, y+h), (x+w, y) as given (a negative
+// size keeps its sign); closed outline thick wide and dots of thick at the corners in the ROI colour;
+// handles at the corners in light blue (0.5, 0.5, 1), size (backing + sqrt(thick)) x 3.5 x backing, when
+// highlight is on and the ROI is selected or being drawn. Sizes x backing.
+void BKROIDrawRect(BKOverlayList *list, const BKROIDrawContext *ctx, double x, double y, double w, double h);
+
+// What: an oval ROI (old look): centre (cx, cy), half-sizes |rw|, |rh|; n = (int)((|rh| + |rw|) x 1.5 x
+// scale) points at angles i x 360 / n degrees (angle held as a float), closed outline thick wide and a dot
+// of thick at every point (and at the centre when centreDot); handles (as the rectangle) at the four
+// corners of the surrounding box and at the centre.
+void BKROIDrawOval(BKOverlayList *list, const BKROIDrawContext *ctx, double cx, double cy, double rw, double rh,
+                   int centreDot);
+
+// What: an arrow ROI (old look) from a (the tip) to b, in the zoomed image space (scale): t = thick / 2
+// (at most 5); head size 25 x t x backing / 3; the shaft (2 t wide, dots of 2 t at both ends) starts
+// (head + 13 t x backing) from the tip along the arrow and ends at b; the head is a filled triangle
+// with the tip at a and its two back corners (head + 15 t x backing) away at 80 and 100 degrees off
+// the arrow (+/- t x backing degrees); directions measured with the pixel shape (spacingY / spacingX;
+// 1 when unknown) as the old code did. Handles (sqrt(t) x 3 x backing, hot red / selected blue) and the
+// "along the line" marker (as the length ROI, with t) as the length ROI.
+void BKROIDrawArrow(BKOverlayList *list, const BKROIDrawContext *ctx, BKROIPoint a, BKROIPoint b,
+                    double spacingX, double spacingY, float along);
 
 #ifdef __cplusplus
 }
