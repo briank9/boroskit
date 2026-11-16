@@ -8,7 +8,8 @@
 #import "BKOverlayRenderer.h"  // 2026-11-16: Metal renderer of the overlay draw list
 #import "BKAngleCore.h"        // 2026-11-16: arc marking a measured angle (angle ROIs)
 #import "BKROICore.h"          // 2026-11-16: ROI geometry, measurements, inside rule, statistics
-#import "BKROIDraw.h"          // 2026-11-16: ROI drawing into the overlay draw list
+#import "BKROIDraw.h"
+#import "BKViewOverlayDraw.h"   // 2026-11-16: the views' own overlays into the overlay draw list
 #import "BKTextOverlay.h"      // 2026-11-14: view-pinned text labels (WL/WW, orientation letters ...)
 #import "BKImageView.h"
 #import "BKVolumeView.h"
