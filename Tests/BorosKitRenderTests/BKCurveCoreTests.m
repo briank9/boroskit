@@ -100,9 +100,12 @@ static const double kClosedSegments[5][9] = {
     XCTAssertEqualWithAccuracy(length, kArchLength, 0.02);
     BKVec3d pos[11], tan[11], nor[11];
     size_t n = BKCurvePolylineSample(&p, length / 10.0, 0, BKV3d(0, 0, -1), pos, tan, nor, 11);
-    // 10 samples, or 11 when rounding puts the last one just before the end (the old engine stopped at
-    // 10 here); the panorex pads the picture to its full width either way.
-    XCTAssertTrue(n == 10 || n == 11, @"%zu samples", n);
+    // 11 samples: the 11th lands exactly on the end and is kept (review 2026-11-15: the cross-section
+    // export counts it; the old engine sometimes dropped it); the panorex pads its width either way.
+    XCTAssertEqual(n, (size_t)11, @"%zu samples", n);
+    XCTAssertEqualWithAccuracy(BKV3dDistance(pos[10], kArchNodes[6]), 0, 1e-9, @"last sample = curve end");
+    // just past the end (more than the rounding tolerance) is not sampled
+    XCTAssertEqual(BKCurvePolylineSample(&p, length / 10.0, 0.001, BKV3d(0, 0, -1), NULL, NULL, NULL, 20), (size_t)10);
     for (size_t i = 0; i < n && i < 10; i++) {
         const double *e = kArchSamples[i];
         XCTAssertLessThan(BKV3dDistance(pos[i], BKV3d(e[0], e[1], e[2])), 0.1, @"position %zu", i);
@@ -244,11 +247,41 @@ static const double kClosedSegments[5][9] = {
     XCTAssertEqual(BKCurveSegmentsFromNodesClosed(kClosedNodes, 2, s), (size_t)0);
 }
 
+// What: a repeated node (review 2026-11-15: it used to make the whole curve vanish) gives a zero-length
+// segment there, and the other segments are exactly the curve through the distinct nodes.
+- (void)testRepeatedNodes
+{
+    BKVec3d rep[8];
+    for (int i = 0, k = 0; i < 7; i++) { rep[k++] = kArchNodes[i]; if (i == 3) rep[k++] = kArchNodes[i]; }   // node 3 twice
+    BKCurveSegment s[7], ref[6];
+    XCTAssertEqual(BKCurveSegmentsFromNodes(rep, 8, s), (size_t)7);
+    XCTAssertEqual(BKCurveSegmentsFromNodes(kArchNodes, 7, ref), (size_t)6);
+    for (int i = 0, j = 0; i < 7; i++) {
+        if (i == 3) {
+            XCTAssertEqualWithAccuracy(BKV3dDistance(s[i].p0, s[i].p1) + BKV3dDistance(s[i].c0, s[i].p0), 0, 0);
+            continue;
+        }
+        XCTAssertEqualWithAccuracy(BKV3dDistance(s[i].c0, ref[j].c0) + BKV3dDistance(s[i].c1, ref[j].c1) +
+                                   BKV3dDistance(s[i].p1, ref[j].p1), 0, 1e-12, @"segment %d", i);
+        j++;
+    }
+    BKCurvePolyline p;
+    XCTAssertTrue(BKCurveFlatten(s, 7, BK_CURVE_DEFAULT_MAX_SEGMENT_LENGTH, BK_CURVE_DEFAULT_FLATNESS, &p));
+    BKCurvePolyline q = [self archPolyline];
+    XCTAssertEqualWithAccuracy(BKCurvePolylineLength(&p), BKCurvePolylineLength(&q), 1e-9);
+    BKCurvePolylineFree(&p);
+    BKCurvePolylineFree(&q);
+    BKVec3d closedRep[7] = { {10, 10, 0}, {40, 5, 0}, {40, 5, 0}, {55, 30, 0}, {30, 50, 0}, {5, 35, 0}, {10, 10, 0} };
+    BKCurveSegment cs[6];
+    XCTAssertEqual(BKCurveSegmentsFromNodesClosed(closedRep, 7, cs), (size_t)6);
+    XCTAssertEqualWithAccuracy(cs[0].c0.x, kClosedSegments[0][0], 1e-9);
+}
+
 - (void)testBadInput
 {
-    BKVec3d same[3] = { {1, 1, 1}, {1, 1, 1}, {2, 2, 2} };
+    BKVec3d same[3] = { {1, 1, 1}, {1, 1, 1}, {1, 1, 1} };
     BKCurveSegment s[2];
-    XCTAssertEqual(BKCurveSegmentsFromNodes(same, 3, s), (size_t)0);
+    XCTAssertEqual(BKCurveSegmentsFromNodes(same, 3, s), (size_t)0);   // no two distinct nodes
     XCTAssertEqual(BKCurveSegmentsFromNodes(kArchNodes, 1, s), (size_t)0);
     BKCurvePolyline p;
     XCTAssertFalse(BKCurveFlatten(NULL, 0, 3, 0.1, &p));

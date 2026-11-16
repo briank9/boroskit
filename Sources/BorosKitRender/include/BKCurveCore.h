@@ -57,8 +57,9 @@ typedef struct {
 #define BK_CURVE_DEFAULT_FLATNESS 0.1
 
 // What: the curve through `count` nodes. Writes count-1 segments to `segments` (caller array of at
-// least count-1). Two nodes give a straight segment. Returns the number of segments, 0 for fewer than
-// 2 nodes, non-finite numbers or two equal neighbouring nodes.
+// least count-1). Two nodes give a straight segment. Returns the number of segments (count-1), 0 for fewer
+// than 2 distinct nodes or non-finite numbers. A node repeated right after itself gets a zero-length
+// segment and the curve is fitted through the distinct nodes (segment i always joins nodes i and i+1).
 // Rule: natural cubic spline (second derivative 0 at the ends of the extended node list) with
 // parameter = distance along the node polygon, through the node list extended by 2*n1 - n2 in front
 // and 2*nk - nk-1 at the back; each piece between two real nodes becomes one Bezier segment.
@@ -67,7 +68,7 @@ size_t BKCurveSegmentsFromNodes(const BKVec3d *nodes, size_t count, BKCurveSegme
 // What: the same for a CLOSED outline (ROI polygons / pencil outlines; callers normally repeat the first node
 // at the end). Rule ("ends meet", as Horos had it for ROI outlines): the extra point in front of the first
 // node is the second-to-last node and the extra point after the last node is the second node, so the curve
-// meets itself smoothly; then the same natural spline. Needs at least 3 nodes (else 0).
+// meets itself smoothly; then the same natural spline. Needs at least 3 distinct nodes (else 0); repeats as above.
 size_t BKCurveSegmentsFromNodesClosed(const BKVec3d *nodes, size_t count, BKCurveSegment *segments);
 
 // What: the point at parameter t (0..1) of one segment, and its (unnormalised) derivative.

@@ -42,6 +42,7 @@ static BKVec3d BKCBend(BKVec3d v, BKVec3d a, BKVec3d b)
 // Spline through the nodes
 
 static size_t BKCSegmentsFromNodes(const BKVec3d *nodes, size_t count, int closed, BKCurveSegment *segments);
+static size_t BKCSegmentsFromDistinctNodes(const BKVec3d *nodes, size_t count, int closed, BKCurveSegment *segments);
 
 size_t BKCurveSegmentsFromNodes(const BKVec3d *nodes, size_t count, BKCurveSegment *segments)
 {
@@ -54,13 +55,43 @@ size_t BKCurveSegmentsFromNodesClosed(const BKVec3d *nodes, size_t count, BKCurv
     return BKCSegmentsFromNodes(nodes, count, 1, segments);
 }
 
+// What: repeated neighbouring nodes (a double click, a node dragged onto the next one) are allowed: the
+// curve is fitted through the distinct nodes, and each repeat gets a zero-length segment at that point,
+// so segment i still runs from nodes[i] to nodes[i+1] (callers map node index <-> segment index).
+// Why: the classic engine divided by zero here; failing outright made the whole curve vanish
+// (review 2026-11-15). Returns 0 when fewer than 2 (closed: 3) distinct nodes remain.
 static size_t BKCSegmentsFromNodes(const BKVec3d *nodes, size_t count, int closed, BKCurveSegment *segments)
 {
     if (nodes == NULL || segments == NULL || count < 2) return 0;
+    size_t distinct = 1;
     for (size_t i = 0; i < count; i++) {
         if (!BKCFinite(nodes[i])) return 0;
-        if (i > 0 && BKV3dDistance(nodes[i], nodes[i - 1]) <= 0) return 0;
+        if (i > 0 && BKV3dDistance(nodes[i], nodes[i - 1]) > 0) distinct++;
     }
+    if (distinct == count) return BKCSegmentsFromDistinctNodes(nodes, count, closed, segments);
+    if (distinct < (closed ? 3u : 2u)) return 0;
+    BKVec3d *u = malloc(sizeof(BKVec3d) * distinct);
+    BKCurveSegment *us = malloc(sizeof(BKCurveSegment) * distinct);
+    if (!u || !us) { free(u); free(us); return 0; }
+    size_t k = 0;
+    u[k++] = nodes[0];
+    for (size_t i = 1; i < count; i++) if (BKV3dDistance(nodes[i], nodes[i - 1]) > 0) u[k++] = nodes[i];
+    size_t got = BKCSegmentsFromDistinctNodes(u, distinct, closed, us);
+    if (got != distinct - 1) { free(u); free(us); return 0; }
+    for (size_t i = 0, j = 0; i + 1 < count; i++) {
+        if (BKV3dDistance(nodes[i + 1], nodes[i]) > 0) {
+            segments[i] = us[j++];
+        } else {   // repeat: a zero-length segment at the node
+            segments[i].p0 = segments[i].c0 = segments[i].c1 = segments[i].p1 = nodes[i];
+        }
+    }
+    free(u); free(us);
+    return count - 1;
+}
+
+// The spline itself; every neighbouring pair of nodes is distinct (checked by the caller).
+static size_t BKCSegmentsFromDistinctNodes(const BKVec3d *nodes, size_t count, int closed, BKCurveSegment *segments)
+{
     if (count == 2) {   // straight piece
         BKVec3d d = BKV3dSub(nodes[1], nodes[0]);
         segments[0].p0 = nodes[0];
@@ -316,6 +347,8 @@ static void BKCWalkFrame(const BKCWalk *w, double d, BKVec3d *pos, BKVec3d *tan,
     }
 }
 
+#define BKC_END_SAMPLE_TOLERANCE 1e-4   // mm
+
 size_t BKCurvePolylineSample(const BKCurvePolyline *polyline, double spacing, double startDistance,
                              BKVec3d initialNormal, BKVec3d *positions, BKVec3d *tangents, BKVec3d *normals,
                              size_t maxSamples)
@@ -333,8 +366,18 @@ size_t BKCurvePolylineSample(const BKCurvePolyline *polyline, double spacing, do
             if (++i >= maxSamples) return i;
             d += spacing;
         }
+        if (!w.hasNext) {
+            // A sample landing on the very end of the curve (within 0.1 micrometre, for rounding) is kept,
+            // at the end point. Why: callers that space N samples to span the curve exactly (the
+            // cross-section export: start = (length - (N-1) spacing) / 2) count the end one too
+            // (review 2026-11-15: the export made one frame fewer than it announced).
+            if (d <= w.length + BKC_END_SAMPLE_TOLERANCE)
+                BKCWalkFrame(&w, w.length, positions ? &positions[i] : NULL, tangents ? &tangents[i] : NULL,
+                             normals ? &normals[i] : NULL), i++;
+            return i;
+        }
         d -= w.length;
-        if (!BKCWalkNext(&w)) return i;
+        BKCWalkNext(&w);
     }
 }
 
@@ -545,8 +588,9 @@ int BKCurvePolylineOutline(const BKCurvePolyline *p, double distance, double spa
     BKVec3d *pos = malloc(sizeof(BKVec3d) * max), *nor = malloc(sizeof(BKVec3d) * max);
     if (!pos || !nor) { free(pos); free(nor); return 0; }
     size_t n = BKCurvePolylineSample(p, spacing, 0, initialNormal, pos, NULL, nor, max - 1);
-    BKCurvePolylineSampleAt(p, length, initialNormal, &pos[n], NULL, &nor[n]);   // include the end
-    n++;
+    BKVec3d endPos, endNor;
+    BKCurvePolylineSampleAt(p, length, initialNormal, &endPos, NULL, &endNor);   // include the end
+    if (n == 0 || BKV3dDistance(pos[n - 1], endPos) > 0) { pos[n] = endPos; nor[n] = endNor; n++; }   // once
     for (size_t i = 0; i < n; i++) pos[i] = BKV3dAddScaled(pos[i], nor[i], distance);
     free(nor);
     out->points = pos; out->count = n;

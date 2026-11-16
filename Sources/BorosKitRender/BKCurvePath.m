@@ -187,7 +187,8 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
                 if (!grown) { BKCurvePolylineFree(&piece); failed = YES; break; }
                 points = grown;
             }
-            for (size_t k = 1; k < piece.count; k++) points[count++] = piece.points[k];   // piece[0] == last
+            for (size_t k = 1; k < piece.count; k++)   // piece[0] == last; zero-length steps skipped (repeated nodes)
+                if (count == 0 || BKV3dDistance(points[count - 1], piece.points[k]) > 0) points[count++] = piece.points[k];
             BKCurvePolylineFree(&piece);
         } else {
             if (count == cap) {
