@@ -16,6 +16,8 @@
 #import "BKSlabCameraCore.h"   // MPR / curved-MPR slab camera + mouse tools (plain C, 2026-11-15)
 #import "BKCurveCore.h"         // curved-MPR curve maths (plain C, 2026-11-15)
 #import "BKCurvePath.h"         // curved-MPR path object (2026-11-15)
+#import "BKCurvedReformatCore.h" // curved-MPR / cross-section picture definition + CPU reference (plain C, 2026-11-15)
+#import "BKCurvedReformat.h"     // curved-MPR / cross-section pictures on the GPU (2026-11-15)
 #import "BKVecSimd.h"        // Apple glue: BorosKit neutral vectors (BorosKitVec) <-> simd
 #import "BKBoxWidgetMath.h"
 #import "BKCropBoxCore.h"
