@@ -287,6 +287,15 @@ static const double kClosedSegments[5][9] = {
     XCTAssertFalse(BKCurveFlatten(NULL, 0, 3, 0.1, &p));
     XCTAssertEqual(BKCurvePolylineSample(&p, 1.0, 0, BKV3d(0, 0, 1), NULL, NULL, NULL, 10), (size_t)0);
     XCTAssertEqualWithAccuracy(BKCurvePolylineLength(NULL), 0, 0);
+    BKVec3d c = BKV3d(7, 7, 7);
+    double dist = 0;
+    XCTAssertEqualWithAccuracy(BKCurvePolylineClosestToPoint(NULL, BKV3d(1, 2, 3), &c, &dist), 0, 0);
+    XCTAssertEqualWithAccuracy(BKV3dLength(c), 0, 0);
+    XCTAssertTrue(isinf(dist));
+    c = BKV3d(7, 7, 7); dist = 0;
+    BKCurvePolylineClosestToLine(NULL, BKV3d(1, 2, 3), BKV3d(0, 0, 1), &c, &dist);
+    XCTAssertEqualWithAccuracy(BKV3dLength(c), 0, 0);
+    XCTAssertTrue(isinf(dist));
 }
 
 @end

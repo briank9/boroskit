@@ -463,7 +463,11 @@ int BKCurvePolylineSampleAt(const BKCurvePolyline *polyline, double distance, BK
 
 double BKCurvePolylineClosestToPoint(const BKCurvePolyline *p, BKVec3d point, BKVec3d *closest, double *distance)
 {
-    if (p == NULL || p->points == NULL || p->count == 0) return 0;
+    if (p == NULL || p->points == NULL || p->count == 0) {   // empty: defined outputs (review 2026-11-15)
+        if (closest) *closest = BKV3d(0, 0, 0);
+        if (distance) *distance = INFINITY;
+        return 0;
+    }
     double total = BKCurvePolylineLength(p), walked = 0, best = INFINITY, bestAt = 0;
     BKVec3d bestPoint = p->points[0];
     if (p->count == 1) best = BKV3dDistance(point, p->points[0]);
@@ -485,7 +489,11 @@ double BKCurvePolylineClosestToPoint(const BKCurvePolyline *p, BKVec3d point, BK
 double BKCurvePolylineClosestToLine(const BKCurvePolyline *p, BKVec3d linePoint, BKVec3d lineDirection,
                                     BKVec3d *closest, double *distance)
 {
-    if (p == NULL || p->points == NULL || p->count == 0) return 0;
+    if (p == NULL || p->points == NULL || p->count == 0) {   // empty: defined outputs (review 2026-11-15)
+        if (closest) *closest = BKV3d(0, 0, 0);
+        if (distance) *distance = INFINITY;
+        return 0;
+    }
     BKVec3d u = BKCUnit(lineDirection);
     if (BKV3dLength(u) == 0) return BKCurvePolylineClosestToPoint(p, linePoint, closest, distance);
     double total = BKCurvePolylineLength(p), walked = 0, best = INFINITY, bestAt = 0;

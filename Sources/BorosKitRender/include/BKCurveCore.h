@@ -120,7 +120,7 @@ int BKCurvePolylineSampleAt(const BKCurvePolyline *polyline, double distance, BK
                             BKVec3d *position, BKVec3d *tangent, BKVec3d *normal);
 
 // What: the relative position (0..1 of the length) of the point of the polyline closest to `point`,
-// and that point (optional) and its distance (optional).
+// and that point (optional) and its distance (optional). Empty polyline: 0, point (0,0,0), distance infinite.
 double BKCurvePolylineClosestToPoint(const BKCurvePolyline *polyline, BKVec3d point,
                                      BKVec3d *closest, double *distance);
 

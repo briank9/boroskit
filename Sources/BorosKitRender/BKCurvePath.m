@@ -120,7 +120,12 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
 
 - (BKCurvePathElement)elementAtIndex:(NSUInteger)index control1:(BKVec3d *)control1 control2:(BKVec3d *)control2 endpoint:(BKVec3d *)endpoint
 {
-    if (index >= self.elementCount) return BKCurvePathMoveTo;
+    if (index >= self.elementCount) {   // out of range: zero points (defined outputs), reported as a move
+        if (control1) *control1 = BKV3d(0, 0, 0);
+        if (control2) *control2 = BKV3d(0, 0, 0);
+        if (endpoint) *endpoint = BKV3d(0, 0, 0);
+        return BKCurvePathMoveTo;
+    }
     BKCurvePathItem it = self.items[index];
     if (control1) *control1 = it.control1;
     if (control2) *control2 = it.control2;
