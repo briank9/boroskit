@@ -41,7 +41,20 @@ static BKVec3d BKCBend(BKVec3d v, BKVec3d a, BKVec3d b)
 // ------------------------------------------------------------------------------------------------
 // Spline through the nodes
 
+static size_t BKCSegmentsFromNodes(const BKVec3d *nodes, size_t count, int closed, BKCurveSegment *segments);
+
 size_t BKCurveSegmentsFromNodes(const BKVec3d *nodes, size_t count, BKCurveSegment *segments)
+{
+    return BKCSegmentsFromNodes(nodes, count, 0, segments);
+}
+
+size_t BKCurveSegmentsFromNodesClosed(const BKVec3d *nodes, size_t count, BKCurveSegment *segments)
+{
+    if (count < 3) return 0;
+    return BKCSegmentsFromNodes(nodes, count, 1, segments);
+}
+
+static size_t BKCSegmentsFromNodes(const BKVec3d *nodes, size_t count, int closed, BKCurveSegment *segments)
 {
     if (nodes == NULL || segments == NULL || count < 2) return 0;
     for (size_t i = 0; i < count; i++) {
@@ -66,9 +79,15 @@ size_t BKCurveSegmentsFromNodes(const BKVec3d *nodes, size_t count, BKCurveSegme
     BKVec3d *dp = malloc(sizeof(BKVec3d) * m);
     if (!q || !h || !M || !cp || !dp) { free(q); free(h); free(M); free(cp); free(dp); return 0; }
     for (size_t i = 0; i < count; i++) q[i + 1] = nodes[i];
-    q[0] = BKV3dSub(BKV3dScale(nodes[0], 2.0), nodes[1]);
-    q[m - 1] = BKV3dSub(BKV3dScale(nodes[count - 1], 2.0), nodes[count - 2]);
+    if (closed) {   // ends meet: wrap around (rule in the header)
+        q[0] = nodes[count - 2];
+        q[m - 1] = nodes[1];
+    } else {        // open ends: mirrored points
+        q[0] = BKV3dSub(BKV3dScale(nodes[0], 2.0), nodes[1]);
+        q[m - 1] = BKV3dSub(BKV3dScale(nodes[count - 1], 2.0), nodes[count - 2]);
+    }
     for (size_t j = 0; j + 1 < m; j++) h[j] = BKV3dDistance(q[j + 1], q[j]);
+    if (!(h[0] > 0) || !(h[m - 2] > 0)) { free(q); free(h); free(M); free(cp); free(dp); return 0; }   // wrap point on a node
 
     // Natural spline (M[0] = M[m-1] = 0) with parameter = distance along the polygon:
     // h[j-1] M[j-1] + 2 (h[j-1] + h[j]) M[j] + h[j] M[j+1] = 6 ((q[j+1]-q[j])/h[j] - (q[j]-q[j-1])/h[j-1])

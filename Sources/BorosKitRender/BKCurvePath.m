@@ -39,6 +39,21 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
     BKCurvePolylineFree(&_polyline);
 }
 
++ (instancetype)closedPathThroughNodes:(const BKVec3d *)nodes count:(NSUInteger)count
+{
+    BKCurvePath *path = [[self alloc] init];
+    if (nodes == NULL || count < 3) return path;
+    BKCurveSegment *segments = malloc(sizeof(BKCurveSegment) * (count - 1));
+    if (segments == NULL) return path;
+    size_t n = BKCurveSegmentsFromNodesClosed(nodes, count, segments);
+    if (n > 0) {
+        [path moveTo:segments[0].p0];
+        for (size_t i = 0; i < n; i++) [path curveTo:segments[i].p1 control1:segments[i].c0 control2:segments[i].c1];
+    }
+    free(segments);
+    return path;
+}
+
 + (instancetype)pathThroughNodes:(const BKVec3d *)nodes count:(NSUInteger)count
 {
     BKCurvePath *path = [[self alloc] init];
@@ -74,6 +89,13 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
 - (void)moveTo:(BKVec3d)p { [self addItem:(BKCurvePathItem){ BKCurvePathMoveTo, p, p, p }]; }
 - (void)lineTo:(BKVec3d)p { [self addItem:(BKCurvePathItem){ BKCurvePathLineTo, p, p, p }]; }
 - (void)curveTo:(BKVec3d)e control1:(BKVec3d)c1 control2:(BKVec3d)c2 { [self addItem:(BKCurvePathItem){ BKCurvePathCurveTo, c1, c2, e }]; }
+
+- (void)close
+{
+    const BKCurvePathItem *it = self.items;
+    for (NSUInteger i = self.elementCount; i-- > 0;)
+        if (it[i].type == BKCurvePathMoveTo) { [self lineTo:it[i].endpoint]; return; }
+}
 
 - (NSUInteger)subpathCount
 {

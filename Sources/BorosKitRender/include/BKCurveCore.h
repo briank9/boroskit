@@ -64,6 +64,12 @@ typedef struct {
 // and 2*nk - nk-1 at the back; each piece between two real nodes becomes one Bezier segment.
 size_t BKCurveSegmentsFromNodes(const BKVec3d *nodes, size_t count, BKCurveSegment *segments);
 
+// What: the same for a CLOSED outline (ROI polygons / pencil outlines; callers normally repeat the first node
+// at the end). Rule ("ends meet", as Horos had it for ROI outlines): the extra point in front of the first
+// node is the second-to-last node and the extra point after the last node is the second node, so the curve
+// meets itself smoothly; then the same natural spline. Needs at least 3 nodes (else 0).
+size_t BKCurveSegmentsFromNodesClosed(const BKVec3d *nodes, size_t count, BKCurveSegment *segments);
+
 // What: the point at parameter t (0..1) of one segment, and its (unnormalised) derivative.
 BKVec3d BKCurveSegmentPoint(const BKCurveSegment *segment, double t);
 BKVec3d BKCurveSegmentDerivative(const BKCurveSegment *segment, double t);

@@ -58,6 +58,17 @@ static const double kArchProjected[11][10] = { // position, tangent, normal, rel
     { 39.995422658, -19.987055046, 900.000492420, 0.333140272, -0.942195874, -0.035839844, -0.942120299, -0.334155087, 0.027381013, 0.999896343 },
 };
 
+// Closed ROI outline ("ends meet" style of the old engine, as polygon / pencil ROIs use): first node
+// repeated at the end; control points recorded from the old engine with the scratch harness (2026-11-15).
+static const BKVec3d kClosedNodes[6] = { {10, 10, 0}, {40, 5, 0}, {55, 30, 0}, {30, 50, 0}, {5, 35, 0}, {10, 10, 0} };
+static const double kClosedSegments[5][9] = {
+    { 16.154460169343, 2.756428439382, 0.000000000000, 29.763968699810, 0.339730736397, 0.000000000000, 40.000000000000, 5.000000000000, 0.000000000000 },
+    { 49.812286080255, 9.467346170057, 0.000000000000, 56.524620111066, 20.437851174276, 0.000000000000, 55.000000000000, 30.000000000000, 0.000000000000 },
+    { 53.325773876702, 40.500451386344, 0.000000000000, 41.718750111727, 49.302590910386, 0.000000000000, 30.000000000000, 50.000000000000, 0.000000000000 },
+    { 19.328417560645, 50.635089793947, 0.000000000000, 8.564184004471, 44.549183617880, 0.000000000000, 5.000000000000, 35.000000000000, 0.000000000000 },
+    { 1.883211503614, 26.649481167990, 0.000000000000, 4.272343252648, 15.650573704006, 0.000000000000, 10.000000000000, 10.000000000000, 0.000000000000 },
+};
+
 @implementation BKCurveCoreTests
 
 // What: the arch as a polyline with the defaults.
@@ -211,6 +222,26 @@ static const double kArchProjected[11][10] = { // position, tangent, normal, rel
     }
     BKCurvePolylineFree(&pp);
     BKCurvePolylineFree(&p);
+}
+
+// What: the closed outline matches the old engine's control points exactly, joins nearly smoothly at
+// the start/end node, and refuses fewer than 3 nodes.
+- (void)testClosedSplineMatchesClassicExactly
+{
+    BKCurveSegment s[5];
+    XCTAssertEqual(BKCurveSegmentsFromNodesClosed(kClosedNodes, 6, s), (size_t)5);
+    for (int i = 0; i < 5; i++) {
+        const double *e = kClosedSegments[i];
+        double got[9] = { s[i].c0.x, s[i].c0.y, s[i].c0.z, s[i].c1.x, s[i].c1.y, s[i].c1.z, s[i].p1.x, s[i].p1.y, s[i].p1.z };
+        for (int k = 0; k < 9; k++) XCTAssertEqualWithAccuracy(got[k], e[k], 1e-9, @"closed segment %d value %d", i, k);
+        XCTAssertEqualWithAccuracy(BKV3dDistance(s[i].p0, kClosedNodes[i]), 0, 0);
+    }
+    BKVec3d outDir = BKV3dNormalize(BKV3dSub(s[0].c0, s[0].p0));
+    BKVec3d inDir = BKV3dNormalize(BKV3dSub(s[4].p1, s[4].c1));
+    // The old engine's "ends meet" curve is only nearly smooth at the closing node (its end conditions
+    // borrow the neighbouring nodes; about a 5 degree kink here) - kept as is, the outline must match.
+    XCTAssertGreaterThan(BKV3dDot(outDir, inDir), 0.99, @"nearly smooth join at the closing node");
+    XCTAssertEqual(BKCurveSegmentsFromNodesClosed(kClosedNodes, 2, s), (size_t)0);
 }
 
 - (void)testBadInput

@@ -44,11 +44,15 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p);
 // What: the smooth curve through `count` nodes (BKCurveSegmentsFromNodes); an empty path for fewer than
 // 2 nodes or unusable nodes.
 + (instancetype)pathThroughNodes:(const BKVec3d *)nodes count:(NSUInteger)count;
+// What: the closed outline through the nodes (BKCurveSegmentsFromNodesClosed).
++ (instancetype)closedPathThroughNodes:(const BKVec3d *)nodes count:(NSUInteger)count;
 
 // --- building ---------------------------------------------------------------------------------
 - (void)moveTo:(BKVec3d)point;
 - (void)lineTo:(BKVec3d)point;
 - (void)curveTo:(BKVec3d)endpoint control1:(BKVec3d)control1 control2:(BKVec3d)control2;
+// What: a straight line back to the start of the current subpath (stored as a line element).
+- (void)close;
 
 // --- reading ----------------------------------------------------------------------------------
 @property (nonatomic, readonly) NSUInteger elementCount;

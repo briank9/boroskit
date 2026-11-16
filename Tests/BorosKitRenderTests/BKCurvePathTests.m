@@ -113,4 +113,27 @@ static const BKVec3d kNodes[7] = { {-40, -20, 900}, {-30, 5, 901}, {-15, 22, 902
     XCTAssertNil([path outlinePathAtDistance:4 initialNormal:BKV3d(0, 0, 1) spacing:100]);   // too short for that spacing
 }
 
+// What: the closed outline path holds the core's closed segments; -close adds a line back to the start.
+- (void)testClosedPathAndClose
+{
+    const BKVec3d nodes[6] = { {10, 10, 0}, {40, 5, 0}, {55, 30, 0}, {30, 50, 0}, {5, 35, 0}, {10, 10, 0} };
+    BKCurvePath *path = [BKCurvePath closedPathThroughNodes:nodes count:6];
+    XCTAssertEqual(path.elementCount, (NSUInteger)6);   // moveTo + 5 curves
+    BKCurveSegment s[5];
+    XCTAssertEqual(BKCurveSegmentsFromNodesClosed(nodes, 6, s), (size_t)5);
+    for (NSUInteger i = 0; i < 5; i++) {
+        BKVec3d c1, c2, e;
+        XCTAssertEqual([path elementAtIndex:i + 1 control1:&c1 control2:&c2 endpoint:&e], BKCurvePathCurveTo);
+        XCTAssertEqualWithAccuracy(BKV3dDistance(c1, s[i].c0) + BKV3dDistance(c2, s[i].c1) + BKV3dDistance(e, s[i].p1), 0, 0);
+    }
+    BKCurvePath *square = [[BKCurvePath alloc] init];
+    [square moveTo:BKV3d(0, 0, 0)]; [square lineTo:BKV3d(10, 0, 0)]; [square lineTo:BKV3d(10, 10, 0)];
+    [square close];
+    XCTAssertEqual(square.elementCount, (NSUInteger)4);
+    BKVec3d end;
+    XCTAssertEqual([square elementAtIndex:3 control1:NULL control2:NULL endpoint:&end], BKCurvePathLineTo);
+    XCTAssertEqualWithAccuracy(BKV3dDistance(end, BKV3d(0, 0, 0)), 0, 0);
+    XCTAssertEqualWithAccuracy(square.length, 10 + 10 + sqrt(200), 1e-9);
+}
+
 @end
