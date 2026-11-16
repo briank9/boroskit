@@ -70,3 +70,13 @@ int BKDynamicAngleCorner(BKVec2f a1, BKVec2f a2, BKVec2f b1, BKVec2f b2,
     if (towardB) { towardB->x = c.x + db.x; towardB->y = c.y + db.y; }
     return 1;
 }
+
+int BKAngleExtensionStart(BKVec2f p1, BKVec2f p2, BKVec2f corner, BKVec2f *from)
+{
+    double dx = p2.x - p1.x, dy = p2.y - p1.y, len2 = dx * dx + dy * dy;
+    if (!(len2 > 0)) return 0;
+    double t = ((corner.x - p1.x) * dx + (corner.y - p1.y) * dy) / len2;   // position along the segment
+    if (t >= 0.0 && t <= 1.0) return 0;                                     // the corner is on the segment
+    if (from) *from = t < 0.0 ? p1 : p2;
+    return 1;
+}

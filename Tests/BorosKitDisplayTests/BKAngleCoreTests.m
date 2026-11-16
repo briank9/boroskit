@@ -57,4 +57,16 @@
     XCTAssertFalse(BKDynamicAngleCorner(BKV2f(0, 0), BKV2f(10, 0), BKV2f(0, 5), BKV2f(10, 5), &c, &ta, &tb));   // parallel
 }
 
+// Extensions: from the end nearer the crossing; none when the crossing lies on the segment.
+- (void)testExtensionStart
+{
+    BKVec2f f;
+    XCTAssertTrue(BKAngleExtensionStart(BKV2f(10, 0), BKV2f(20, 0), BKV2f(0, 0), &f));
+    XCTAssertEqualWithAccuracy(f.x, 10, 0);
+    XCTAssertTrue(BKAngleExtensionStart(BKV2f(10, 0), BKV2f(20, 0), BKV2f(30, 0), &f));
+    XCTAssertEqualWithAccuracy(f.x, 20, 0);
+    XCTAssertFalse(BKAngleExtensionStart(BKV2f(10, 0), BKV2f(20, 0), BKV2f(15, 0), &f));
+    XCTAssertFalse(BKAngleExtensionStart(BKV2f(10, 0), BKV2f(10, 0), BKV2f(15, 0), &f));
+}
+
 @end

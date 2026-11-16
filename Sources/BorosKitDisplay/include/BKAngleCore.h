@@ -47,6 +47,12 @@ int BKAngleLineCrossing(BKVec2f a1, BKVec2f a2, BKVec2f b1, BKVec2f b2, BKVec2f 
 int BKDynamicAngleCorner(BKVec2f a1, BKVec2f a2, BKVec2f b1, BKVec2f b2,
                          BKVec2f *corner, BKVec2f *towardA, BKVec2f *towardB);
 
+// What: where segment p1-p2 must be extended to reach `corner` (a point on its line): the segment's end
+// nearer the corner (*from). Returns 0 when the corner already lies on the segment (no extension needed).
+// Why: the dynamic angle draws dotted extensions from its lines to the crossing, so the arc there reads
+// as the corner of the two lines (user 2026-11-16).
+int BKAngleExtensionStart(BKVec2f p1, BKVec2f p2, BKVec2f corner, BKVec2f *from);
+
 #ifdef __cplusplus
 }
 #endif
