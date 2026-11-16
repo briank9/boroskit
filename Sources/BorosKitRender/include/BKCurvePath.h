@@ -44,7 +44,8 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p);
 // What: the smooth curve through `count` nodes (BKCurveSegmentsFromNodes); an empty path for fewer than
 // 2 nodes or unusable nodes.
 + (instancetype)pathThroughNodes:(const BKVec3d *)nodes count:(NSUInteger)count;
-// What: the closed outline through the nodes (BKCurveSegmentsFromNodesClosed).
+// What: the closed outline through the nodes (BKCurveSegmentsFromNodesClosed); 2 nodes give the straight
+// piece between them (as the classic engine did), fewer an empty path.
 + (instancetype)closedPathThroughNodes:(const BKVec3d *)nodes count:(NSUInteger)count;
 
 // --- building ---------------------------------------------------------------------------------

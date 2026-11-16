@@ -126,6 +126,8 @@ static const BKVec3d kNodes[7] = { {-40, -20, 900}, {-30, 5, 901}, {-15, 22, 902
         XCTAssertEqual([path elementAtIndex:i + 1 control1:&c1 control2:&c2 endpoint:&e], BKCurvePathCurveTo);
         XCTAssertEqualWithAccuracy(BKV3dDistance(c1, s[i].c0) + BKV3dDistance(c2, s[i].c1) + BKV3dDistance(e, s[i].p1), 0, 0);
     }
+    XCTAssertEqualWithAccuracy([BKCurvePath closedPathThroughNodes:nodes count:2].length, BKV3dDistance(nodes[0], nodes[1]), 1e-9);
+    XCTAssertEqual([BKCurvePath closedPathThroughNodes:nodes count:1].elementCount, (NSUInteger)0);
     BKCurvePath *square = [[BKCurvePath alloc] init];
     [square moveTo:BKV3d(0, 0, 0)]; [square lineTo:BKV3d(10, 0, 0)]; [square lineTo:BKV3d(10, 10, 0)];
     [square close];

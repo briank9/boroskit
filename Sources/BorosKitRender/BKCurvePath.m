@@ -41,6 +41,8 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
 
 + (instancetype)closedPathThroughNodes:(const BKVec3d *)nodes count:(NSUInteger)count
 {
+    // Two nodes: the straight piece between them, as the classic engine drew for any style.
+    if (nodes != NULL && count == 2) return [self pathThroughNodes:nodes count:count];
     BKCurvePath *path = [[self alloc] init];
     if (nodes == NULL || count < 3) return path;
     BKCurveSegment *segments = malloc(sizeof(BKCurveSegment) * (count - 1));
