@@ -5,6 +5,7 @@
 #import "BKOverlay.h"
 #import "BKTextLayoutCore.h"   // 2026-11-14: plain-C placement of view-pinned labels
 #import "BKOverlayCore.h"      // 2026-11-16: plain-C 2D overlay engine core (draw list -> triangles)
+#import "BKOverlayRenderer.h"  // 2026-11-16: Metal renderer of the overlay draw list
 #import "BKTextOverlay.h"      // 2026-11-14: view-pinned text labels (WL/WW, orientation letters ...)
 #import "BKImageView.h"
 #import "BKVolumeView.h"

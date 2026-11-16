@@ -537,12 +537,14 @@ void BKOverlayDrawImage(BKOverlayList *l, int32_t image, BKVec2f origin, BKVec2f
 
 // --- CPU reference rasteriser -------------------------------------------------------------------------
 static float Edge2(BKVec2f a, BKVec2f b, float px, float py) { return (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x); }
-// Top-left rule (y down): an edge owns pixels exactly on it when it is a "top" or "left" edge.
-static int TopLeft(BKVec2f a, BKVec2f b, int ccw)
+// Top-left rule (as GPUs fill, y down): a pixel centre exactly on an edge belongs to the triangle when
+// the edge is a "top" edge (horizontal, triangle below it) or a "left" edge (triangle to its right).
+// `c` is the triangle's third corner (tells on which side the triangle lies).
+static int TopLeft(BKVec2f a, BKVec2f b, BKVec2f c)
 {
-    float dx = b.x - a.x, dy = b.y - a.y;
-    if (!ccw) { dx = -dx; dy = -dy; }
-    return (dy == 0 && dx < 0) || dy > 0;
+    if (a.y == b.y) return c.y > a.y;
+    float xe = a.x + (c.y - a.y) * (b.x - a.x) / (b.y - a.y);   // the edge's x at the third corner's height
+    return c.x > xe;
 }
 
 static void Sample(const BKOverlayImage *im, float u, float v, int linear, float out[4])
@@ -598,7 +600,7 @@ void BKOverlayRasterize(const BKOverlayList *l, float *rgba, uint32_t width, uin
                     float w0 = Edge2(b, d, px, py), w1 = Edge2(d, a, px, py), w2 = Edge2(a, b, px, py);
                     if (!ccw) { w0 = -w0; w1 = -w1; w2 = -w2; }
                     if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-                    if ((w0 == 0 && !TopLeft(b, d, ccw)) || (w1 == 0 && !TopLeft(d, a, ccw)) || (w2 == 0 && !TopLeft(a, b, ccw))) continue;
+                    if ((w0 == 0 && !TopLeft(b, d, a)) || (w1 == 0 && !TopLeft(d, a, b)) || (w2 == 0 && !TopLeft(a, b, d))) continue;
                     float s = fabsf(area);
                     float l0 = w0 / s, l1 = w1 / s, l2 = w2 / s;
                     float col[4] = { l0 * v[0].r + l1 * v[1].r + l2 * v[2].r, l0 * v[0].g + l1 * v[1].g + l2 * v[2].g,
