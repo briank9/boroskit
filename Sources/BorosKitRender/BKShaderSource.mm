@@ -464,7 +464,7 @@ kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
     bk_geometry_at(p, gid, geometryColor, geometryDistance, geomT, geomColor);
     BKTraceResult r = bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange, geomT, geomColor);
     valueOut[index] = r.value;
-    colorOut[index] = bk_pack(r.color);
+    if (p.valuesOnly == 0) colorOut[index] = bk_pack(r.color);   /* slabs: values only (less memory traffic) */
 }
 
 // One thread = one output pixel, written straight into a GPU texture (e.g. the screen's

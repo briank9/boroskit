@@ -12,6 +12,7 @@
 // (right = forward x up = -x, and row 0 is the top of the image.)
 
 #import <XCTest/XCTest.h>
+#include <unistd.h>
 #import <Metal/Metal.h>
 #import "BorosKitRender.h"
 #import "CPRVolumeData.h"
@@ -157,6 +158,36 @@ static const NSUInteger kSize = 64;
     _renderer.slabPlane = N3PlaneMake(N3VectorMake(0, 0, 31), N3VectorMake(0, 0, 1));
     BKRenderResult *inside = [self render];
     XCTAssertEqualWithAccuracy([inside valueAtX:32 y:32], 1000.0f, 0.5f);
+}
+
+// What (2026-11-15): -renderValuesInto:... gives exactly the values of -renderWithWidth:..., both
+// straight into page-aligned memory (GPU writes it directly) and into ordinary memory (one copy).
+- (void)testRenderValuesIntoMatchesRender
+{
+    if (![self requireGPU]) return;
+    _renderer.mode = BKRenderModeAverage;
+    _renderer.slabEnabled = YES;
+    _renderer.slabThickness = 6;
+    _renderer.slabPlane = N3PlaneMake(N3VectorMake(0, 0, 30), N3VectorMake(0, 0, 1));
+    BKRenderResult *reference = [self render];
+    const float *expected = (const float *)reference.floatData.bytes;
+    NSUInteger bytes = kSize * kSize * sizeof(float);
+
+    NSUInteger page = (NSUInteger)getpagesize();
+    NSUInteger rounded = (bytes + page - 1) / page * page;
+    float *aligned = NULL;
+    XCTAssertEqual(posix_memalign((void **)&aligned, page, rounded), 0);
+    memset(aligned, 0, rounded);
+    NSError *error = nil;
+    XCTAssertTrue([_renderer renderValuesInto:aligned capacity:rounded width:kSize height:kSize error:&error], @"%@", error);
+    XCTAssertEqual(memcmp(aligned, expected, bytes), 0, @"direct (page-aligned) output differs");
+    free(aligned);
+
+    float *plain = (float *)malloc(bytes + 4);
+    XCTAssertTrue([_renderer renderValuesInto:plain + 1 capacity:bytes width:kSize height:kSize error:&error], @"%@", error);
+    XCTAssertEqual(memcmp(plain + 1, expected, bytes), 0, @"copied output differs");
+    XCTAssertFalse([_renderer renderValuesInto:plain capacity:bytes - 4 width:kSize height:kSize error:&error]);   // too small
+    free(plain);
 }
 
 // Zero-thickness slab = one interpolated sample on the plane (a classic MPR slice).

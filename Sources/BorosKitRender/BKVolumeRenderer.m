@@ -10,6 +10,7 @@
  */
 
 #import "BKVolumeRenderer.h"
+#include <unistd.h>   // getpagesize (values-only render into caller memory)
 #import "BKVolumeTexture.h"
 #import "BKVolumeTexture+Bricks.h"
 #import "BKTransferFunction.h"
@@ -115,6 +116,7 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     id<MTLComputePipelineState> _sizePipeline;
     id<MTLComputePipelineState> _texturePipeline;  // bk_raycast_texture (on-screen output)
     id<MTLComputePipelineState> _upscalePipeline;  // bk_upscale (LOD stretch)
+    id<MTLBuffer> _valuesOnlyColorPlaceholder;     // 16-byte stand-in for the RGBA output when only values are written (2026-11-15)
     id<MTLTexture> _tfTexture;            // baked transfer function (4096 x 1, RGBA float)
     BKTransferFunction *_bakedTransferFunction; // which function _tfTexture currently holds
     BKTransferFunction *_defaultTransferFunction; // gray ramp used when none is set
@@ -547,30 +549,19 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     params->skipEmptySpace = 1;
 }
 
-- (BKRenderResult *)renderWithWidth:(NSUInteger)width height:(NSUInteger)height error:(NSError **)error
+// What: encodes + runs the CPU-readable ray cast into `colorBuffer` / `valueBuffer` and waits for it.
+// `valuesOnly` = the kernel skips the RGBA picture (colorBuffer may then be a tiny placeholder).
+// Shared by -renderWithWidth:... and -renderValuesInto:... .
+- (BOOL)runRaycastWidth:(NSUInteger)width height:(NSUInteger)height
+            colorBuffer:(id<MTLBuffer>)colorBuffer valueBuffer:(id<MTLBuffer>)valueBuffer
+             valuesOnly:(BOOL)valuesOnly error:(NSError **)error
 {
-    if (!_volumeTexture) {
-        if (error) *error = BKRendererError(13, @"No volume has been set.");
-        return nil;
-    }
-    if (width == 0 || height == 0) {
-        if (error) *error = BKRendererError(14, @"The output image size is zero.");
-        return nil;
-    }
-
     BKTransferFunction *tf = [self effectiveTransferFunction];
     [self updateTransferFunctionTexture:tf];
 
     BKRenderParams params;
-    if (![self fillParams:&params width:width height:height tf:tf error:error]) return nil;
-
-    NSUInteger pixels = width * height;
-    id<MTLBuffer> colorBuffer = [_device newBufferWithLength:pixels * 4 options:MTLResourceStorageModeShared];
-    id<MTLBuffer> valueBuffer = [_device newBufferWithLength:pixels * sizeof(float) options:MTLResourceStorageModeShared];
-    if (!colorBuffer || !valueBuffer) {
-        if (error) *error = BKRendererError(15, @"Not enough memory for the output image.");
-        return nil;
-    }
+    if (![self fillParams:&params width:width height:height tf:tf error:error]) return NO;
+    params.valuesOnly = valuesOnly ? 1 : 0;
 
     id<MTLCommandBuffer> cb = [_queue commandBuffer];
     id<MTLBuffer> brickEmpty, brickRange;
@@ -596,12 +587,71 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     [cb waitUntilCompleted];
     if (cb.status == MTLCommandBufferStatusError) {
         if (error) *error = cb.error ?: BKRendererError(16, @"The GPU failed to render the image.");
+        return NO;
+    }
+    return YES;
+}
+
+- (BKRenderResult *)renderWithWidth:(NSUInteger)width height:(NSUInteger)height error:(NSError **)error
+{
+    if (!_volumeTexture) {
+        if (error) *error = BKRendererError(13, @"No volume has been set.");
         return nil;
     }
+    if (width == 0 || height == 0) {
+        if (error) *error = BKRendererError(14, @"The output image size is zero.");
+        return nil;
+    }
+
+    NSUInteger pixels = width * height;
+    id<MTLBuffer> colorBuffer = [_device newBufferWithLength:pixels * 4 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> valueBuffer = [_device newBufferWithLength:pixels * sizeof(float) options:MTLResourceStorageModeShared];
+    if (!colorBuffer || !valueBuffer) {
+        if (error) *error = BKRendererError(15, @"Not enough memory for the output image.");
+        return nil;
+    }
+    if (![self runRaycastWidth:width height:height colorBuffer:colorBuffer valueBuffer:valueBuffer
+                    valuesOnly:NO error:error])
+        return nil;
 
     return [[BKRenderResult alloc] initWithWidth:width height:height
                                             rgba:BKDataWrappingBuffer(colorBuffer, pixels * 4)
                                           floats:BKDataWrappingBuffer(valueBuffer, pixels * sizeof(float))];
+}
+
+- (BOOL)renderValuesInto:(float *)destination capacity:(NSUInteger)capacityBytes
+                   width:(NSUInteger)width height:(NSUInteger)height error:(NSError **)error
+{
+    if (!_volumeTexture) {
+        if (error) *error = BKRendererError(13, @"No volume has been set.");
+        return NO;
+    }
+    NSUInteger bytes = width * height * sizeof(float);
+    if (width == 0 || height == 0 || destination == NULL || capacityBytes < bytes) {
+        if (error) *error = BKRendererError(14, @"The output image size is zero or the destination is too small.");
+        return NO;
+    }
+
+    // The GPU writes straight into `destination` when Metal can use that memory as is: page-aligned
+    // start and a whole number of pages (the caller allocates it that way, see the header).
+    // Otherwise: one GPU buffer and one copy at the end (same result).
+    NSUInteger page = (NSUInteger)getpagesize();
+    BOOL direct = ((uintptr_t)destination % page) == 0 && capacityBytes % page == 0;
+    id<MTLBuffer> valueBuffer = direct
+        ? [_device newBufferWithBytesNoCopy:destination length:capacityBytes options:MTLResourceStorageModeShared deallocator:nil]
+        : [_device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+    if (_valuesOnlyColorPlaceholder == nil)
+        _valuesOnlyColorPlaceholder = [_device newBufferWithLength:16 options:MTLResourceStorageModePrivate];
+    if (!valueBuffer || !_valuesOnlyColorPlaceholder) {
+        if (error) *error = BKRendererError(15, @"Not enough memory for the output image.");
+        return NO;
+    }
+    if (![self runRaycastWidth:width height:height colorBuffer:_valuesOnlyColorPlaceholder valueBuffer:valueBuffer
+                    valuesOnly:YES error:error])
+        return NO;
+    if (!direct)
+        memcpy(destination, valueBuffer.contents, bytes);
+    return YES;
 }
 
 // Exposes the queue for on-screen views (see header).

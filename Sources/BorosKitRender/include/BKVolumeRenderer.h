@@ -209,6 +209,23 @@ typedef NS_ENUM(int32_t, BKProjection) {
                                       height:(NSUInteger)height
                                        error:(NSError * _Nullable * _Nullable)error;
 
+// What (2026-11-15): renders the current settings like -renderWithWidth:... but writes ONLY the
+// value picture (one float per pixel, row 0 = top), straight into `destination`, and waits.
+// `capacityBytes` = the size of the memory at `destination` (>= width*height*4). When `destination`
+// starts on a page boundary and `capacityBytes` is a whole number of pages (e.g. posix_memalign with
+// getpagesize() and the size rounded up), the GPU writes into it directly - no GPU buffer is
+// allocated and nothing is copied; otherwise the result is copied once. The RGBA picture is not
+// made at all. Why (Boros 6 profile, MPR / curved-MPR scrolling): the slab views only use the
+// values; each picture used to cost two fresh 14 MB GPU buffers, the unused RGBA write, and a copy
+// into the app's own buffer. Returns NO (and sets error) if the render failed.
+// Vulkan note: import the caller's memory with VK_EXT_external_memory_host where available, else
+// render into a persistent host-visible buffer and copy once.
+- (BOOL)renderValuesInto:(float *)destination
+                capacity:(NSUInteger)capacityBytes
+                   width:(NSUInteger)width
+                  height:(NSUInteger)height
+                   error:(NSError * _Nullable * _Nullable)error;
+
 // --- GPU-only output (on-screen views) ----------------------------------------------
 // The command queue this renderer submits to. On-screen views create their command
 // buffers here so the 3D image and its presentation are ordered on one queue.

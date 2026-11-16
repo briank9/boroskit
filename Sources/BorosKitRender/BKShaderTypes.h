@@ -77,7 +77,7 @@ typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment in C, Metal a
     int32_t clipPlaneCount;       /* number of valid entries in clipPlanes (0..BK_MAX_CLIP_PLANES) */ \
     int32_t manualFiltering;      /* 1 = interpolate the volume and the colour table by hand (8 / 2 exact reads) instead of the GPU's linear filter */ \
     int32_t useGeometry;          /* 1 = embedded opaque objects (meshes / lines / points) are given as a colour + ray-distance picture; each ray stops at them (see BKVolumeGeometryLayer.h) */ \
-    int32_t reserved2;
+    int32_t valuesOnly;           /* 1 = write only the value picture (MPR / CPR slabs never use the RGBA one; 2026-11-15) */
 
 // Empty-space skipping (plain language): the volume is divided into small cubes
 // ("bricks") of BK_BRICK_SIZE voxels per side. For every brick the lowest and highest
