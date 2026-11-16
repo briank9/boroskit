@@ -108,6 +108,9 @@ let package = Package(
             name: "BorosKitDisplayTests",
             dependencies: ["BorosKitDisplay", "BorosKitCore", "BorosKitRender"],
             path: "Tests/BorosKitDisplayTests",
+            // Recorded values of the old (Horos) ROI code, read from the source folder by the ROI core
+            // tests (2026-11-16, overlay-engine plan step 1) - not compiled, not bundled.
+            exclude: ["References"],
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
         // --- end BorosKitDisplay ---
