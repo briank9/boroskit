@@ -328,10 +328,11 @@ BKVec3d BKCurveTransformPoint(BKCurveTransform t, BKVec3d p)
         // one subpath: its moveTo (or the path's first element) up to the next moveTo
         BKCurvePath *sub = [[BKCurvePath alloc] init];
         BKVec3d c1, c2, e;
-        for (NSUInteger k = i; k < n; k++) {
+        const NSUInteger start = i;   // first element of this subpath (i advances below)
+        for (NSUInteger k = start; k < n; k++) {
             BKCurvePathElement type = [self elementAtIndex:k control1:&c1 control2:&c2 endpoint:&e];
-            if (k > i && type == BKCurvePathMoveTo) break;
-            if (k == i) {
+            if (k > start && type == BKCurvePathMoveTo) break;
+            if (k == start) {
                 if (haveEnd) offset += BKV3dDistance(previousEnd, e);   // the jump is part of the joined polyline
                 [sub moveTo:e];
             } else if (type == BKCurvePathCurveTo) [sub curveTo:e control1:c1 control2:c2];
