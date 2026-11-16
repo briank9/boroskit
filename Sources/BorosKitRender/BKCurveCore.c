@@ -319,6 +319,62 @@ size_t BKCurvePolylineSample(const BKCurvePolyline *polyline, double spacing, do
     }
 }
 
+// What: a unit vector perpendicular to unit d (for a piece seen end-on in projected sampling).
+static BKVec3d BKCAnyPerpendicular(BKVec3d d)
+{
+    BKVec3d r = BKCUnit(BKV3dCross(d, fabs(d.x) < 0.9 ? BKV3d(1, 0, 0) : BKV3d(0, 1, 0)));
+    return r;
+}
+
+size_t BKCurvePolylineSampleProjected(const BKCurvePolyline *p, double spacing, double startDistance,
+                                      BKVec3d projectionDirection, BKVec3d *positions, BKVec3d *tangents,
+                                      BKVec3d *normals, double *relativePositions, size_t maxSamples)
+{
+    if (p == NULL || p->points == NULL || p->count < 2 || maxSamples == 0 || !(spacing > 0) ||
+        !isfinite(startDistance) || startDistance < 0)
+        return 0;
+    BKVec3d proj = BKCUnit(projectionDirection);
+    if (BKV3dLength(proj) == 0) return 0;
+    double total = BKCurvePolylineLength(p);
+    if (!(total > 0)) return 0;
+    size_t pieces = p->count - 1;
+    // Per piece: real direction / length, projected length, projected normal.
+    #define BKC_PIECE(k, dir, len, plen, nor) do { \
+        BKVec3d a_ = p->points[(k)], b_ = p->points[(k) + 1], ab_ = BKV3dSub(b_, a_); \
+        BKVec3d pab_ = BKCPerp(ab_, proj); \
+        (dir) = BKCUnit(ab_); (len) = BKV3dLength(ab_); (plen) = BKV3dLength(pab_); \
+        (nor) = BKCUnit(BKV3dCross(BKCUnit(pab_), proj)); \
+        if (BKV3dLength(nor) == 0) (nor) = BKCAnyPerpendicular(proj); } while (0)
+    BKVec3d dir, nor, nextDir, nextNor, prevDir, prevNor;
+    double len, plen, nextLen, nextPlen;
+    BKC_PIECE(0, dir, len, plen, nor);
+    prevDir = dir; prevNor = nor;
+    size_t i = 0;
+    double d = startDistance, walked = 0;   // d: projected distance into the current piece
+    for (size_t k = 0; k < pieces; k++) {
+        if (k + 1 < pieces) BKC_PIECE(k + 1, nextDir, nextLen, nextPlen, nextNor);
+        else { nextDir = dir; nextNor = nor; nextLen = len; nextPlen = plen; }
+        BKVec3d t0 = BKCUnit(BKV3dAdd(prevDir, dir)), t1 = BKCUnit(BKV3dAdd(nextDir, dir));
+        BKVec3d n0 = BKCUnit(BKV3dAdd(prevNor, nor)), n1 = BKCUnit(BKV3dAdd(nextNor, nor));
+        while (d < plen) {
+            double f = d / plen;            // fraction of the piece
+            double real = f * len;
+            if (positions) positions[i] = BKV3dAddScaled(p->points[k], dir, real);
+            if (tangents) tangents[i] = BKCUnit(BKV3dAdd(BKV3dScale(t0, 1.0 - f), BKV3dScale(t1, f)));
+            if (normals) normals[i] = BKCUnit(BKV3dAdd(BKV3dScale(n0, 1.0 - f), BKV3dScale(n1, f)));
+            if (relativePositions) relativePositions[i] = (walked + real) / total;
+            if (++i >= maxSamples) return i;
+            d += spacing;
+        }
+        d -= plen;
+        walked += len;
+        prevDir = dir; prevNor = nor;
+        dir = nextDir; nor = nextNor; len = nextLen; plen = nextPlen;
+    }
+    #undef BKC_PIECE
+    return i;
+}
+
 int BKCurvePolylineSampleAt(const BKCurvePolyline *polyline, double distance, BKVec3d initialNormal,
                             BKVec3d *position, BKVec3d *tangent, BKVec3d *normal)
 {

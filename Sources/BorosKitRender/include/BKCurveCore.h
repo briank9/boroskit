@@ -93,6 +93,19 @@ size_t BKCurvePolylineSample(const BKCurvePolyline *polyline, double spacing, do
                              BKVec3d initialNormal, BKVec3d *positions, BKVec3d *tangents, BKVec3d *normals,
                              size_t maxSamples);
 
+// What: "stretched" sampling: samples every `spacing` mm measured along the polyline as seen along
+// `projectionDirection` (projected onto a plane perpendicular to it), starting `startDistance` mm into
+// that projected length. Each sample is the matching point on the REAL (unprojected) polyline (same
+// fraction of the piece); tangent = real piece directions blended as in BKCurvePolylineSample;
+// normal = unit (projected piece direction x projectionDirection) (any unit vector perpendicular to
+// projectionDirection when the piece is seen end-on), blended the same way; relativePosition =
+// distance along the REAL polyline / its length. Any output may be NULL. Returns how many were
+// written. Why: the stretched curved MPR keeps the vertical direction of the patient for every
+// column, so its columns are equally spaced as seen from that direction.
+size_t BKCurvePolylineSampleProjected(const BKCurvePolyline *polyline, double spacing, double startDistance,
+                                      BKVec3d projectionDirection, BKVec3d *positions, BKVec3d *tangents,
+                                      BKVec3d *normals, double *relativePositions, size_t maxSamples);
+
 // What: one sample at `distance` mm along the polyline (clamped to the ends; the end of the polyline
 // gives the last point and the last piece's tangent / normal). Any output may be NULL. Returns 0 for an
 // empty polyline.

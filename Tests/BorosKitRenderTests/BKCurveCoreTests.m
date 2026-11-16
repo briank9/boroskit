@@ -43,6 +43,21 @@ static const double kArchSamples[10][9] = { // position, tangent, normal every l
 };
 static const double kArchClosest[4] = { 0.520929776, 2.757473909, 27.734933173, 902.475749017 }; // relative position, point (probe 5, 40, 905)
 
+static const double kArchProjectedLength = 131.414336001;
+static const double kArchProjected[11][10] = { // position, tangent, normal, relative position (projection 0.1,-0.2,1)
+    { -40.000000000, -20.000000000, 900.000000000, 0.333158597, 0.942189371, 0.035840468, 0.932819690, -0.323833372, -0.158048643, 0.000000000 },
+    { -35.614983595, -7.525016686, 900.473438260, 0.347912998, 0.936822266, 0.036339883, 0.927323214, -0.338163722, -0.160365066, 0.099830162 },
+    { -30.259030459, 4.525695993, 900.978099449, 0.486526066, 0.872717094, 0.040709464, 0.862620482, -0.472455504, -0.180753149, 0.199493000 },
+    { -22.604008890, 15.182342560, 901.542927477, 0.676353540, 0.735234884, 0.044447210, 0.726621043, -0.656090485, -0.203880201, 0.298826419 },
+    { -12.600072785, 23.627885377, 902.126705218, 0.843270862, 0.535795233, 0.042634758, 0.531299497, -0.818942739, -0.216918498, 0.397989174 },
+    { -0.356475686, 27.977773748, 902.497950272, 0.999761341, 0.021755975, 0.001984517, 0.021657097, -0.979931994, -0.198152108, 0.497305254 },
+    { 12.066482279, 23.963610698, 902.153615873, 0.851400676, -0.522826821, -0.042059541, -0.523915071, -0.843784391, -0.116365371, 0.597250200 },
+    { 22.284844241, 15.528112569, 901.563879388, 0.682907363, -0.729148079, -0.044504065, -0.730348171, -0.680163809, -0.062997945, 0.697619890 },
+    { 30.117452358, 4.784936009, 900.990069618, 0.491521694, -0.869906533, -0.040853990, -0.870805687, -0.491499322, -0.011219296, 0.798276631 },
+    { 35.564997417, -7.388977188, 900.478692682, 0.348669952, -0.936539816, -0.036365341, -0.936593927, -0.349611741, 0.023737044, 0.899075658 },
+    { 39.995422658, -19.987055046, 900.000492420, 0.333140272, -0.942195874, -0.035839844, -0.942120299, -0.334155087, 0.027381013, 0.999896343 },
+};
+
 @implementation BKCurveCoreTests
 
 // What: the arch as a polyline with the defaults.
@@ -169,6 +184,32 @@ static const double kArchClosest[4] = { 0.520929776, 2.757473909, 27.734933173, 
     XCTAssertTrue(BKCurvePolylineBoundingPlanes(&p, BKV3d(0, 1, 0), &top, &bottom));
     XCTAssertEqualWithAccuracy(top.y, 28, 1e-9);        // the front node
     XCTAssertEqualWithAccuracy(bottom.y, -20, 1e-9);    // the end nodes
+    BKCurvePolylineFree(&p);
+}
+
+// What: stretched-MPR sampling (spacing measured as seen along a tilted vertical) against the old engine
+// (measured on 1500 samples: positions <= 0.046 mm, normals <= 0.006, relative positions <= 0.0001).
+- (void)testProjectedSamplingMatchesClassic
+{
+    BKCurvePolyline p = [self archPolyline];
+    BKVec3d proj = BKV3d(0.1, -0.2, 1.0);
+    BKCurvePolyline pp;
+    XCTAssertTrue(BKCurvePolylineProjectToPlane(&p, BKV3d(0, 0, 0), proj, &pp));
+    double pl = BKCurvePolylineLength(&pp);
+    XCTAssertEqualWithAccuracy(pl, kArchProjectedLength, 0.02);
+    BKVec3d pos[12], tan[12], nor[12];
+    double rel[12];
+    size_t n = BKCurvePolylineSampleProjected(&p, pl / 10.0, 0, proj, pos, tan, nor, rel, 12);
+    XCTAssertTrue(n == 10 || n == 11, @"%zu samples", n);
+    for (size_t i = 0; i < 10; i++) {
+        const double *e = kArchProjected[i];
+        XCTAssertLessThan(BKV3dDistance(pos[i], BKV3d(e[0], e[1], e[2])), 0.1, @"position %zu", i);
+        XCTAssertLessThan(BKV3dDistance(tan[i], BKV3d(e[3], e[4], e[5])), 0.04, @"tangent %zu", i);
+        XCTAssertLessThan(BKV3dDistance(nor[i], BKV3d(e[6], e[7], e[8])), 0.01, @"normal %zu", i);
+        XCTAssertEqualWithAccuracy(rel[i], e[9], 0.001, @"relative position %zu", i);
+        XCTAssertEqualWithAccuracy(BKV3dDot(nor[i], BKV3dNormalize(proj)), 0, 1e-9, @"normal across the vertical %zu", i);
+    }
+    BKCurvePolylineFree(&pp);
     BKCurvePolylineFree(&p);
 }
 
