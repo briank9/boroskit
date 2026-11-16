@@ -57,10 +57,12 @@ static float bkr_sample(texture3d<float, access::read> vol, constant BKReformatP
     if (p.interpolation == 0) {   // nearest: (int)(c + 0.5), cut toward zero (classic rule)
         return bkr_fetch(vol, p, int(c.x + 0.5f), int(c.y + 0.5f), int(c.z + 0.5f));
     }
-    float3 f = floor(c);
-    float3 d = c - f;
-    int3 i0 = int3(f);
-    if (p.interpolation == 1) {   // linear
+    if (p.interpolation == 1) {   // linear, classic rule: base cut toward zero, whole sample outside if any voxel is
+        int3 i0 = int3(c);         // (GLSL: ivec3(c) also cuts toward zero)
+        if (i0.x < 0 || i0.y < 0 || i0.z < 0 || i0.x + 1 >= int(p.volumeWide) || i0.y + 1 >= int(p.volumeHigh) ||
+            i0.z + 1 >= int(p.volumeDeep))
+            return p.outOfBoundsValue;
+        float3 d = c - float3(i0);
         float sum = 0.0f;
         for (int k = 0; k < 2; k++)
             for (int j = 0; j < 2; j++)
@@ -70,6 +72,9 @@ static float bkr_sample(texture3d<float, access::read> vol, constant BKReformatP
                 }
         return sum;
     }
+    float3 f = floor(c);
+    float3 d = c - f;
+    int3 i0 = int3(f);
     float wx[4], wy[4], wz[4];   // cubic (Catmull-Rom)
     bkr_cubic_weights(d.x, wx);
     bkr_cubic_weights(d.y, wy);

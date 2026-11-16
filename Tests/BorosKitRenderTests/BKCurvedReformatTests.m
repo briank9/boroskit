@@ -51,6 +51,21 @@ static BKReformatFrame BKFrame(float bx, float by, float bz, float rx, float ry,
     return f;
 }
 
+// Old engine's linear sampling on a 4x3x2 volume v[i] = (i*i % 17) + 0.25 i, recorded with the scratch
+// harness (2026-11-15): base voxel cut toward zero, whole sample outside when any voxel is outside.
+static const double kOldLinear[10][4] = { // x, y, z, value (outOfBounds -1000)
+    { 0.300, 0.600, 0.200, 8.81500053 },
+    { 2.900, 1.990, 0.500, 7.22249985 },
+    { 1.500, 1.500, 0.999, 11.1252499 },
+    { 3.000, 1.000, 0.000, -1000 },
+    { 2.999, 1.000, 0.000, 16.7367496 },
+    { -0.500, 1.000, 0.500, 13.125 },
+    { 1.000, -0.400, 0.500, 11.6500006 },
+    { -1.200, 1.000, 0.500, -1000 },
+    { 1.000, 1.000, 1.000, -1000 },
+    { 0.000, 0.000, 0.000, 0 },
+};
+
 @implementation BKCurvedReformatTests
 
 - (void)testCPUReferenceRules
@@ -85,6 +100,21 @@ static BKReformatFrame BKFrame(float bx, float by, float bz, float rx, float ry,
     for (int x = 0; x < 24; x++) mu += (((x >= 15 && x < 20) ? 3000 : x + 170 + 1700 - 1000) + 1000) * p.radiographK;
     XCTAssertEqualWithAccuracy(out, 3000 - 4000 * exp(-mu), 1e-2);
     free(v);
+}
+
+// What: linear sampling follows the classic edge rules exactly (ROI masks are often 1 slice deep, where
+// every classic linear sample is outside).
+- (void)testLinearMatchesClassicEdgeRules
+{
+    float v[24];
+    for (int i = 0; i < 24; i++) v[i] = (float)(i * i % 17) + 0.25f * i;
+    BKReformatParams p = BKParams(1, 1, 1, BKReformatLinear, BKReformatFirstSample);
+    p.volumeWide = 4; p.volumeHigh = 3; p.volumeDeep = 2;
+    p.outOfBoundsValue = -1000;
+    for (int i = 0; i < 10; i++) {
+        const double *e = kOldLinear[i];
+        XCTAssertEqualWithAccuracy(BKReformatSample(&p, v, e[0], e[1], e[2]), e[3], 1e-4, @"point %d", i);
+    }
 }
 
 - (void)testGPUMatchesCPUReference

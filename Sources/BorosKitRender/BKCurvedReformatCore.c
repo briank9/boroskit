@@ -39,10 +39,15 @@ float BKReformatSample(const BKReformatParams *p, const float *v, double x, doub
         // Classic rule: (long)(c + 0.5), i.e. cut toward zero.
         return BKRFetch(p, v, (long)(x + 0.5), (long)(y + 0.5), (long)(z + 0.5));
     }
-    double fx = floor(x), fy = floor(y), fz = floor(z);
-    double dx = x - fx, dy = y - fy, dz = z - fz;
-    long ix = (long)fx, iy = (long)fy, iz = (long)fz;
     if (p->interpolation == BKReformatLinear) {
+        // Classic linear rule (recorded from the old engine, 2026-11-15): the base voxel is the coordinate
+        // cut toward zero (so -1 < c < 0 uses voxels 0 and 1 and extrapolates), and the WHOLE sample is
+        // outOfBounds when any of the 8 voxels is outside (so the last row / column / slice is outside).
+        long ix = (long)x, iy = (long)y, iz = (long)z;
+        if (ix < 0 || iy < 0 || iz < 0 || ix + 1 >= (long)p->volumeWide || iy + 1 >= (long)p->volumeHigh ||
+            iz + 1 >= (long)p->volumeDeep)
+            return p->outOfBoundsValue;
+        double dx = x - (double)ix, dy = y - (double)iy, dz = z - (double)iz;
         double sum = 0;
         for (int k = 0; k < 2; k++)
             for (int j = 0; j < 2; j++)
@@ -52,6 +57,9 @@ float BKReformatSample(const BKReformatParams *p, const float *v, double x, doub
                 }
         return (float)sum;
     }
+    double fx = floor(x), fy = floor(y), fz = floor(z);
+    double dx = x - fx, dy = y - fy, dz = z - fz;
+    long ix = (long)fx, iy = (long)fy, iz = (long)fz;
     double wx[4], wy[4], wz[4];
     BKRCubicWeights(dx, wx);
     BKRCubicWeights(dy, wy);
