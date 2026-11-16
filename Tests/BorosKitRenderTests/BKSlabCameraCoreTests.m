@@ -371,6 +371,30 @@ static BKSlabCamera BKTestStored(int i)
     XCTAssertEqualWithAccuracy(BKSlabCameraLargestDifference(&c, &before), 0, 0);
 }
 
+// What: "up" along the viewing direction / zero "up" behave like the classic engine (recorded from
+// VTK 8.2 on 2026-11-15: an "up" along the view is read back as (0, 0, 0) with roll 0; a zero "up"
+// is stored as (0, 1, 0)). Why: the curved-MPR window briefly gives a view such a camera while it
+// opens; the classic round trip is what made the view recover.
+- (void)testDegenerateUpLikeClassic
+{
+    BKSlabCamera in = { BKV3d(90, 110, 70), BKV3d(90, 109, 70), BKV3d(0, -1, 0), 100, 0, 0, 30, 2 };
+    BKSlabCamera c;
+    XCTAssertEqual(BKSlabCameraStore(&in, 40, &c), BKSlabCameraOK);        // stored as given
+    XCTAssertEqualWithAccuracy(c.viewUp.y, -1, 0);
+    XCTAssertEqualWithAccuracy(c.focalPoint.y, 70, 1e-12);                   // 40 ahead
+    XCTAssertEqual(BKSlabCameraReadBack(&c), BKSlabCameraRefused);
+    XCTAssertEqual(c.viewUp.x, 0); XCTAssertEqual(c.viewUp.y, 0); XCTAssertEqual(c.viewUp.z, 0);
+    XCTAssertEqual(BKSlabCameraRollDegrees(&c), 0);
+    BKSlabCamera again;
+    XCTAssertEqual(BKSlabCameraStore(&c, 40, &again), BKSlabCameraOK);      // zero up -> (0, 1, 0)
+    XCTAssertEqual(again.viewUp.x, 0); XCTAssertEqual(again.viewUp.y, 1); XCTAssertEqual(again.viewUp.z, 0);
+    // A normal camera reads back straightened (same as BKSlabCameraOrthogonalizeUp).
+    BKSlabCamera normal = BKTestStored(2), copy = normal;
+    XCTAssertEqual(BKSlabCameraReadBack(&normal), BKSlabCameraOK);
+    BKSlabCameraOrthogonalizeUp(&copy);
+    XCTAssertEqualWithAccuracy(BKSlabCameraLargestDifference(&normal, &copy), 0, 0);
+}
+
 // What: unusable input changes nothing and is reported.
 - (void)testBadInput
 {

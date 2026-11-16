@@ -78,10 +78,18 @@ BKVec3d BKSlabCameraDirection(const BKSlabCamera *camera);
 int BKSlabCameraAxes(const BKSlabCamera *camera, BKVec3d *right, BKVec3d *up);
 
 // What: stores `in` as the slab camera, the way the classic "write the camera, then read it back"
-// round trip changed it: "up" is normalised (not straightened), and when `focalDistance` > 0 the
-// focal point is moved to `focalDistance` ahead of the eye along the viewing direction (Boros 6
-// uses 40 world units in slab mode). Everything else is copied.
+// round trip changed it: "up" is normalised (not straightened; classic rule: a zero "up" becomes
+// (0, 1, 0)), and when `focalDistance` > 0 the focal point is moved to `focalDistance` ahead of the
+// eye along the viewing direction (Boros 6 uses 40 world units in slab mode). Everything else is
+// copied. Refused (BadInput) only for non-finite numbers or the eye on the focal point.
 BKSlabCameraStatus BKSlabCameraStore(const BKSlabCamera *in, double focalDistance, BKSlabCamera *out);
+
+// What: the classic read-back of the camera (-cameraWithThumbnail:): "up" is straightened; when
+// "up" lies along the viewing direction (or is zero) there is no screen orientation, and the
+// classic engine then reported "up" = (0, 0, 0) (and roll 0) - kept, so the next store turns it
+// into (0, 1, 0) exactly as before. Returns BKSlabCameraOK, or BKSlabCameraRefused for that
+// degenerate case (camera changed as described), or BadInput (unchanged).
+BKSlabCameraStatus BKSlabCameraReadBack(BKSlabCamera *camera);
 
 // What: makes "up" exactly perpendicular to the viewing direction (keeps it pointing the same
 // side). Every classic read of the camera did this first.

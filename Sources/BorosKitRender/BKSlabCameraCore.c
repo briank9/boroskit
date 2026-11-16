@@ -60,9 +60,12 @@ int BKSlabCameraAxes(const BKSlabCamera *camera, BKVec3d *right, BKVec3d *up)
 
 BKSlabCameraStatus BKSlabCameraStore(const BKSlabCamera *in, double focalDistance, BKSlabCamera *out)
 {
-    if (!BKSCUsable(in) || out == NULL || !isfinite(focalDistance)) return BKSlabCameraBadInput;
+    if (in == NULL || out == NULL || !isfinite(focalDistance)) return BKSlabCameraBadInput;
+    // Usable apart from "up" (a zero "up" is allowed here: classic rule below).
     BKSlabCamera c = *in;
-    c.viewUp = BKV3dNormalize(in->viewUp);   // classic: normalised, not straightened
+    if (BKV3dLength(c.viewUp) == 0 && BKSCFinite3(c.viewUp)) c.viewUp = BKV3d(0, 1, 0);
+    if (!BKSCUsable(&c)) return BKSlabCameraBadInput;
+    c.viewUp = BKV3dNormalize(c.viewUp);   // classic: normalised, not straightened
     if (focalDistance > 0)
         c.focalPoint = BKV3dAddScaled(c.position, BKSlabCameraDirection(in), focalDistance);
     *out = c;
@@ -75,6 +78,17 @@ BKSlabCameraStatus BKSlabCameraOrthogonalizeUp(BKSlabCamera *camera)
     if (!BKSlabCameraAxes(camera, NULL, &up)) return BKSlabCameraBadInput;
     camera->viewUp = up;
     return BKSlabCameraOK;
+}
+
+BKSlabCameraStatus BKSlabCameraReadBack(BKSlabCamera *camera)
+{
+    if (camera == NULL || !BKSCFinite3(camera->position) || !BKSCFinite3(camera->focalPoint) ||
+        !BKSCFinite3(camera->viewUp) || !(BKV3dLength(BKV3dSub(camera->focalPoint, camera->position)) > 1e-20))
+        return BKSlabCameraBadInput;
+    if (BKV3dLength(camera->viewUp) > 0 && BKSlabCameraOrthogonalizeUp(camera) == BKSlabCameraOK)
+        return BKSlabCameraOK;
+    camera->viewUp = BKV3d(0, 0, 0);   // classic: no screen orientation -> "up" read back as zero
+    return BKSlabCameraRefused;
 }
 
 int BKSlabCameraCosines(const BKSlabCamera *camera, float out[9])
