@@ -126,8 +126,9 @@ void BKROIDrawPolygon(BKOverlayList *list, const BKROIDrawContext *ctx, const BK
 // points the arc where the lines (or their extensions) cross, in the full colour, and thin dotted
 // extensions (1 x backing wide, dashes of 4 x backing, 70 % opacity) from each line to the crossing;
 // "all points" handles of (backing + sqrt(thick)) x 3.5 x backing. Sizes x backing.
-// (2026-11-17) When the lines cross farther than twice the longer line from either end, no arc and the
-// extensions are 30-point dotted stubs towards the crossing (nearly parallel lines no longer run off screen).
+// (2026-11-17) When the lines cross farther than twice the longer line from either end, the corner is moved to the
+// line end nearer the crossing: a dashed copy of the other line's direction there and the arc between them
+// (nearly parallel lines no longer run off screen).
 void BKROIDrawDynamicAngle(BKOverlayList *list, const BKROIDrawContext *ctx, const BKROIPoint *pts, uint32_t n,
                            const uint8_t *flags);
 

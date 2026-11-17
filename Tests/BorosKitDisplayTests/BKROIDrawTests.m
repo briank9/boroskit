@@ -206,23 +206,23 @@ static BKROIDrawContext Ctx(void)
     BKOverlayListFree(L);
 }
 
-// Dynamic angle with nearly parallel lines (2026-11-17): the crossing is far away, so only short dotted stubs
-// (30 points) are drawn towards it - nothing far above the lines.
-- (void)testDynamicAngleFarCrossingStubs
+// Dynamic angle with nearly parallel lines (2026-11-17, "moved corner"): the crossing is far away, so the arc and a
+// dashed copy of the other line are drawn at line A's end nearer the crossing - nothing far above the lines.
+- (void)testDynamicAngleFarCrossingMovedCorner
 {
     const uint32_t W = 128, H = 128;
     float *px = (float *)calloc(W * H * 4, sizeof(float));
     BKOverlayList *L = BKOverlayListCreate();
     BKROIDrawContext c = Ctx();                       // view = 2 x model + (10, 5)
-    BKROIPoint pts[4] = { { 10, 55 }, { 10, 40 }, { 30, 40 }, { 30.6, 55 } };   // two almost vertical lines
+    BKROIPoint pts[4] = { { 10, 55 }, { 10, 40 }, { 30, 40 }, { 33, 55 } };   // lines meeting far above
     BKROIDrawDynamicAngle(L, &c, pts, 4, NULL);
     BKOverlayRasterize(L, px, W, H);
     #define A(X, Y) px[((Y) * W + (X)) * 4 + 3]
-    // Line 1's top end at view (30, 85): its stub runs up to about y = 55; nothing near y = 20 above it.
-    float stub = 0, above = 0;
-    for (int y = 60; y < 84; y++) for (int x = 28; x <= 32; x++) if (A(x, y) > stub) stub = A(x, y);
-    for (int y = 5; y < 45; y++) for (int x = 25; x <= 35; x++) if (A(x, y) > above) above = A(x, y);
-    XCTAssertGreaterThan(stub, 0.2f);
+    // Line A's top end is at view (30, 85); the arc / copy start there. Nothing near the far crossing above.
+    float near = 0, above = 0;
+    for (int y = 84; y < 100; y++) for (int x = 31; x <= 40; x++) if (A(x, y) > near) near = A(x, y);
+    for (int y = 0; y < 60; y++) for (int x = 0; x < (int)W; x++) if (A(x, y) > above) above = A(x, y);
+    XCTAssertGreaterThan(near, 0.2f);
     XCTAssertLessThan(above, 0.01f);
     #undef A
     free(px);
