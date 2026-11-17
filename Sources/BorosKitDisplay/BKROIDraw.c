@@ -289,42 +289,33 @@ void BKROIDrawDynamicAngle(BKOverlayList *list, const BKROIDrawContext *ctx, con
             float la = hypotf(q[1].x - q[0].x, q[1].y - q[0].y), lb = hypotf(q[3].x - q[2].x, q[3].y - q[2].y);
             BKVec2f fromA, fromB;
             int extA = BKAngleExtensionStart(q[0], q[1], corner, &fromA), extB = BKAngleExtensionStart(q[2], q[3], corner, &fromB);
-            // Boros 6 (2026-11-17, user's choice "moved corner"): a nearly-parallel pair crosses far away and the
-            // dotted extensions ran off the screen. When the crossing is farther from either line's end than twice
-            // the longer line, the corner is moved to the line end nearer the crossing: a dashed copy of the OTHER
-            // line's direction starts there, and the arc shows the angle between that copy and the line - the usual
-            // way to draw the angle of two lines that do not meet nearby. Otherwise everything is drawn as before
-            // (arc at the crossing, dotted extensions to it). The angle value is not affected.
+            // Boros 6 (2026-11-17, user request): a nearly-parallel pair crosses far away, and the dotted extensions
+            // ran off the screen. Rule: when the crossing is farther from either line's end than twice the longer
+            // line, the arc is left out and each extension is a short dotted stub (30 points) pointing towards the
+            // crossing; otherwise everything is drawn as before. The angle value is not affected.
             float longer = la > lb ? la : lb, farA = 0, farB = 0;
             if (extA) farA = hypotf(corner.x - fromA.x, corner.y - fromA.y);
             if (extB) farB = hypotf(corner.x - fromB.x, corner.y - fromB.y);
             int far = (farA > 2.0f * longer) || (farB > 2.0f * longer);
-            double s = Zoom(ctx);
-            float dash[2] = { 4.0f * k, 4.0f * k };    // the old stipple: 2 on / 2 off, x (2 x backing)
-            BKOverlayStroke st = Stroke(1.0f * k, 1);
-            st.dashes = dash; st.dashCount = 2;
-            BKOverlayColor dc = ctx->color;
-            dc.a *= 0.7f;
-            if (far) {
-                // Pivot: line A's end nearer the crossing (or line B's, when only B needs extending).
-                // (ta / tb are points on the rays: corner + unit direction.)
-                int useA = extA;
-                BKVec2f da = BKV2f(ta.x - corner.x, ta.y - corner.y), db = BKV2f(tb.x - corner.x, tb.y - corner.y);
-                BKVec2f pivot = useA ? fromA : fromB;
-                BKVec2f alongDir = useA ? da : db, copyDir = useA ? db : da;
-                float copyLen = 0.6f * (useA ? la : lb);
-                BKVec2f end = BKV2f(pivot.x + copyDir.x * copyLen, pivot.y + copyDir.y * copyLen);
-                BKVec2f seg[2] = { BKROIDrawMap(ctx, (BKROIPoint){ pivot.x / s, pivot.y / s }),
-                                   BKROIDrawMap(ctx, (BKROIPoint){ end.x / s, end.y / s }) };
-                BKOverlayStrokePolyline(list, seg, NULL, 2, 0, &st, dc);
-                AngleArc(list, ctx, pivot, BKV2f(pivot.x + alongDir.x, pivot.y + alongDir.y),
-                         BKV2f(pivot.x + copyDir.x, pivot.y + copyDir.y), copyLen, w, ctx->color);
-            } else {
-                AngleArc(list, ctx, corner, ta, tb, la < lb ? la : lb, w, ctx->color);
-                if (extA || extB) {
-                    BKVec2f cv = BKROIDrawMap(ctx, (BKROIPoint){ corner.x / s, corner.y / s });
-                    if (extA) { BKVec2f e2[2] = { BKROIDrawMap(ctx, (BKROIPoint){ fromA.x / s, fromA.y / s }), cv }; BKOverlayStrokePolyline(list, e2, NULL, 2, 0, &st, dc); }
-                    if (extB) { BKVec2f e2[2] = { BKROIDrawMap(ctx, (BKROIPoint){ fromB.x / s, fromB.y / s }), cv }; BKOverlayStrokePolyline(list, e2, NULL, 2, 0, &st, dc); }
+            if (!far) AngleArc(list, ctx, corner, ta, tb, la < lb ? la : lb, w, ctx->color);
+            if (extA || extB) {
+                double s = Zoom(ctx);
+                float dash[2] = { 4.0f * k, 4.0f * k };    // the old stipple: 2 on / 2 off, x (2 x backing)
+                BKOverlayStroke st = Stroke(1.0f * k, 1);
+                st.dashes = dash; st.dashCount = 2;
+                BKOverlayColor dc = ctx->color;
+                dc.a *= 0.7f;
+                BKVec2f cv = BKROIDrawMap(ctx, (BKROIPoint){ corner.x / s, corner.y / s });
+                for (int e = 0; e < 2; e++) {
+                    if (!(e == 0 ? extA : extB)) continue;
+                    BKVec2f f = e == 0 ? fromA : fromB;
+                    BKVec2f fv = BKROIDrawMap(ctx, (BKROIPoint){ f.x / s, f.y / s }), to = cv;
+                    if (far) {   // stub: 30 view points from the line's end towards the crossing
+                        float dx = cv.x - fv.x, dy = cv.y - fv.y, len = hypotf(dx, dy), stub = 30.0f * k;
+                        if (len > stub && len > 0) to = BKV2f(fv.x + dx / len * stub, fv.y + dy / len * stub);
+                    }
+                    BKVec2f seg[2] = { fv, to };
+                    BKOverlayStrokePolyline(list, seg, NULL, 2, 0, &st, dc);
                 }
             }
         }
