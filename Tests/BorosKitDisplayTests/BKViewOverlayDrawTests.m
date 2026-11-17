@@ -81,4 +81,44 @@ static BKViewXf Centred(void) { BKViewXf x = { 1, 0, 0, 1, 32, 16 }; return x; }
     BKOverlayListFree(L);
 }
 
+// The magnifying lens: zoomed picture (A,R,G,B bytes) left half red / right half blue, mask showing only its left
+// half. The lens square covers view (16,0)-(48,32): its left part shows red, its right part nothing; hard blocks
+// (smooth 0) keep the colour edge sharp, and the lens picture is one pixel per view pixel.
+- (void)testLens
+{
+    const uint32_t W = 64, H = 32;
+    float *px = (float *)calloc(W * H * 4, sizeof(float));
+    BKOverlayList *L = BKOverlayListCreate();
+    BKViewXf xf = Centred();
+    uint8_t zoomed[4 * 4 * 4];
+    for (int k = 0; k < 16; k++) {
+        int col = k % 4;
+        uint8_t *p = zoomed + k * 4;
+        p[0] = 0; p[1] = col < 2 ? 255 : 0; p[2] = 0; p[3] = col < 2 ? 0 : 255;   // A, R, G, B
+    }
+    uint8_t mask[2] = { 255, 0 };
+    XCTAssertEqual(BKViewLensPictureSize(&xf, 32), 32u);
+    XCTAssertEqual(BKViewDrawLens(L, &xf, -16, -16, 32, zoomed, 4, 1, 0, 4, mask, 2, 1, 0), 1);
+    BKOverlayRasterize(L, px, W, H);
+    #define P(X, Y, C) px[((Y) * W + (X)) * 4 + (C)]
+    XCTAssertGreaterThan(P(18, 16, 3), 0.95f);    // left edge: mask fully open
+    XCTAssertGreaterThan(P(18, 16, 0), 0.95f);    // red
+    XCTAssertLessThan(P(18, 16, 2), 0.01f);
+    XCTAssertLessThan(P(46, 16, 3), 0.05f);       // right edge: masked out
+    XCTAssertLessThan(P(10, 16, 3), 0.001f);      // outside the square: nothing
+    XCTAssertEqualWithAccuracy(P(32, 16, 3), 0.5f, 0.1f);   // mask half-way across
+    // Backwards window (from 4 to 0): the colours swap sides - blue now on the left.
+    BKOverlayListReset(L); memset(px, 0, W * H * 4 * sizeof(float));
+    XCTAssertEqual(BKViewDrawLens(L, &xf, -16, -16, 32, zoomed, 4, 1, 4, 0, mask, 2, 1, 0), 1);
+    BKOverlayRasterize(L, px, W, H);
+    XCTAssertGreaterThan(P(18, 16, 2), 0.95f);
+    XCTAssertLessThan(P(18, 16, 0), 0.01f);
+    // Nothing to draw.
+    XCTAssertEqual(BKViewDrawLens(L, &xf, 0, 0, 0, zoomed, 4, 1, 0, 4, mask, 2, 1, 0), 0);
+    XCTAssertEqual(BKViewDrawLens(L, &xf, 0, 0, 8, NULL, 4, 1, 0, 4, mask, 2, 1, 0), 0);
+    #undef P
+    free(px);
+    BKOverlayListFree(L);
+}
+
 @end

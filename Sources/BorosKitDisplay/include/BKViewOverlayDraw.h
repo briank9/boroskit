@@ -71,6 +71,27 @@ void BKViewDrawFill(BKOverlayList *list, const BKViewXf *xf, const double *xy, u
 void BKViewDrawPicture(BKOverlayList *list, const BKViewXf *xf, int32_t image, uint32_t imgW, uint32_t imgH,
                        double x, double y, double w, double h, int flipX, int flipY, int crisp, BKOverlayColor color);
 
+// What: the magnifying lens (overlay-engine plan step 6, 2026-11-16). A square of side `side` model units with
+// its top-left corner at model (x, y) shows part of a zoomed picture, cut to shape by a mask picture.
+//   zoomed: zoomSize x zoomSize pixels, 4 bytes each, row 0 = top; its red, green, blue bytes start at byte
+//           `redOffset` of each pixel (0 for R,G,B,A; 1 for A,R,G,B); its own alpha byte is not used.
+//   from, to: the part of the zoomed picture shown, in its pixel units: the square's left / top edge shows
+//           coordinate `from`, its right / bottom edge `to` (both directions the same; may run backwards).
+//   mask: maskW x maskH bytes, row 0 = top; each byte = how much of the lens shows there (0 none, 255 all);
+//         it is stretched over the whole square.
+//   smooth: 1 = the zoomed pixels are blended (linear), 0 = shown as hard blocks; the mask is always smooth.
+// The lens is built as ONE picture with about one pixel per view pixel (so its edge stays smooth at any zoom)
+// and placed with the view's transform (any rotation / mirror). Returns 1 when drawn, 0 when there was nothing
+// to draw (zero size, missing pictures, or a picture too large for the list).
+// Plain language: the round magnifier that follows the mouse - zoomed image inside, see-through outside.
+int BKViewDrawLens(BKOverlayList *list, const BKViewXf *xf, double x, double y, double side,
+                   const uint8_t *zoomed, uint32_t zoomSize, uint32_t redOffset, double from, double to,
+                   const uint8_t *mask, uint32_t maskW, uint32_t maskH, int smooth);
+
+// What: the lens's size in pixels for a square of `side` model units under `xf` (the longer of its two edges in
+// view pixels, rounded up, at least 1, at most 4096) - the size of the picture BKViewDrawLens builds.
+uint32_t BKViewLensPictureSize(const BKViewXf *xf, double side);
+
 #ifdef __cplusplus
 }
 #endif
