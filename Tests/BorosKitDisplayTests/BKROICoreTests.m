@@ -209,4 +209,77 @@ static BOOL NearFloat(double a, double recorded)
     BKROIRunListFree(&runs);
 }
 
+// Plan step 7 remainder (2026-11-16): brush masks, colour pixels, statistics of values, moments, curve pieces.
+- (void)testBrushColourMomentsPieces
+{
+    // A 4 x 3 mask placed at (-1, 1) on a 4 x 4 image: column 0 of the mask is off the image.
+    const uint8_t mask[12] = { 1, 1, 0, 1,
+                               0, 0, 0, 0,
+                               1, 1, 1, 1 };
+    BKROIRunList runs = BKROIMaskRuns(mask, 4, 3, -1, 1, 4, 4);
+    XCTAssertEqual(runs.count, 3u);
+    XCTAssertEqual(runs.runs[0].y, 1); XCTAssertEqual(runs.runs[0].x0, 0); XCTAssertEqual(runs.runs[0].x1, 0);
+    XCTAssertEqual(runs.runs[1].y, 1); XCTAssertEqual(runs.runs[1].x0, 2); XCTAssertEqual(runs.runs[1].x1, 2);
+    XCTAssertEqual(runs.runs[2].y, 3); XCTAssertEqual(runs.runs[2].x0, 0); XCTAssertEqual(runs.runs[2].x1, 2);
+    XCTAssertEqual(BKROIRunsPixelCount(&runs, 4, 4), 5u);
+    XCTAssertEqual(BKROIMaskCount(mask, 4, 3), 7u);                    // area counts every painted pixel
+    XCTAssertTrue(BKROIMaskContains(mask, 4, 3, -1, 1, 0.0, 1.0));
+    XCTAssertTrue(BKROIMaskContains(mask, 4, 3, -1, 1, 0.9, 1.9));     // same pixel
+    XCTAssertFalse(BKROIMaskContains(mask, 4, 3, -1, 1, 1.0, 1.0));    // mask (2, 0) not painted
+    XCTAssertFalse(BKROIMaskContains(mask, 4, 3, -1, 1, 0.0, 2.0));    // empty mask row
+    XCTAssertFalse(BKROIMaskContains(mask, 4, 3, -1, 1, 3.0, 1.0));    // right of the mask
+
+    // Float image values 0..15 (value = y * 4 + x): run values in run order, with locations.
+    float image[16];
+    for (int k = 0; k < 16; k++) image[k] = (float)k;
+    float v[5], loc[10];
+    XCTAssertEqual(BKROIValuesOfRuns(&runs, image, NULL, 4, 4, v, loc), 5u);
+    XCTAssertEqual(v[0], 4.0f); XCTAssertEqual(v[1], 6.0f); XCTAssertEqual(v[2], 12.0f); XCTAssertEqual(v[4], 14.0f);
+    XCTAssertEqual(loc[2], 2.0f); XCTAssertEqual(loc[3], 1.0f);
+    // Statistics of values = statistics of runs, to the bit.
+    BKROIStats a = BKROIStatsOfRuns(&runs, image, 4, 4), b = BKROIStatsOfValues(v, 5);
+    XCTAssertEqual(a.count, b.count); XCTAssertEqual(a.mean, b.mean); XCTAssertEqual(a.total, b.total);
+    XCTAssertEqual(a.dev, b.dev); XCTAssertEqual(a.min, b.min); XCTAssertEqual(a.max, b.max);
+
+    // Colour pixels (A, R, G, B): the average of R, G, B - alpha never counts (the fixed old bug).
+    uint8_t argb[16 * 4];
+    for (int k = 0; k < 16; k++) { argb[4 * k] = 255; argb[4 * k + 1] = 30; argb[4 * k + 2] = 60; argb[4 * k + 3] = (uint8_t)(90 + k); }
+    XCTAssertEqualWithAccuracy(BKROIColorValue(argb), 60.0f, 1e-6);
+    XCTAssertEqual(BKROIValuesOfRuns(&runs, NULL, argb, 4, 4, v, NULL), 5u);
+    XCTAssertEqualWithAccuracy(v[0], (30 + 60 + 94) / 3.0f, 1e-5);   // pixel 4
+    BKROIRunListFree(&runs);
+
+    // Moments: symmetric values -> skewness 0; known kurtosis for 1, 2, 3, 4, 5 with the (n - 1) rule:
+    // m2 = 10/4, m4 = 34/4 -> 8.5 / 6.25 - 3 = -1.64.
+    float sym[5] = { 1, 2, 3, 4, 5 };
+    double sk = 1, ku = 1;
+    BKROIMoments(sym, 5, 3.0, &sk, &ku);
+    XCTAssertEqualWithAccuracy(sk, 0.0, 1e-12);
+    XCTAssertEqualWithAccuracy(ku, -1.64, 1e-12);
+    BKROIMoments(sym, 1, 1.0, &sk, &ku);
+    XCTAssertEqual(sk, 0.0); XCTAssertEqual(ku, 0.0);
+
+    // Curve pieces: a smoothed closed square - every curve point names a piece 0..3 in order, the curve is
+    // the same as BKROICurve's; an unsmoothed outline gives no pieces.
+    BKROIPoint sq[4] = { { 10, 10 }, { 40, 10 }, { 40, 40 }, { 10, 40 } };
+    BKROIShape s = { BKROIKindClosedPolygon, sq, 4, 0, 0, 0, 0, 1, 1, 1, 0 };
+    int32_t *pieces = NULL;
+    BKROIPointList c1 = BKROICurve(&s, 1), c2 = BKROICurveWithPieces(&s, 1, &pieces);
+    XCTAssertEqual(c1.count, c2.count);
+    XCTAssertTrue(pieces != NULL);
+    for (uint32_t k = 0; pieces && k < c2.count; k++) {
+        XCTAssertEqual(c1.points[k].x, c2.points[k].x);
+        XCTAssertTrue(pieces[k] >= 0 && pieces[k] <= 3);
+        if (k) XCTAssertTrue(pieces[k] >= pieces[k - 1]);
+    }
+    XCTAssertEqual(pieces[0], 0);
+    XCTAssertEqual(pieces[c2.count - 1], 3);
+    free(pieces);
+    BKROIPointListFree(&c1); BKROIPointListFree(&c2);
+    s.smooth = 0;
+    BKROIPointList c3 = BKROICurveWithPieces(&s, 1, &pieces);
+    XCTAssertTrue(pieces == NULL);
+    BKROIPointListFree(&c3);
+}
+
 @end

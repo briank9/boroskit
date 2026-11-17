@@ -136,6 +136,51 @@ float BKROIPointValue(BKROIPoint p, const float *image, int32_t width, int32_t h
 // below one end and above the other, and the point is left of the crossing).
 int BKROIContainsPoint(int32_t kind, const BKROIPoint *curve, uint32_t n, double x, double y);
 
+// ---- Brush ROIs, colour images, higher moments, curve pieces (plan step 7 remainder, 2026-11-16) ----
+// Brush ROIs are a MASK (one byte per pixel, non-zero = painted) placed with its top-left pixel at image
+// pixel (left, top). Colour images are 4 bytes per pixel A, R, G, B (Horos' colour pixel layout).
+
+// What: the painted mask pixels that fall on the image, as row runs (top row first, left to right - the
+// order the old routine visited them).
+BKROIRunList BKROIMaskRuns(const uint8_t *mask, int32_t maskW, int32_t maskH, int32_t left, int32_t top,
+                           int32_t width, int32_t height);
+
+// What: how many mask pixels are painted (all of them, also any off the image - the brush ROI's area rule).
+uint32_t BKROIMaskCount(const uint8_t *mask, int32_t maskW, int32_t maskH);
+
+// What: is image point (x, y) on a painted pixel of the mask? The point's pixel is its x and y each cut to a
+// whole pixel (floor). (The old routine combined x and y into one index before cutting, which picked a
+// neighbouring pixel for points between pixel rows; same result for whole-pixel points.)
+int BKROIMaskContains(const uint8_t *mask, int32_t maskW, int32_t maskH, int32_t left, int32_t top,
+                      double x, double y);
+
+// What: the value of one colour pixel (A, R, G, B bytes): the average of red, green and blue.
+// DECISION (user, 2026-11-16): every ROI kind uses this. The old Horos / OsiriX routine used it for polygons,
+// rectangles and ovals but a wrong formula (A + R + G / 3) for brush ROIs and point ROIs; that is fixed.
+float BKROIColorValue(const uint8_t *argb);
+
+// What: how many pixels the runs hold on a width x height image (rows outside the image skipped).
+uint32_t BKROIRunsPixelCount(const BKROIRunList *runs, int32_t width, int32_t height);
+
+// What: the values of the run pixels in run order, from a float image OR (image NULL) a colour image `argb`
+// (row stride = width pixels). values: room for BKROIRunsPixelCount; locations: NULL or room for 2 floats per
+// pixel (x, y). Returns how many were written.
+uint32_t BKROIValuesOfRuns(const BKROIRunList *runs, const float *image, const uint8_t *argb,
+                           int32_t width, int32_t height, float *values, float *locations);
+
+// What: statistics of a list of values, with exactly the arithmetic of BKROIStatsOfRuns (same order).
+BKROIStats BKROIStatsOfValues(const float *values, uint32_t count);
+
+// What: skewness and kurtosis of the values around `mean` (as recorded: the k-th central moment is
+// sum((v - mean)^k) / (count - 1); skewness = m3 / sqrt(m2)^3; kurtosis = m4 / sqrt(m2)^4 - 3, so a normal
+// distribution gives 0). Fewer than 2 values -> 0 and 0. Either output may be NULL.
+void BKROIMoments(const float *values, uint32_t count, double mean, double *skewness, double *kurtosis);
+
+// What: BKROICurve, plus for every curve point which piece of the user's outline it lies on (0 = from the
+// 1st point to the 2nd, ...) - used to insert a new point when a polygon is edited. *pieces is set (free
+// with free()) only when the curve is actually smoothed; it stays NULL when the outline is returned as is.
+BKROIPointList BKROICurveWithPieces(const BKROIShape *roi, double scale, int32_t **pieces);
+
 #ifdef __cplusplus
 }
 #endif

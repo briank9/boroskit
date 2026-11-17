@@ -114,8 +114,9 @@ static void SolveBends(const double *v, const double *t, const double *h, uint32
         q[k] -= gam[k + 1] * q[k + 1];
 }
 
-BKROIPointList BKROICurve(const BKROIShape *roi, double scale)
+static BKROIPointList CurveImpl(const BKROIShape *roi, double scale, int32_t **pieces)
 {
+    if (pieces) *pieces = NULL;
     BKROIPointList outline = BKROIOutline(roi);
     if (!roi || !roi->smooth || outline.count < 3 ||
         !(roi->kind == BKROIKindOpenPolygon || roi->kind == BKROIKindClosedPolygon || roi->kind == BKROIKindPencil))
@@ -156,22 +157,36 @@ BKROIPointList BKROICurve(const BKROIShape *roi, double scale)
     for (uint32_t k = 1; k + 2 < nb; k++) total += 1 + (uint32_t)(h[k] >= 1 ? floor(h[k]) : 0);
     BKROIPointList curve = NewPointList(total);
     if (!curve.points) { free(buf); return outline; }
+    int32_t *piece = pieces ? (int32_t *)malloc(sizeof(int32_t) * (total ? total : 1)) : NULL;
     uint32_t o = 0;
     for (uint32_t k = 1; k + 2 < nb; k++) {
         double bx = ((px[k + 1] - px[k]) / h[k]) - (h[k] / 3.0) * (qx[k + 1] + 2.0 * qx[k]);
         double by = ((py[k + 1] - py[k]) / h[k]) - (h[k] / 3.0) * (qy[k + 1] + 2.0 * qy[k]);
         double ex = (qx[k + 1] - qx[k]) / (3.0 * h[k]), ey = (qy[k + 1] - qy[k]) / (3.0 * h[k]);
+        if (piece) piece[o] = (int32_t)k - 1;   // piece k of the padded list = the user's piece k - 1
         curve.points[o].x = px[k]; curve.points[o].y = py[k]; o++;
         for (long s = 1; s <= h[k]; s++) {
             curve.points[o].x = px[k] + bx * (double)s + qx[k] * (double)(s * s) + ex * (double)(s * s * s);
             curve.points[o].y = py[k] + by * (double)s + qy[k] * (double)(s * s) + ey * (double)(s * s * s);
+            if (piece) piece[o] = (int32_t)k - 1;
             o++;
         }
     }
     curve.count = o;
     free(buf);
     BKROIPointListFree(&outline);
+    if (pieces) *pieces = piece;
     return curve;
+}
+
+BKROIPointList BKROICurve(const BKROIShape *roi, double scale)
+{
+    return CurveImpl(roi, scale, NULL);
+}
+
+BKROIPointList BKROICurveWithPieces(const BKROIShape *roi, double scale, int32_t **pieces)
+{
+    return CurveImpl(roi, scale, pieces);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -456,4 +471,135 @@ int BKROIContainsPoint(int32_t kind, const BKROIPoint *curve, uint32_t n, double
         if (spans && px < (pj->x - pi->x) * (py - pi->y) / (pj->y - pi->y) + pi->x) inside = !inside;
     }
     return inside;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Brush ROIs, colour images, higher moments (plan step 7 remainder, 2026-11-16)
+
+BKROIRunList BKROIMaskRuns(const uint8_t *mask, int32_t maskW, int32_t maskH, int32_t left, int32_t top,
+                           int32_t width, int32_t height)
+{
+    BKROIRunList l = { NULL, 0 };
+    if (!mask || maskW <= 0 || maskH <= 0 || width <= 0 || height <= 0) return l;
+    uint32_t cap = 0;
+    for (int32_t y = 0; y < maskH; y++) {
+        int32_t iy = y + top;
+        if (iy < 0 || iy >= height) continue;
+        const uint8_t *row = mask + (size_t)y * (size_t)maskW;
+        int32_t x = 0;
+        while (x < maskW) {
+            while (x < maskW && (row[x] == 0 || x + left < 0 || x + left >= width)) x++;
+            if (x >= maskW) break;
+            int32_t x0 = x;
+            while (x < maskW && row[x] != 0 && x + left < width) x++;
+            if (l.count == cap) {
+                uint32_t nc = cap ? cap * 2 : 64;
+                BKROIRun *nr = (BKROIRun *)realloc(l.runs, sizeof(BKROIRun) * nc);
+                if (!nr) { BKROIRunListFree(&l); return l; }
+                l.runs = nr; cap = nc;
+            }
+            l.runs[l.count].y = iy; l.runs[l.count].x0 = x0 + left; l.runs[l.count].x1 = x - 1 + left;
+            l.count++;
+        }
+    }
+    return l;
+}
+
+uint32_t BKROIMaskCount(const uint8_t *mask, int32_t maskW, int32_t maskH)
+{
+    uint32_t n = 0;
+    if (!mask || maskW <= 0 || maskH <= 0) return 0;
+    for (size_t i = 0; i < (size_t)maskW * (size_t)maskH; i++) if (mask[i]) n++;
+    return n;
+}
+
+int BKROIMaskContains(const uint8_t *mask, int32_t maskW, int32_t maskH, int32_t left, int32_t top,
+                      double x, double y)
+{
+    if (!mask || !(x == x) || !(y == y)) return 0;
+    double mx = floor(x) - left, my = floor(y) - top;
+    if (mx < 0 || my < 0 || mx >= maskW || my >= maskH) return 0;
+    return mask[(size_t)my * (size_t)maskW + (size_t)mx] != 0;
+}
+
+float BKROIColorValue(const uint8_t *argb)
+{
+    return (float)((argb[1] + argb[2] + argb[3]) / 3.0);
+}
+
+uint32_t BKROIRunsPixelCount(const BKROIRunList *runs, int32_t width, int32_t height)
+{
+    uint32_t n = 0;
+    (void)width;
+    for (uint32_t r = 0; runs && r < runs->count; r++) {
+        const BKROIRun *u = &runs->runs[r];
+        if (u->y < 0 || u->y >= height || u->x1 < u->x0) continue;
+        n += (uint32_t)(u->x1 - u->x0 + 1);
+    }
+    return n;
+}
+
+uint32_t BKROIValuesOfRuns(const BKROIRunList *runs, const float *image, const uint8_t *argb,
+                           int32_t width, int32_t height, float *values, float *locations)
+{
+    uint32_t n = 0;
+    if (!values || (!image && !argb)) return 0;
+    for (uint32_t r = 0; runs && r < runs->count; r++) {
+        const BKROIRun *u = &runs->runs[r];
+        if (u->y < 0 || u->y >= height) continue;
+        for (int32_t x = u->x0; x <= u->x1; x++) {
+            size_t i = (size_t)u->y * (size_t)width + (size_t)x;
+            values[n] = image ? image[i] : BKROIColorValue(argb + 4 * i);
+            if (locations) { locations[2 * n] = (float)x; locations[2 * n + 1] = (float)u->y; }
+            n++;
+        }
+    }
+    return n;
+}
+
+BKROIStats BKROIStatsOfValues(const float *values, uint32_t count)
+{
+    BKROIStats s;
+    memset(&s, 0, sizeof s);
+    double total = 0, mn = FLT_MAX, mx = -FLT_MAX, mean = 0, dev = 0;
+    if (!values) count = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        float v = values[i];
+        total += v;
+        if (mn > v) mn = v;
+        if (mx < v) mx = v;
+    }
+    if (count) mean = total / count;
+    for (uint32_t i = 0; i < count; i++) {
+        float d = (float)(mean - values[i]);   // in float (recorded)
+        d *= d;
+        dev += d;
+    }
+    float fdev = (float)dev;
+    fdev = fdev / (float)((long)count - 1);
+    s.dev = (float)sqrt(fdev);
+    s.count = count;
+    s.total = (float)total;
+    s.mean = (float)mean;
+    s.min = (mn == FLT_MAX) ? 0 : (float)mn;
+    s.max = (mx == -FLT_MAX) ? 0 : (float)mx;
+    return s;
+}
+
+// Central moment of order k, divided by count - 1 (as recorded).
+static double CentralMoment(const float *v, uint32_t n, double mean, int k)
+{
+    double sum = 0;
+    for (uint32_t i = 0; i < n; i++) sum += pow(v[i] - mean, k);
+    return sum / ((double)n - 1);
+}
+
+void BKROIMoments(const float *values, uint32_t count, double mean, double *skewness, double *kurtosis)
+{
+    if (skewness) *skewness = 0;
+    if (kurtosis) *kurtosis = 0;
+    if (!values || count < 2) return;
+    double sd = sqrt(CentralMoment(values, count, mean, 2));
+    if (skewness) *skewness = CentralMoment(values, count, mean, 3) / (sd * sd * sd);
+    if (kurtosis) *kurtosis = CentralMoment(values, count, mean, 4) / (sd * sd * sd * sd) - 3.0;
 }
