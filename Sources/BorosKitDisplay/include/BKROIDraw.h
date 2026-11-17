@@ -207,6 +207,14 @@ typedef struct {
 } BKROIDrawTextBox;
 void BKROIDrawTextBoxItems(BKOverlayList *list, const BKROIDrawContext *ctx, const BKROIDrawTextBox *box);
 
+// What: the selection box (Boros 6, 2026-11-17, user's choice): a dashed rectangle around a selected ROI - the
+// bounding box of `pts` (model points, mapped through ctx) in view pixels, `pad` view pixels larger on every side,
+// drawn as white dashes (4 on / 4 off) over a soft dark line, both 1 view pixel x backing, so it shows on light and
+// dark parts of the image alike. Nothing is drawn for n == 0. Sizes x backing.
+// Plain language: the dotted frame that tells the user "this ROI is selected".
+void BKROIDrawSelectionBox(BKOverlayList *list, const BKROIDrawContext *ctx, const BKROIPoint *pts, uint32_t n,
+                           float pad);
+
 #ifdef __cplusplus
 }
 #endif

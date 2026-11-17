@@ -535,3 +535,35 @@ void BKROIDrawTextBoxItems(BKOverlayList *list, const BKROIDrawContext *ctx, con
     }
 #undef BOXV
 }
+
+// ---- Selection box (2026-11-17) -------------------------------------------------------------------------
+
+void BKROIDrawSelectionBox(BKOverlayList *list, const BKROIDrawContext *ctx, const BKROIPoint *pts, uint32_t n,
+                           float pad)
+{
+    if (!list || !ctx || !pts || n == 0) return;
+    float b = ctx->backing > 0 ? ctx->backing : 1;
+    BKVec2f p = BKROIDrawMap(ctx, pts[0]);
+    float x0 = p.x, y0 = p.y, x1 = p.x, y1 = p.y;
+    for (uint32_t i = 1; i < n; i++) {
+        p = BKROIDrawMap(ctx, pts[i]);
+        if (p.x < x0) x0 = p.x;
+        if (p.x > x1) x1 = p.x;
+        if (p.y < y0) y0 = p.y;
+        if (p.y > y1) y1 = p.y;
+    }
+    // Whole-pixel corners plus half a pixel: a 1-pixel line then covers exactly one pixel row / column.
+    float d = pad * b;
+    x0 = floorf(x0 - d) + 0.5f; y0 = floorf(y0 - d) + 0.5f;
+    x1 = ceilf(x1 + d) - 0.5f;  y1 = ceilf(y1 + d) - 0.5f;
+    BKVec2f box[4] = { BKV2f(x0, y0), BKV2f(x1, y0), BKV2f(x1, y1), BKV2f(x0, y1) };
+    BKOverlayStroke st;
+    memset(&st, 0, sizeof st);
+    st.width = 1.0f * b;
+    st.cap = BKOverlayCapButt; st.join = BKOverlayJoinMiter; st.miterLimit = 10;
+    st.smooth = 0;
+    BKOverlayStrokePolyline(list, box, NULL, 4, 1, &st, (BKOverlayColor){ 0, 0, 0, 0.55f });   // dark under-line
+    float dash[2] = { 4.0f * b, 4.0f * b };
+    st.dashes = dash; st.dashCount = 2;
+    BKOverlayStrokePolyline(list, box, NULL, 4, 1, &st, (BKOverlayColor){ 1, 1, 1, 0.95f });  // white dashes
+}
