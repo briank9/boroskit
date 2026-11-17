@@ -177,4 +177,33 @@ static BKROIDrawContext Ctx(void)
     BKOverlayListFree(L);
 }
 
+// The selection box (2026-11-17): a dashed frame `pad` pixels outside the points' bounding box; nothing inside.
+- (void)testSelectionBox
+{
+    const uint32_t W = 128, H = 96;
+    float *px = (float *)calloc(W * H * 4, sizeof(float));
+    BKOverlayList *L = BKOverlayListCreate();
+    BKROIDrawContext c = Ctx();
+    BKROIPoint pts[2] = { { 20, 20 }, { 40, 30 } };
+    BKVec2f a = BKROIDrawMap(&c, pts[0]), b = BKROIDrawMap(&c, pts[1]);
+    BKROIDrawSelectionBox(L, &c, pts, 2, 8);
+    BKOverlayRasterize(L, px, W, H);
+    #define A(X, Y) px[((Y) * W + (X)) * 4 + 3]
+    int left = (int)floorf(a.x - 8 * c.backing), top = (int)floorf(a.y - 8 * c.backing);
+    int mid = (int)((a.y + b.y) / 2);
+    float edge = 0;
+    for (int y = mid - 4; y <= mid + 4; y++) if (A(left, y) > edge) edge = A(left, y);   // dark line + some dashes
+    XCTAssertGreaterThan(edge, 0.5f);
+    XCTAssertLessThan(A(left + 3, mid), 0.01f);                                            // inside: nothing
+    XCTAssertGreaterThan(A((int)((a.x + b.x) / 2), top), 0.3f);                            // top edge drawn
+    #undef A
+    BKOverlayListReset(L);
+    BKROIDrawSelectionBox(L, &c, pts, 0, 8);                                                // no points: nothing
+    uint32_t nv = 99;
+    BKOverlayListVertices(L, &nv);
+    XCTAssertEqual(nv, 0u);
+    free(px);
+    BKOverlayListFree(L);
+}
+
 @end
