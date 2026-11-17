@@ -565,5 +565,7 @@ void BKROIDrawSelectionBox(BKOverlayList *list, const BKROIDrawContext *ctx, con
     BKOverlayStrokePolyline(list, box, NULL, 4, 1, &st, (BKOverlayColor){ 0, 0, 0, 0.55f });   // dark under-line
     float dash[2] = { 4.0f * b, 4.0f * b };
     st.dashes = dash; st.dashCount = 2;
-    BKOverlayStrokePolyline(list, box, NULL, 4, 1, &st, (BKOverlayColor){ 1, 1, 1, 0.95f });  // white dashes
+    // Dashes in the ROI's own colour (user request 2026-11-17), fully visible whatever the ROI's opacity.
+    BKOverlayColor dashColor = { ctx->color.r, ctx->color.g, ctx->color.b, 0.95f };
+    BKOverlayStrokePolyline(list, box, NULL, 4, 1, &st, dashColor);
 }
