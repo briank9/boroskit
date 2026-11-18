@@ -13,6 +13,7 @@
 #import "BKRenderCore.h"      // plain-C maths shared with a future Vulkan backend
 #import "BKCameraMath.h"
 #import "BKScanGeometryCore.h"   // 2026-11-17: scan placement, orientation letters, trackball maths (plain C)
+#import "BKStereoCore.h"         // 2026-11-17: red / blue stereo mixing (plain C)
 #import "BKSlabGeometryCore.h" // MPR / curved-MPR slab picture geometry (plain C, 2026-11-14)
 #import "BKSlabCameraCore.h"   // MPR / curved-MPR slab camera + mouse tools (plain C, 2026-11-15)
 #import "BKCurveCore.h"         // curved-MPR curve maths (plain C, 2026-11-15)
