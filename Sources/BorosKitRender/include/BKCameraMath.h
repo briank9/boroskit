@@ -66,6 +66,18 @@ bool BKCameraProjectPoint(BKCameraFrame camera, double viewWidth, double viewHei
 // ignored for an orthographic camera, where it is the same everywhere).
 double BKCameraMillimetresPerViewPoint(BKCameraFrame camera, double viewHeight, double depth);
 
+// What: which ball (3D point) a click selects. Balls: centres[3 * i .. 3 * i + 2] (patient mm) and radii[i] (mm),
+// n of them. Click at (clickX, clickY) view points (origin top-left, y down). A ball is a candidate when the click
+// is within its on-screen radius (at least minRadius view points, so small balls stay clickable) and it is not
+// hidden: hitDepth = depth of the solid thing under the click (mm in front of camera.position; pass a negative
+// value when the click hits the background), and a ball counts as hidden when that is nearer than its centre by
+// more than 3 radii (its own front surface never hides it). Among candidates the one closest to the click relative
+// to its on-screen radius wins. *hiddenNear (optional) = balls under the click but hidden.
+// Returns the ball's index, or -1. Why (2026-11-17): the native 3D surface view selects points with BorosKit maths.
+long BKCameraFindBallNear(BKCameraFrame camera, double viewWidth, double viewHeight,
+                          const double *centres, const double *radii, long n,
+                          double clickX, double clickY, double minRadius, double hitDepth, int *hiddenNear);
+
 // What: the patient-space move matching a mouse move of (dx, dy) view points (y down), for
 // an object lying `depth` mm in front of camera.position. The result is parallel to the
 // screen. Why: dragging a cropping-box face/handle should follow the mouse.

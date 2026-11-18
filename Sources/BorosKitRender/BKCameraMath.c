@@ -171,3 +171,31 @@ void BKCameraYawPitchAboutPivot(BKCameraFrame *camera, BKVec3d *focalPoint, BKVe
     camera->direction = BKSafeNormalize(dir);
     camera->up = up;
 }
+
+long BKCameraFindBallNear(BKCameraFrame camera, double viewWidth, double viewHeight,
+                          const double *centres, const double *radii, long n,
+                          double clickX, double clickY, double minRadius, double hitDepth, int *hiddenNear)
+{
+    if (hiddenNear) *hiddenNear = 0;
+    if (!centres || !radii || n <= 0 || !(viewWidth > 0) || !(viewHeight > 0)) return -1;
+    long best = -1;
+    double bestScore = 0;
+    for (long i = 0; i < n; i++) {
+        BKVec3d c = { centres[3 * i], centres[3 * i + 1], centres[3 * i + 2] };
+        double x, y, depth;
+        // Step 1: centre on screen (and in front of the camera).
+        if (!BKCameraProjectPoint(camera, viewWidth, viewHeight, c, &x, &y, &depth) || depth < 0) continue;
+        // Step 2: the click within the ball's on-screen radius (at least minRadius).
+        double mmPerPoint = BKCameraMillimetresPerViewPoint(camera, viewHeight, depth);
+        double radius = (mmPerPoint > 0) ? radii[i] / mmPerPoint : 0;
+        if (radius < minRadius) radius = minRadius;
+        double d = hypot(clickX - x, clickY - y);
+        if (!(radius > 0) || d > radius) continue;
+        // Step 3: hidden behind something solid nearer than the ball's front (+ one diameter margin)?
+        if (hitDepth >= 0 && hitDepth < depth - 3.0 * radii[i]) { if (hiddenNear) (*hiddenNear)++; continue; }
+        // Step 4: the closest relative to its size.
+        double score = d / radius;
+        if (best < 0 || score < bestScore) { best = i; bestScore = score; }
+    }
+    return best;
+}

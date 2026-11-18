@@ -4,6 +4,7 @@
 
 #import <XCTest/XCTest.h>
 #include "BKScanGeometryCore.h"
+#include "BKCameraMath.h"
 #include <math.h>
 #include <string.h>
 
@@ -76,6 +77,29 @@
     BKScanGreyFromARGB(argb, 2, g);
     XCTAssertEqualWithAccuracy(g[0], 60.0f, 1e-6);
     XCTAssertEqualWithAccuracy(g[1], 3.0f, 1e-6);
+}
+
+// Ball selection: camera at z = 100 looking down -z, 30 degree view, 200 x 200 view.
+- (void)testFindBallNear
+{
+    BKCameraFrame cam = { {0, 0, 100}, {0, 0, -1}, {0, 1, 0}, 50, 30, true };
+    const double centres[6] = { 0, 0, 0,   10, 0, 0 }, radii[2] = { 2, 2 };
+    int hidden = 0;
+    // A click on the centre picks ball 0.
+    XCTAssertEqual(BKCameraFindBallNear(cam, 200, 200, centres, radii, 2, 100, 100, 10, -1, &hidden), 0);
+    // Ball 1 is to the right on screen: find where it projects and click there.
+    double x, y, depth;
+    BKVec3d c1 = { 10, 0, 0 };
+    XCTAssertTrue(BKCameraProjectPoint(cam, 200, 200, c1, &x, &y, &depth));
+    XCTAssertGreaterThan(x, 100);
+    XCTAssertEqual(BKCameraFindBallNear(cam, 200, 200, centres, radii, 2, x, y, 10, -1, NULL), 1);
+    // Far from both: none.
+    XCTAssertEqual(BKCameraFindBallNear(cam, 200, 200, centres, radii, 2, 10, 10, 10, -1, NULL), -1);
+    // Something solid 50 mm in front of ball 0 (depth 50 < 100 - 6): hidden.
+    XCTAssertEqual(BKCameraFindBallNear(cam, 200, 200, centres, radii, 1, 100, 100, 10, 50, &hidden), -1);
+    XCTAssertEqual(hidden, 1);
+    // The ball's own front surface (depth 98) does not hide it.
+    XCTAssertEqual(BKCameraFindBallNear(cam, 200, 200, centres, radii, 1, 100, 100, 10, 98, &hidden), 0);
 }
 
 @end
