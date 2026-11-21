@@ -146,6 +146,16 @@ typedef NS_ENUM(NSInteger, BKMeshFaceCulling) {
 // YES when the object is drawn with its texture (texture set and one coordinate per vertex).
 @property (nonatomic, readonly, getter=isTextured) BOOL textured;
 
+// --- Added 2026-11-21 (ROI volume window, native view) ------------------------------------
+// YES = only the edges of the triangles are drawn, as 1-pixel lines (OpenGL / VTK "wireframe"
+// representation, glPolygonMode(GL_LINE)). Default NO. The edges keep everything else of the
+// object: colour, lighting (from the mesh normals), opacity, texture and face culling (with
+// back culling only the edges of triangles facing the viewer are drawn, exactly as OpenGL
+// culls line-mode polygons). Why: the ROI volume window's "Show Wireframe" box.
+// PORTING NOTES: Metal MTLTriangleFillModeLines; Vulkan VK_POLYGON_MODE_LINE (needs the
+// fillModeNonSolid device feature; lineWidth 1) in a separate pipeline.
+@property (nonatomic, getter=isWireframe) BOOL wireframe;
+
 @end
 
 // Added 2026-11-14: points drawn as small squares of a fixed size in PIXELS (like VTK's

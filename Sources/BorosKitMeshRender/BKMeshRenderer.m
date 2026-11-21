@@ -844,6 +844,7 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                     u.lit = 0;
                     u.lineHalfWidth = (float)(0.5 * pts.pointSize);
                     [enc setCullMode:MTLCullModeNone];
+                    [enc setTriangleFillMode:MTLTriangleFillModeFill];   // 2026-11-21: point squares are filled triangles
                     [enc setRenderPipelineState:see ? transparentPointPipeline : opaquePointPipeline];
                     [enc setVertexBuffer:[pts pointBuffer] offset:0 atIndex:0];
                     [enc setVertexBytes:&u length:sizeof u atIndex:1];
@@ -860,6 +861,7 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                     u.lit = 0;
                     u.lineHalfWidth = (float)(0.5 * l.lineWidth);
                     [enc setCullMode:MTLCullModeNone];   // 2026-11-14: lines are never culled (as in OpenGL)
+                    [enc setTriangleFillMode:MTLTriangleFillModeFill];   // 2026-11-21: wide lines are filled triangles
                     [enc setRenderPipelineState:see ? transparentLinePipeline : opaqueLinePipeline];
                     [enc setVertexBuffer:[l pointBuffer] offset:0 atIndex:0];
                     [enc setVertexBytes:&u length:sizeof u atIndex:1];
@@ -875,6 +877,8 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                     case BKMeshFaceCullingFront: [enc setCullMode:MTLCullModeFront]; break;
                     default: [enc setCullMode:MTLCullModeNone]; break;
                 }
+                // 2026-11-21: wireframe = the triangles' edges only (culling above still applies).
+                [enc setTriangleFillMode:o.wireframe ? MTLTriangleFillModeLines : MTLTriangleFillModeFill];
                 BOOL textured = NO;
                 if (o.textured) {
                     BKMeshTexture *texture = o.texture;

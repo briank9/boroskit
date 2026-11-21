@@ -8,7 +8,9 @@
 //  - the GPU follows those rules: back / front culling removes the right side (also with a
 //    mirrored placement, as OpenGL does), a textured square shows exactly the reference texels,
 //    a see-through texture makes the object see-through, points cover exactly the reference
-//    squares and are hidden behind surfaces like everything else.
+//    squares and are hidden behind surfaces like everything else;
+//  - (2026-11-21) wireframe objects draw only their triangles' edges, still obey face culling,
+//    and do not change how lines / points drawn after them look.
 // GPU tests skip themselves on a machine without Metal.
 
 #import <XCTest/XCTest.h>
@@ -380,6 +382,96 @@ static BKMeshObject *BKFacingSquare(float h, BOOL withTextureCoordinates)
     [[self render:r size:100] getRGBA8:c atX:50 y:50];
     XCTAssertEqual(c[0], 255);
     XCTAssertEqual(c[2], 0);
+}
+
+#pragma mark - Wireframe on the GPU (added 2026-11-21, ROI volume window)
+
+// What: pixels with opacity above half inside the pixel rectangle x0..x1, y0..y1 (inclusive).
+static NSUInteger BKCoveredCountIn(BKRenderResult *result, NSUInteger x0, NSUInteger y0, NSUInteger x1, NSUInteger y1)
+{
+    NSUInteger n = 0;
+    const uint8_t *rgba = result.rgba8Data.bytes;
+    for (NSUInteger y = y0; y <= y1 && y < result.height; y++)
+        for (NSUInteger x = x0; x <= x1 && x < result.width; x++)
+            if (rgba[4 * (y * result.width + x) + 3] > 127) n++;
+    return n;
+}
+
+// A 40 x 40 mm facing square (two triangles, diagonal from bottom-left to top-right), front view
+// at 1 mm per pixel: solid it covers 1600 pixels; as a wireframe only its outline and diagonal
+// (about 5 x 40 pixels): the inside off the diagonal stays empty, the edges and the diagonal are
+// drawn.
+- (void)testWireframeDrawsOnlyEdges
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    [self setFrontCamera:r];
+    BKMeshObject *square = BKFacingSquare(20, NO);
+    square.lit = NO;
+    r.objects = @[square];
+    XCTAssertEqual(BKCoveredCount([self render:r size:100]), 1600u);
+    square.wireframe = YES;
+    XCTAssertTrue(square.isWireframe);
+    BKRenderResult *res = [self render:r size:100];
+    NSUInteger n = BKCoveredCount(res);
+    XCTAssertGreaterThan(n, 100u);
+    XCTAssertLessThan(n, 400u);
+    // Inside, away from the diagonal (pixel x 40 = -9.5 mm, row 40 = +9.5 mm): empty.
+    XCTAssertEqual(BKCoveredCountIn(res, 36, 36, 44, 44), 0u);
+    XCTAssertEqual(BKCoveredCountIn(res, 56, 56, 64, 64), 0u);
+    // The four edges (rows / columns 30 and 70, give or take a pixel) and the diagonal.
+    XCTAssertGreaterThan(BKCoveredCountIn(res, 50, 28, 50, 32), 0u);   // top
+    XCTAssertGreaterThan(BKCoveredCountIn(res, 50, 68, 50, 72), 0u);   // bottom
+    XCTAssertGreaterThan(BKCoveredCountIn(res, 28, 50, 32, 50), 0u);   // left
+    XCTAssertGreaterThan(BKCoveredCountIn(res, 68, 50, 72, 50), 0u);   // right
+    XCTAssertGreaterThan(BKCoveredCountIn(res, 49, 49, 51, 51), 0u);   // diagonal through the centre
+}
+
+// Face culling still applies to a wireframe (as OpenGL culls line-mode polygons): the facing
+// square's edges vanish with front culling and stay with back culling; turned round, the other
+// way about.
+- (void)testWireframeObeysCulling
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    [self setFrontCamera:r];
+    for (int turned = 0; turned < 2; turned++) {
+        BKMeshObject *square = BKFacingSquare(20, NO);
+        square.wireframe = YES;
+        if (turned) {   // rotate 180 degrees about z: the back side faces the camera
+            simd_float4x4 m = matrix_identity_float4x4;
+            m.columns[0].x = -1; m.columns[1].y = -1;
+            square.transform = m;
+        }
+        r.objects = @[square];
+        square.faceCulling = BKMeshFaceCullingNone;
+        XCTAssertGreaterThan(BKCoveredCount([self render:r size:100]), 100u, @"turned %d", turned);
+        square.faceCulling = BKMeshFaceCullingBack;
+        XCTAssertEqual(BKCoveredCount([self render:r size:100]) > 0, turned == 0, @"turned %d", turned);
+        square.faceCulling = BKMeshFaceCullingFront;
+        XCTAssertEqual(BKCoveredCount([self render:r size:100]) > 0, turned == 1, @"turned %d", turned);
+    }
+}
+
+// A wide line drawn after a wireframe object is still a solid band (lines are made of filled
+// triangles; the wireframe setting must not leak into them).
+- (void)testWireframeDoesNotChangeLines
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    [self setFrontCamera:r];
+    BKMeshObject *square = BKFacingSquare(10, NO);
+    square.wireframe = YES;
+    simd_float3 seg[2] = { simd_make_float3(-30, 0, 35), simd_make_float3(30, 0, 35) };
+    BKLineObject *line = [[BKLineObject alloc] initWithPoints:seg count:2];
+    line.lineWidth = 5;
+    r.objects = @[square];
+    r.lineObjects = @[line];
+    BKRenderResult *res = [self render:r size:100];
+    // The band: 60 pixels long, 5 rows around row 15 (z = 35 mm).
+    NSUInteger band = BKCoveredCountIn(res, 0, 10, 99, 20);
+    XCTAssertGreaterThanOrEqual(band, 270u);
+    XCTAssertLessThanOrEqual(band, 340u);
 }
 
 @end
