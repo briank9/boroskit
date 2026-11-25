@@ -1,0 +1,34 @@
+#!/bin/sh
+# BorosKit: read-only portability check for the plain C / C++ cores (Vulkan engine kickoff, 2026-11-24).
+# Original BorosKit code written for this project; contains no third-party code.
+#
+# What: compiles every plain-C core (*.c) as strict C99 and every C++ core (*.cpp) as C++17 with the
+#       portable thread path, syntax-only, and lists any header that comes from Apple (simd, dispatch,
+#       frameworks, Objective-C) or is not available on Windows (pthread). Writes nothing anywhere.
+# Why:  the Vulkan engine reuses these cores on Windows / Linux; an Apple header in a core means it
+#       will not build there (VULKAN-PORT-PLAN.md rule 1 / section 14).
+# Use:  sh docs/tools/check-portable-cores.sh            (from the BorosKit folder)
+# Exit: 0 = every core is clean, 1 = at least one problem (printed).
+cd "$(dirname "$0")/../.." || exit 2
+INC=""
+for d in Sources/*/include Sources/*; do [ -d "$d" ] && INC="$INC -I$d"; done
+BAD='simd/|dispatch/|\.framework/|objc/|Foundation|CoreGraphics|Metal|pthread\.h|TargetConditionals'
+fail=0
+for f in $(find Sources -name '*.c' | sort); do
+  out=$(clang -std=c99 -pedantic -Werror -fno-modules -fsyntax-only -H $INC "$f" 2>&1)
+  st=$?
+  apple=$(printf '%s\n' "$out" | grep -E '^\.+ ' | grep -E "$BAD" | sed 's/^\.* //' | sort -u | tr '\n' ' ')
+  errs=$(printf '%s\n' "$out" | grep -E 'error:' | head -3)
+  if [ $st -ne 0 ] || [ -n "$apple" ]; then fail=1; echo "PROBLEM  $f"; [ -n "$apple" ] && echo "   non-portable headers: $apple"; [ -n "$errs" ] && echo "$errs" | sed 's/^/   /'
+  else echo "ok       $f"; fi
+done
+# C++: <thread> reaches pthread.h inside the standard library on Unix; that is fine (std::thread is portable).
+for f in $(find Sources -name '*.cpp' | sort); do
+  out=$(clang++ -std=c++17 -DBK_PARALLEL_USE_STD_THREAD=1 -Werror -fno-modules -fsyntax-only -H $INC "$f" 2>&1)
+  st=$?
+  apple=$(printf '%s\n' "$out" | grep -E '^\.+ ' | grep -v 'pthread' | grep -E "$BAD" | sed 's/^\.* //' | sort -u | tr '\n' ' ')
+  errs=$(printf '%s\n' "$out" | grep -E 'error:' | head -3)
+  if [ $st -ne 0 ] || [ -n "$apple" ]; then fail=1; echo "PROBLEM  $f"; [ -n "$apple" ] && echo "   non-portable headers: $apple"; [ -n "$errs" ] && echo "$errs" | sed 's/^/   /'
+  else echo "ok       $f"; fi
+done
+exit $fail
