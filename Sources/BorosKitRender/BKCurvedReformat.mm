@@ -92,6 +92,14 @@ static float bkr_sample(texture3d<float, access::read> vol, constant BKReformatP
     return sum;
 }
 
+// Same as BKReformatInBand() in BKCurvedReformatCore.c: the height band test for one slab sample.
+static bool bkr_in_band(constant BKReformatParams &p, float3 c)
+{
+    if (p.clipEnabled == 0) return true;
+    float t = p.clipNormalX * c.x + p.clipNormalY * c.y + p.clipNormalZ * c.z;
+    return t >= p.clipLow && t <= p.clipHigh;
+}
+
 // One thread per output pixel (GLSL: layout(local_size_x = 8, local_size_y = 8) in; same body).
 kernel void bk_curved_reformat(texture3d<float, access::read> vol [[texture(0)]],
                                constant BKReformatParams &p [[buffer(0)]],
@@ -103,16 +111,21 @@ kernel void bk_curved_reformat(texture3d<float, access::read> vol [[texture(0)]]
     float3 base = frames[gid.x * 3].xyz, row = frames[gid.x * 3 + 1].xyz, slab = frames[gid.x * 3 + 2].xyz;
     float ry = float(gid.y) - p.rowCentre;
     float acc = 0.0f;
+    uint used = 0;   // slab samples taken (all of them without a height band)
     for (uint z = 0; z < p.depth; z++) {
         float rz = float(z) - p.slabCentre;
-        float value = bkr_sample(vol, p, base + row * ry + slab * rz);
-        if (p.projection == 1)      acc = (z == 0 || value > acc) ? value : acc;                     // MIP
-        else if (p.projection == 2) acc = (z == 0 || value < acc) ? value : acc;                     // MinIP
-        else if (p.projection == 3) acc = (z == 0) ? value : (acc * float(z) + value) / float(z + 1); // running mean
-        else if (p.projection == 4) acc += (max(value, -1000.0f) + 1000.0f) * p.radiographK;        // radiograph sum
-        else if (z == 0) acc = value;   // no projection: the first slab sample (classic)
+        float3 c = base + row * ry + slab * rz;
+        if (!bkr_in_band(p, c)) continue;   // height band: left out of the projection
+        float value = bkr_sample(vol, p, c);
+        if (p.projection == 1)      acc = (used == 0 || value > acc) ? value : acc;                        // MIP
+        else if (p.projection == 2) acc = (used == 0 || value < acc) ? value : acc;                        // MinIP
+        else if (p.projection == 3) acc = (used == 0) ? value : (acc * float(used) + value) / float(used + 1); // running mean
+        else if (p.projection == 4) acc += (max(value, -1000.0f) + 1000.0f) * p.radiographK;              // radiograph sum
+        else if (used == 0) acc = value;   // no projection: the first slab sample (classic)
+        used++;
     }
-    if (p.projection == 4) acc = 3000.0f - 4000.0f * exp(-acc);
+    if (used == 0) acc = p.outOfBoundsValue;   // the whole slab is outside the height band
+    else if (p.projection == 4) acc = 3000.0f - 4000.0f * exp(-acc);
     outValues[gid.y * p.width + gid.x] = acc;
 }
 )";

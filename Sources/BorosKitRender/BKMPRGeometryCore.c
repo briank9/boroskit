@@ -196,3 +196,26 @@ uint32_t BKMPRSlabDepth(double thicknessMm, double stepMm)
     double n = floor(thicknessMm / stepMm + 1e-9) + 1;
     return n > 4096 ? 4096 : (uint32_t)n;
 }
+
+void BKMPRSetHeightBand(BKReformatParams *params, const double voxelToPatient[16], BKVec3d axis,
+                        double lowMm, double highMm, int enabled)
+{
+    if (params == NULL) return;
+    params->clipEnabled = 0;
+    params->clipNormalX = params->clipNormalY = params->clipNormalZ = 0;
+    params->clipLow = params->clipHigh = 0;
+    if (!enabled || voxelToPatient == NULL) return;
+    if (lowMm > highMm) { double t = lowMm; lowMm = highMm; highMm = t; }
+    const double *m = voxelToPatient;
+    // axis . (M v + T) = (axis . column0) vx + (axis . column1) vy + (axis . column2) vz + axis . T
+    double nx = axis.x * m[0] + axis.y * m[1] + axis.z * m[2];
+    double ny = axis.x * m[4] + axis.y * m[5] + axis.z * m[6];
+    double nz = axis.x * m[8] + axis.y * m[9] + axis.z * m[10];
+    double offset = axis.x * m[12] + axis.y * m[13] + axis.z * m[14];
+    params->clipNormalX = (float)nx;
+    params->clipNormalY = (float)ny;
+    params->clipNormalZ = (float)nz;
+    params->clipLow = (float)(lowMm - offset);
+    params->clipHigh = (float)(highMm - offset);
+    params->clipEnabled = 1;
+}

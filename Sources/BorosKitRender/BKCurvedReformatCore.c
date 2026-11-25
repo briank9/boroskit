@@ -77,6 +77,13 @@ float BKReformatSample(const BKReformatParams *p, const float *v, double x, doub
     return (float)sum;
 }
 
+int BKReformatInBand(const BKReformatParams *p, double x, double y, double z)
+{
+    if (p->clipEnabled == 0) return 1;
+    double t = (double)p->clipNormalX * x + (double)p->clipNormalY * y + (double)p->clipNormalZ * z;
+    return t >= (double)p->clipLow && t <= (double)p->clipHigh;
+}
+
 void BKReformatComputeRows(const BKReformatParams *p, const BKReformatFrame *frames, const float *voxels,
                            uint32_t rowStart, uint32_t rowEnd, float *out)
 {
@@ -87,25 +94,29 @@ void BKReformatComputeRows(const BKReformatParams *p, const BKReformatFrame *fra
             const BKReformatFrame *f = &frames[x];
             double ry = (double)y - p->rowCentre;
             float acc = 0;
+            uint32_t used = 0;   // slab samples taken so far (all of them without a height band)
             for (uint32_t z = 0; z < p->depth; z++) {
                 double rz = (double)z - p->slabCentre;
                 double vx = f->base[0] + f->row[0] * ry + f->slab[0] * rz;
                 double vy = f->base[1] + f->row[1] * ry + f->slab[1] * rz;
                 double vz = f->base[2] + f->row[2] * ry + f->slab[2] * rz;
+                if (!BKReformatInBand(p, vx, vy, vz)) continue;   // height band: left out, not painted over
                 float value = BKReformatSample(p, voxels, vx, vy, vz);
                 switch (p->projection) {
-                    case BKReformatMIP:   acc = (z == 0 || value > acc) ? value : acc; break;
-                    case BKReformatMinIP: acc = (z == 0 || value < acc) ? value : acc; break;
-                    case BKReformatMean:  acc = (z == 0) ? value : (acc * (float)z + value) / (float)(z + 1); break;   // running mean (classic order)
+                    case BKReformatMIP:   acc = (used == 0 || value > acc) ? value : acc; break;
+                    case BKReformatMinIP: acc = (used == 0 || value < acc) ? value : acc; break;
+                    case BKReformatMean:  acc = (used == 0) ? value : (acc * (float)used + value) / (float)(used + 1); break;   // running mean (classic order)
                     case BKReformatRadiograph: {
                         float hu = value < -1000.0f ? -1000.0f : value;   // below air counts as air
                         acc += (hu + 1000.0f) * p->radiographK;            // sum of mu * ds
                         break;
                     }
-                    default: if (z == 0) acc = value; break;   // no projection: the first slab sample (classic)
+                    default: if (used == 0) acc = value; break;   // no projection: the first slab sample (classic)
                 }
+                used++;
             }
-            if (p->projection == BKReformatRadiograph)
+            if (used == 0) acc = p->outOfBoundsValue;   // the whole slab is outside the height band
+            else if (p->projection == BKReformatRadiograph)
                 acc = 3000.0f - 4000.0f * expf(-acc);   // -1000 + 4000 * (1 - transmitted)
             out[(size_t)y * p->width + x] = acc;
         }

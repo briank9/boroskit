@@ -203,4 +203,28 @@ static void BKBrightest(const float *img, uint32_t w, uint32_t h, double *x, dou
     XCTAssertEqualWithAccuracy(by, 20.0, 1.01);
 }
 
+// What: BKMPRSetHeightBand turns a patient-mm height band into the kernel's voxel-space band, for a scan
+// with 0.5 / 0.4 / 0.8 mm voxels, an offset origin and the rows running towards the feet (y flipped into z).
+- (void)testHeightBandFromPatientMillimetres
+{
+    // voxel (i, j, k) -> patient (0.5 i - 10, 0.8 k + 5, -0.4 j + 30)  (column-major, like BKVolumeTexture)
+    double v2p[16] = { 0.5, 0, 0, 0,   0, 0, -0.4, 0,   0, 0.8, 0, 0,   -10, 5, 30, 1 };
+    BKReformatParams p;
+    memset(&p, 0, sizeof(p));
+    BKMPRSetHeightBand(&p, v2p, BKV3d(0, 0, 1), 22, 10, 1);   // given the wrong way round: swapped
+    XCTAssertEqual(p.clipEnabled, 1);
+    // patient z = -0.4 j + 30: z 10..22 <=> j 20..50 (any i, k)
+    XCTAssertTrue(BKReformatInBand(&p, 3, 20.0, 7));
+    XCTAssertTrue(BKReformatInBand(&p, 90, 49.99, -4));
+    XCTAssertFalse(BKReformatInBand(&p, 3, 19.9, 7));
+    XCTAssertFalse(BKReformatInBand(&p, 3, 50.1, 7));
+    // a band along patient y (axis need not be z): y = 0.8 k + 5, 5..9 <=> k 0..5
+    BKMPRSetHeightBand(&p, v2p, BKV3d(0, 1, 0), 5, 9, 1);
+    XCTAssertTrue(BKReformatInBand(&p, 1, 1, 4.9));
+    XCTAssertFalse(BKReformatInBand(&p, 1, 1, 5.1));
+    BKMPRSetHeightBand(&p, v2p, BKV3d(0, 0, 1), 10, 22, 0);   // off: everything inside again
+    XCTAssertEqual(p.clipEnabled, 0);
+    XCTAssertTrue(BKReformatInBand(&p, 0, 1000, 0));
+}
+
 @end

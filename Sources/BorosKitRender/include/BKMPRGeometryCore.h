@@ -119,6 +119,15 @@ void BKMPRColumnFrames(const double patientToVoxel[16], const BKVec3d *centres, 
 int BKMPRPanoramicDirections(const BKVec3d *positions, const BKVec3d *tangents, uint32_t count, BKVec3d down,
                              BKVec3d inside, BKVec3d *downs, BKVec3d *slabs);
 
+// What: sets the reformat's height band (params->clip*) so that only slab samples whose patient position p
+// has  lowMm <= axis . p <= highMm  are used (`axis` = patient direction, unit, e.g. (0, 0, 1) = towards the
+// head; lowMm / highMm in mm along it, e.g. patient z). `voxelToPatient` = the scan's matrix (column-major,
+// as BKVolumeTexture's). enabled == 0 clears the band. Limits given the wrong way round are swapped.
+// Why (2026-11-25, Boros Mobile "Height limits"): the band is a patient-space idea (top / bottom height of
+// the head) but the kernel works in voxel index space; this turns one into the other once per picture.
+void BKMPRSetHeightBand(BKReformatParams *params, const double voxelToPatient[16], BKVec3d axis,
+                        double lowMm, double highMm, int enabled);
+
 // What: the slab sample count for a thickness: floor(thickness / step) + 1 (1 = thin).
 uint32_t BKMPRSlabDepth(double thicknessMm, double stepMm);
 

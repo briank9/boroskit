@@ -117,6 +117,49 @@ static const double kOldLinear[10][4] = { // x, y, z, value (outOfBounds -1000)
     }
 }
 
+// What: the height band (2026-11-25, Boros Mobile "Height limits") leaves samples out of every projection:
+// a slab running along z through the bright block (z 15..19) no longer sees it when the band ends at z 14;
+// a pixel with its whole slab outside the band is outOfBoundsValue; clipEnabled 0 changes nothing.
+- (void)testHeightBandLeavesSamplesOut
+{
+    float *v = BKNewPhantom();
+    BKReformatFrame f = BKFrame(17, 17, 11.5, 1, 0, 0, 0, 0, 1);   // slab = z 0..23 at x = y = 17
+    float out, plain;
+    BKReformatParams p = BKParams(1, 1, 24, BKReformatNearest, BKReformatMIP);
+    BKReformatComputeRows(&p, &f, v, 0, 1, &plain);
+    XCTAssertEqualWithAccuracy(plain, 3000, 0);                        // the block, without a band
+    p.clipNormalZ = 1; p.clipLow = 0; p.clipHigh = 14;                 // band set but off: unchanged
+    BKReformatComputeRows(&p, &f, v, 0, 1, &out);
+    XCTAssertEqual(out, plain);
+    p.clipEnabled = 1;                                                 // band on: z 0..14 only
+    XCTAssertTrue(BKReformatInBand(&p, 0, 0, 14));
+    XCTAssertFalse(BKReformatInBand(&p, 0, 0, 14.01));
+    XCTAssertFalse(BKReformatInBand(&p, 0, 0, -0.01));
+    BKReformatComputeRows(&p, &f, v, 0, 1, &out);
+    XCTAssertEqualWithAccuracy(out, 17 + 170 + 1400 - 1000, 0);        // MIP = top of the ramp at z 14
+    p.projection = BKReformatMinIP;
+    BKReformatComputeRows(&p, &f, v, 0, 1, &out);
+    XCTAssertEqualWithAccuracy(out, 17 + 170 - 1000, 0);
+    p.projection = BKReformatMean;                                     // mean over the 15 samples inside
+    BKReformatComputeRows(&p, &f, v, 0, 1, &out);
+    double sum = 0, mu = 0;
+    for (int z = 0; z <= 14; z++) { sum += 17 + 170 + 100 * z - 1000; mu += (17 + 170 + 100 * z) * p.radiographK; }
+    XCTAssertEqualWithAccuracy(out, sum / 15.0, 1e-2);
+    p.projection = BKReformatRadiograph;
+    BKReformatComputeRows(&p, &f, v, 0, 1, &out);
+    XCTAssertEqualWithAccuracy(out, 3000 - 4000 * exp(-mu), 1e-2);
+    p.projection = BKReformatFirstSample;                              // first sample inside (z = 0)
+    BKReformatComputeRows(&p, &f, v, 0, 1, &out);
+    XCTAssertEqualWithAccuracy(out, 17 + 170 - 1000, 0);
+    p.clipLow = 30; p.clipHigh = 40;                                   // nothing inside: outside value
+    for (int proj = 0; proj <= 4; proj++) {
+        p.projection = proj;
+        BKReformatComputeRows(&p, &f, v, 0, 1, &out);
+        XCTAssertEqualWithAccuracy(out, -2000, 0, @"projection %d", proj);
+    }
+    free(v);
+}
+
 - (void)testGPUMatchesCPUReference
 {
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
@@ -150,6 +193,23 @@ static const double kOldLinear[10][4] = { // x, y, z, value (outOfBounds -1000)
             for (size_t k = 0; k < W * H; k++) worst = fmax(worst, fabs(gpu[k] - cpu[k]));
             // float vs double positions + 16-bit texel scaling: well below 0.1 HU.
             XCTAssertLessThan(worst, 0.1, @"interpolation %d projection %d: largest difference %.4f", interp, proj, worst);
+            // The same with a height band and the slab running up the head (so that some pixels keep part
+            // of their slab and some none): the kernel's band test must match the CPU reference. Sample
+            // heights are 1.15 + 0.7 row + 0.5 step (all end in .x5), the limits end in .x0: no sample sits
+            // on a limit, where float (GPU) and double (CPU) could decide differently.
+            for (uint32_t i = 0; i < W; i++) { frames[i].slab[0] = frames[i].slab[1] = 0; frames[i].slab[2] = 0.5f; }
+            p.clipEnabled = 1; p.clipNormalZ = 1; p.clipLow = 9.0f; p.clipHigh = 19.5f;
+            [BKCurvedReformat computeOnCPUParams:p frames:frames voxels:v into:cpu];
+            XCTAssertTrue([gen renderParams:p frames:frames volume:tex into:gpu capacity:rounded error:&error], @"%@", error);
+            worst = 0;
+            int outsideCount = 0;
+            for (size_t k = 0; k < W * H; k++) { worst = fmax(worst, fabs(gpu[k] - cpu[k])); outsideCount += cpu[k] == -2000.0f; }
+            XCTAssertLessThan(worst, 0.1, @"band: interpolation %d projection %d: largest difference %.4f", interp, proj, worst);
+            XCTAssertGreaterThan(outsideCount, 0);   // the band really cut whole pixels away
+            for (uint32_t i = 0; i < W; i++) {       // back to the curved slab for the next pass
+                double a = M_PI_2 * i / (W - 1);
+                frames[i].slab[0] = (float)cos(a) * 0.5f; frames[i].slab[1] = (float)sin(a) * 0.5f; frames[i].slab[2] = 0;
+            }
         }
     // Unaligned destination (copied) and render-ahead give the same picture.
     BKReformatParams p = BKParams(W, H, D, BKReformatCubic, BKReformatMean);
