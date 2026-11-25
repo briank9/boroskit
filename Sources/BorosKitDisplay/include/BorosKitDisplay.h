@@ -12,6 +12,7 @@
 #import "BKViewOverlayDraw.h"   // 2026-11-16: the views' own overlays into the overlay draw list
 #import "BKViewMatrix.h"        // 2026-11-16: the views' positioning (matrix stacks -> 2D placement), plan step 8c
 #import "BKViewPenState.h"      // 2026-11-16: the views' drawing settings (colour, widths, smoothing, dashes), plan step 8d
+#import "BKViewFrameState.h"     // 2026-11-24: a view's whole drawing state for one native frame (matrices + pen + viewport + clip + save stack), step 8 round 3
 #import "BKTextOverlay.h"      // 2026-11-14: view-pinned text labels (WL/WW, orientation letters ...)
 #import "BKImageView.h"
 #import "BKVolumeView.h"
