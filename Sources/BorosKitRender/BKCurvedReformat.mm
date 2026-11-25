@@ -95,24 +95,32 @@ static float bkr_sample(texture3d<float, access::read> vol, constant BKReformatP
 // One thread per output pixel (GLSL: layout(local_size_x = 8, local_size_y = 8) in; same body).
 kernel void bk_curved_reformat(texture3d<float, access::read> vol [[texture(0)]],
                                constant BKReformatParams &p [[buffer(0)]],
-                               device const float4 *frames [[buffer(1)]],   // 3 per column: base, row, slab
+                               device const float4 *frames [[buffer(1)]],   // 3 per column: base, row, slab (w = cut-off height function)
                                device float *outValues [[buffer(2)]],
                                uint2 gid [[thread_position_in_grid]])
 {
     if (gid.x >= p.width || gid.y >= p.height) return;
-    float3 base = frames[gid.x * 3].xyz, row = frames[gid.x * 3 + 1].xyz, slab = frames[gid.x * 3 + 2].xyz;
+    float4 b4 = frames[gid.x * 3], r4 = frames[gid.x * 3 + 1], s4 = frames[gid.x * 3 + 2];
+    float3 base = b4.xyz, row = r4.xyz, slab = s4.xyz;
     float ry = float(gid.y) - p.rowCentre;
     float acc = 0.0f;
+    uint n = 0;   // samples taken (= z without the cut-off)
     for (uint z = 0; z < p.depth; z++) {
         float rz = float(z) - p.slabCentre;
+        if (p.bandEnabled != 0u) {   // height cut-off (BKHeightBandInside): outside samples are never read
+            float h = b4.w + r4.w * ry + s4.w * rz;
+            if (!(h >= p.bandLow && h <= p.bandHigh)) continue;
+        }
         float value = bkr_sample(vol, p, base + row * ry + slab * rz);
-        if (p.projection == 1)      acc = (z == 0 || value > acc) ? value : acc;                     // MIP
-        else if (p.projection == 2) acc = (z == 0 || value < acc) ? value : acc;                     // MinIP
-        else if (p.projection == 3) acc = (z == 0) ? value : (acc * float(z) + value) / float(z + 1); // running mean
+        if (p.projection == 1)      acc = (n == 0 || value > acc) ? value : acc;                     // MIP
+        else if (p.projection == 2) acc = (n == 0 || value < acc) ? value : acc;                     // MinIP
+        else if (p.projection == 3) acc = (n == 0) ? value : (acc * float(n) + value) / float(n + 1); // running mean
         else if (p.projection == 4) acc += (max(value, -1000.0f) + 1000.0f) * p.radiographK;        // radiograph sum
-        else if (z == 0) acc = value;   // no projection: the first slab sample (classic)
+        else if (n == 0) acc = value;   // no projection: the first slab sample (classic)
+        n++;
     }
-    if (p.projection == 4) acc = 3000.0f - 4000.0f * exp(-acc);
+    if (p.bandEnabled != 0u && n == 0) acc = p.bandOutsideValue;   // the whole pixel is cut off
+    else if (p.projection == 4) acc = 3000.0f - 4000.0f * exp(-acc);
     outValues[gid.y * p.width + gid.x] = acc;
 }
 )";
