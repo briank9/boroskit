@@ -273,6 +273,35 @@ static void Pixel(BKRenderResult *r, NSUInteger x, NSUInteger y, uint8_t out[4])
     XCTAssertEqual(scene.renderer.clipPlaneCount, (NSUInteger)0);
 }
 
+// A COLOUR fused series (pure green voxels) beside the grey scan: shows green in 3D and in MIP, nothing else changes.
+- (void)testColourFusedSeries
+{
+    if (![self requireGPU]) return;
+    static uint8_t argb[16 * 16 * 16 * 4];
+    for (int i = 0; i < 16 * 16 * 16; i++) { argb[4 * i] = 255; argb[4 * i + 1] = 0; argb[4 * i + 2] = 200; argb[4 * i + 3] = 0; }
+    double m[16];
+    Identity(m, 36, 8, 8);
+    NSError *error = nil;
+    _renderer.blendVolumeTexture = [[BKVolumeTexture alloc] initWithColorVoxels:argb bytesPerVoxel:4 redByte:1 greenByte:2 blueByte:3
+                                                                          width:16 height:16 depth:16 patientToVoxel:m
+                                                                minPixelSpacing:1 device:_device error:&error];
+    XCTAssertNotNil(_renderer.blendVolumeTexture, @"%@", error);
+    float a[256];
+    for (int i = 0; i < 256; i++) a[i] = (float)i / 255.0f;   // opacity ramp over the window 0..255
+    [_renderer setBlendColorTableRed:NULL green:NULL blue:NULL opacities:a windowLow:0 windowHigh:255];
+    uint8_t px[4];
+    Pixel([self render], 3, 32, px);                          // patient x = 44: inside the fused series only
+    XCTAssertGreaterThan(px[1], 100);                          // green channel ramp
+    XCTAssertEqual(px[0], 0);
+    XCTAssertEqual(px[2], 0);
+    _renderer.mode = BKRenderModeMIP;
+    _renderer.windowCenter = 0;
+    _renderer.windowWidth = 2000;
+    Pixel([self render], 3, 32, px);                          // grey picture black there (no first scan), green laid over
+    XCTAssertGreaterThan(px[1], 100);
+    XCTAssertEqual(px[0], 0);
+}
+
 // The parameter block is pinned at 592 bytes (std430, see BKShaderTypes.h) and the GPU agrees.
 - (void)testParameterBlockSize
 {
