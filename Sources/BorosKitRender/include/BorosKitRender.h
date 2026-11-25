@@ -27,6 +27,7 @@
 #import "BKCurvePath.h"         // curved-MPR path object (2026-11-15)
 #import "BKCurvedReformatCore.h" // curved-MPR / cross-section picture definition + CPU reference (plain C, 2026-11-15)
 #import "BKCurvedReformat.h"     // curved-MPR / cross-section pictures on the GPU (2026-11-15)
+#import "BKMPRGeometryCore.h"    // linked / oblique MPR planes + panoramic columns (plain C, 2026-11-24, Boros Mobile)
 #import "BKVecSimd.h"        // Apple glue: BorosKit neutral vectors (BorosKitVec) <-> simd
 #import "BKBoxWidgetMath.h"
 #import "BKCropBoxCore.h"
