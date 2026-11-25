@@ -242,4 +242,38 @@ static void BKBandFrames(BKReformatFrame *frames, uint32_t W, uint32_t H, int ti
     free(gpu); free(cpu); free(frames); free(v);
 }
 
+// Boros 6 (2026-11-25, cpr-cutoff-2): the rows an export picture needs to cover exactly the band.
+- (void)testBandRows
+{
+    // 3 columns, rows 0.5 mm apart, height 0 at the row centre (picture 41 rows, centre 20).
+    BKReformatFrame f[3];
+    memset(f, 0, sizeof(f));
+    for (int i = 0; i < 3; i++) { f[i].row[3] = 0.5f; }
+    int32_t first = 99;
+    // Band -3 .. +5 mm -> ry -6 .. +10 -> rows 14 .. 30 (17 rows), beyond nothing.
+    XCTAssertEqual(BKReformatBandRows(f, 3, 41, 20, 0, -3, 5, &first), 17u);
+    XCTAssertEqual(first, 14);
+    // Wider than the picture: rows outside 0..40 are allowed (the export is re-made to the band).
+    XCTAssertEqual(BKReformatBandRows(f, 3, 41, 20, 0, -20, 20, &first), 81u);
+    XCTAssertEqual(first, -20);
+    // Downward rows (row step negative): same rows mirrored.
+    for (int i = 0; i < 3; i++) f[i].row[3] = -0.5f;
+    XCTAssertEqual(BKReformatBandRows(f, 3, 41, 20, 0, -3, 5, &first), 17u);
+    XCTAssertEqual(first, 10);
+    // Tilted band across the columns (h0 differs): the union of the columns' rows.
+    for (int i = 0; i < 3; i++) { f[i].row[3] = 1.0f; f[i].base[3] = (float)i; }
+    XCTAssertEqual(BKReformatBandRows(f, 3, 41, 20, 0, 0, 2, &first), 5u);   // rows 18..22
+    XCTAssertEqual(first, 18);
+    // A tilted slab widens each row's reach by |slab w| * slabCentre.
+    for (int i = 0; i < 3; i++) { f[i].base[3] = 0; f[i].slab[3] = 0.25f; }
+    XCTAssertEqual(BKReformatBandRows(f, 3, 41, 20, 4, 0, 2, &first), 5u);   // band widened by 1 mm: -1 .. 3
+    XCTAssertEqual(first, 19);
+    // Band outside every column's reach of a flat column: nothing.
+    for (int i = 0; i < 3; i++) { f[i].row[3] = 0; f[i].slab[3] = 0; f[i].base[3] = 7; }
+    XCTAssertEqual(BKReformatBandRows(f, 3, 41, 20, 0, 0, 2, &first), 0u);
+    // Flat column inside the band: all rows.
+    XCTAssertEqual(BKReformatBandRows(f, 3, 41, 20, 0, 0, 10, &first), 41u);
+    XCTAssertEqual(first, 0);
+}
+
 @end
