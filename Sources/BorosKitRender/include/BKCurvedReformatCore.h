@@ -117,6 +117,17 @@ float BKReformatRadiographK(double strength, double slabStepMm);
 void BKReformatComputeRows(const BKReformatParams *params, const BKReformatFrame *frames, const float *voxels,
                            uint32_t rowStart, uint32_t rowEnd, float *out);
 
+// What (Boros 6 2026-11-25, cpr-cutoff-2: exports cropped to the band): the picture rows that hold at least
+// one sample inside [low, high] for the columns' height functions (frames' w components; the slab samples
+// rz in [-slabCentre, slabCentre] are included, so a slab tilted against the band keeps its partial rows).
+// Rows are numbered like the picture's (row y has ry = y - rowCentre) but are NOT limited to 0..height-1:
+// an export picture is re-made to cover exactly the band. Returns the row count (0 = no column reaches the
+// band) and the first row in *firstRow. A column whose height does not change down the picture (row w = 0)
+// cannot be cropped: then the result is all rows 0..height-1 if its height is inside, else that column is
+// ignored. CPU only (Boros glue sizes the export picture with it).
+uint32_t BKReformatBandRows(const BKReformatFrame *frames, uint32_t width, uint32_t height, float rowCentre, float slabCentre,
+                            float low, float high, int32_t *firstRow);
+
 // What: one interpolated value at voxel coordinate (x, y, z) (CPU reference of the kernel's sampling).
 float BKReformatSample(const BKReformatParams *params, const float *voxels, double x, double y, double z);
 

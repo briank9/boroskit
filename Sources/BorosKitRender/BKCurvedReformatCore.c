@@ -121,3 +121,30 @@ void BKReformatComputeRows(const BKReformatParams *p, const BKReformatFrame *fra
             out[(size_t)y * p->width + x] = acc;
         }
 }
+
+// Boros 6 (2026-11-25, cpr-cutoff-2): see the header. Pure C99 (VULKAN: safe to translate directly; CPU only).
+uint32_t BKReformatBandRows(const BKReformatFrame *frames, uint32_t width, uint32_t height, float rowCentre, float slabCentre,
+                            float low, float high, int32_t *firstRow)
+{
+    if (firstRow) *firstRow = 0;
+    if (frames == NULL || width == 0 || !(high >= low)) return 0;
+    const double eps = 1e-4;   // rows whose sample sits on a limit (float rounding) count as inside
+    double lo = INFINITY, hi = -INFINITY;
+    for (uint32_t x = 0; x < width; x++) {
+        const BKReformatFrame *f = &frames[x];
+        double h0 = f->base[3], hr = f->row[3], spread = fabs((double)f->slab[3]) * (double)slabCentre;
+        double a = (double)low - spread, b = (double)high + spread;   // the row's samples reach h0 + hr*ry +/- spread
+        if (fabs(hr) < 1e-12) {
+            if (h0 >= a && h0 <= b) { lo = fmin(lo, 0.0); hi = fmax(hi, (double)height - 1.0); }
+            continue;
+        }
+        double y0 = (a - h0) / hr + rowCentre, y1 = (b - h0) / hr + rowCentre;
+        if (y0 > y1) { double t = y0; y0 = y1; y1 = t; }
+        lo = fmin(lo, ceil(y0 - eps));
+        hi = fmax(hi, floor(y1 + eps));
+    }
+    if (!(hi >= lo) || !isfinite(lo) || !isfinite(hi)) return 0;
+    if (hi - lo > 1e7) return 0;   // nonsense geometry: refuse rather than allocate a giant picture
+    if (firstRow) *firstRow = (int32_t)lo;
+    return (uint32_t)(hi - lo + 1.0);
+}
