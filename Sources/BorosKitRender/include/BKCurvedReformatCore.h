@@ -12,6 +12,11 @@
 //   local_size_y = 8). The CPU reference BKReformatComputeRows() in BKCurvedReformatCore.c is the golden
 //   output a Vulkan port must reproduce.
 // - Pure C99, <stdint.h>, <math.h>; no Objective-C, Metal, Apple simd or Horos (LGPL) types.
+// - Height cut-off (2026-11-25): 4 more 32-bit scalars at the end of the parameter block (bandEnabled,
+//   bandLow, bandHigh, bandOutsideValue) and the column height function in the frames' w components; the
+//   kernel skips samples outside [bandLow, bandHigh] exactly like BKReformatComputeRows. A sample lying
+//   exactly on a limit may land on either side between backends (float rounding / fused multiply-add in
+//   h0 + hRow * ry + hSlab * rz); golden comparisons should keep limits off exact sample heights.
 // - Written from the definition of the picture (below). Matching the classic engine on purpose:
 //   nearest = index (int)(coordinate + 0.5) (cut toward zero); cubic = Catmull-Rom (the standard
 //   cubic convolution with a = -0.5) on the 4 x 4 x 4 neighbours; any neighbour outside the scan
@@ -28,12 +33,19 @@
 //   voxel = base[x] + row[x] * (y - rowCentre) + slab[x] * (z - slabCentre)      (voxel index space)
 //   value(x, y) = projection over z of interpolate(scan, voxel)
 // with rowCentre = (height-1)/2 and slabCentre = (depth-1)/2 as the curved MPR uses them.
+//
+// Height cut-off (Boros 6 2026-11-25, cpr-cutoff): when params.bandEnabled = 1, a sample whose height
+// (BKHeightBandCore.h; the column's height function in the frame's w components) is outside
+// [bandLow, bandHigh] is never read and does not take part in the projection (MIP / MinIP / mean over the
+// samples inside only; the radiograph sums only inside samples). A pixel with no sample inside the band
+// gets bandOutsideValue. With bandEnabled = 0 every result is bit-identical to the definition above.
 
 #ifndef BK_CURVED_REFORMAT_CORE_H
 #define BK_CURVED_REFORMAT_CORE_H
 
 #include <stdint.h>
 #include <stddef.h>
+#include "BKHeightBandCore.h"   // BKHeightBandInside (the cut-off test, 2026-11-25)
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,14 +84,22 @@ typedef enum {
     float rowCentre;           /* (height-1)/2 */ \
     float slabCentre;          /* (depth-1)/2 */ \
     float reserved0; \
-    float reserved1;
+    float reserved1; \
+    /* Height cut-off (Boros 6 2026-11-25, cpr-cutoff; BKHeightBandCore.h): */ \
+    uint32_t bandEnabled;      /* 1 = only samples whose height is in [bandLow, bandHigh] count */ \
+    float bandLow;             /* mm, lower limit (inclusive) */ \
+    float bandHigh;            /* mm, upper limit (inclusive) */ \
+    float bandOutsideValue;    /* value of a pixel without any sample inside the band (shown black) */
 
 typedef struct BKReformatParams {
     BK_REFORMAT_PARAMS_FIELDS
 } BKReformatParams;
 
-// What: one column's frame, 3 x float4 in memory (w unused): the voxel position of the column's middle
+// What: one column's frame, 3 x float4 in memory: the voxel position of the column's middle
 // (row rowCentre, slab slabCentre), and the voxel step for one row down and one slab sample.
+// The w components hold the column's height function for the height cut-off (Boros 6 2026-11-25,
+// cpr-cutoff; BKHeightBandCore.h): height(ry, rz) = base[3] + row[3] * ry + slab[3] * rz (mm), with
+// ry = row - rowCentre and rz = slab sample - slabCentre. Only read when params.bandEnabled = 1.
 typedef struct {
     float base[4];
     float row[4];

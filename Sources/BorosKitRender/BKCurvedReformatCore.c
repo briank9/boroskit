@@ -82,30 +82,41 @@ void BKReformatComputeRows(const BKReformatParams *p, const BKReformatFrame *fra
 {
     if (p == NULL || frames == NULL || voxels == NULL || out == NULL || p->depth == 0) return;
     if (rowEnd > p->height) rowEnd = p->height;
+    const int band = p->bandEnabled != 0;   // Boros 6 (2026-11-25, cpr-cutoff): height cut-off on
     for (uint32_t y = rowStart; y < rowEnd; y++)
         for (uint32_t x = 0; x < p->width; x++) {
             const BKReformatFrame *f = &frames[x];
             double ry = (double)y - p->rowCentre;
             float acc = 0;
+            uint32_t n = 0;   // samples taken so far (= z without the cut-off, so the formulas below are unchanged)
             for (uint32_t z = 0; z < p->depth; z++) {
                 double rz = (double)z - p->slabCentre;
+                if (band) {
+                    // Cut-off: a sample outside the band is never read and does not count (BKHeightBandCore.h).
+                    // Same float expression as the kernel: h0 + hRow * ry + hSlab * rz.
+                    float h = f->base[3] + f->row[3] * (float)ry + f->slab[3] * (float)rz;
+                    if (!BKHeightBandInside(p->bandLow, p->bandHigh, h)) continue;
+                }
                 double vx = f->base[0] + f->row[0] * ry + f->slab[0] * rz;
                 double vy = f->base[1] + f->row[1] * ry + f->slab[1] * rz;
                 double vz = f->base[2] + f->row[2] * ry + f->slab[2] * rz;
                 float value = BKReformatSample(p, voxels, vx, vy, vz);
                 switch (p->projection) {
-                    case BKReformatMIP:   acc = (z == 0 || value > acc) ? value : acc; break;
-                    case BKReformatMinIP: acc = (z == 0 || value < acc) ? value : acc; break;
-                    case BKReformatMean:  acc = (z == 0) ? value : (acc * (float)z + value) / (float)(z + 1); break;   // running mean (classic order)
+                    case BKReformatMIP:   acc = (n == 0 || value > acc) ? value : acc; break;
+                    case BKReformatMinIP: acc = (n == 0 || value < acc) ? value : acc; break;
+                    case BKReformatMean:  acc = (n == 0) ? value : (acc * (float)n + value) / (float)(n + 1); break;   // running mean (classic order)
                     case BKReformatRadiograph: {
                         float hu = value < -1000.0f ? -1000.0f : value;   // below air counts as air
                         acc += (hu + 1000.0f) * p->radiographK;            // sum of mu * ds
                         break;
                     }
-                    default: if (z == 0) acc = value; break;   // no projection: the first slab sample (classic)
+                    default: if (n == 0) acc = value; break;   // no projection: the first slab sample (classic)
                 }
+                n++;
             }
-            if (p->projection == BKReformatRadiograph)
+            if (band && n == 0)
+                acc = p->bandOutsideValue;   // the whole pixel is cut off
+            else if (p->projection == BKReformatRadiograph)
                 acc = 3000.0f - 4000.0f * expf(-acc);   // -1000 + 4000 * (1 - transmitted)
             out[(size_t)y * p->width + x] = acc;
         }
