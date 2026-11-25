@@ -16,6 +16,7 @@
 #import "BKStereoCore.h"         // 2026-11-17: red / blue stereo mixing (plain C)
 #import "BKVolumeRayCore.h"      // 2026-11-18: what is under the mouse in a volume (plain C)
 #import "BKVolumeFusionCore.h"   // 2026-11-24: colour scans + fusion in the 3D picture (plain C)
+#import "BKThickSlabCore.h"      // 2026-11-24: the 2D viewer's thick slab "VR" picture (plain C)
 #import "BKSlabGeometryCore.h" // MPR / curved-MPR slab picture geometry (plain C, 2026-11-14)
 #import "BKSlabCameraCore.h"   // MPR / curved-MPR slab camera + mouse tools (plain C, 2026-11-15)
 #import "BKSlabViewCore.h"     // MPR / curved-MPR slab view rules: tools, WL drag, export formats (plain C, 2026-11-24)
