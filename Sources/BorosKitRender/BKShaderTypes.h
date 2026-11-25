@@ -14,7 +14,8 @@
 //    no float3x3 (a matrix is stored as an array of float4 columns), no bool.
 //  - 3D quantities use .xyz of a float4; the 4th component is unused and set to 0.
 //  - the total size is a multiple of 16 bytes with explicit padding at the end, so no
-//    compiler adds hidden bytes (464 bytes; the C/GPU size test checks it).
+//    compiler adds hidden bytes (592 bytes since the fusion / colour fields of 2026-11-24, 464 before;
+//    the C/GPU size test checks it, and a _Static_assert below pins it).
 //  - in Vulkan, bind it as a std430 storage buffer (or a small uniform buffer with
 //    VK_EXT_scalar_block_layout); it is far larger than the guaranteed 128 bytes of
 //    push constants. std140 would put the clipPlanes array on the same 16-byte stride it
@@ -50,6 +51,9 @@ typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment in C, Metal a
     bk_float4 clipNormal;         /* unit normal; the side it points to is cut away */ \
     bk_float4 brickGrid;          /* empty-space skipping: number of bricks along x, y, z */ \
     bk_float4 clipPlanes[BK_MAX_CLIP_PLANES]; /* extra clip planes (e.g. a rotated crop box): (nx,ny,nz,w), patient mm; cut where dot(n,x)+w > 0 (see BKClipPlanesPack) */ \
+    bk_float4 blendPatientToVoxelColumns[3]; /* fusion (2026-11-24): the FUSED scan's own patient(mm) -> voxel transform, 3 columns, .xyz used */ \
+    bk_float4 blendPatientToVoxelTranslation; /* ...and its translation */ \
+    bk_float4 blendVolumeSize;    /* fused scan: voxel counts (w, h, d) as floats */ \
     float viewWidth;              /* ortho: image width in mm; perspective: 2*tan(hfov/2) */ \
     float viewHeight;             /* ortho: image height in mm; perspective: 2*tan(vfov/2) */ \
     float stepSize;               /* requested distance between samples along a ray, mm */ \
@@ -77,7 +81,19 @@ typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment in C, Metal a
     int32_t clipPlaneCount;       /* number of valid entries in clipPlanes (0..BK_MAX_CLIP_PLANES) */ \
     int32_t manualFiltering;      /* 1 = interpolate the volume and the colour table by hand (8 / 2 exact reads) instead of the GPU's linear filter */ \
     int32_t useGeometry;          /* 1 = embedded opaque objects (meshes / lines / points) are given as a colour + ray-distance picture; each ray stops at them (see BKVolumeGeometryLayer.h) */ \
-    int32_t valuesOnly;           /* 1 = write only the value picture (MPR / CPR slabs never use the RGBA one; 2026-11-15) */
+    int32_t valuesOnly;           /* 1 = write only the value picture (MPR / CPR slabs never use the RGBA one; 2026-11-15) */ \
+    float blendValueScale;        /* fusion (2026-11-24): fused scan's stored texel (0..1) -> real value, like valueScale */ \
+    float blendValueOffset; \
+    float blendTfMin;             /* value mapped to the first / last entry of the fused scan's table */ \
+    float blendTfMax; \
+    float blendOpacityUnitDistance; /* mm over which the fused scan's table opacity applies (3D mode) */ \
+    int32_t useBlend;             /* 1 = a fused scan is drawn too (textures 5 and 6 of the ray-cast kernels) */ \
+    int32_t blendProjection;      /* BKFusionProjection* (BKVolumeFusionCore.h): what the fused scan does in this mode */ \
+    int32_t colorVolume;          /* 1 = the first scan is a colour scan (RGBA8 3D texture; channels 0..255) */ \
+    int32_t blendColorVolume;     /* 1 = the fused scan is a colour scan */ \
+    int32_t colorUsesTable;       /* colour scan: 1 = channels take the table's colours, 0 = pure red / green / blue ramps */ \
+    int32_t reserved0;            /* padding: keeps the total a multiple of 16 bytes (592) */ \
+    int32_t reserved1;
 
 // Empty-space skipping (plain language): the volume is divided into small cubes
 // ("bricks") of BK_BRICK_SIZE voxels per side. For every brick the lowest and highest
@@ -96,6 +112,14 @@ typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment in C, Metal a
 typedef struct BKRenderParams {
     BK_RENDER_PARAMS_FIELDS
 } BKRenderParams;
+
+// Boros 6 (2026-11-24, vr-colour-fusion): the size is pinned so a field added without its padding is caught at
+// compile time (std430 needs the explicit layout; CPU == Metal alone proves nothing about Vulkan).
+#ifdef __cplusplus
+static_assert(sizeof(BKRenderParams) == 592, "BKRenderParams must stay 592 bytes (std430 layout, see PORTING NOTES)");
+#else
+_Static_assert(sizeof(BKRenderParams) == 592, "BKRenderParams must stay 592 bytes (std430 layout, see PORTING NOTES)");
+#endif
 
 // Turns the field list above into a string literal for the shader source.
 // Two levels are needed so the macro is expanded before it is stringified.

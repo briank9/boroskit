@@ -55,6 +55,30 @@ int BKVolumeRayFirstHit(const BKRayVolume *volume, const double start[3], const 
 // What: the opacity table's value at `value` (nearest entry; clamped at the ends). 1 when the table is empty.
 double BKRayOpacityAt(const BKRayOpacityTable *table, double value);
 
+// --- Colour (RGB) scans (Boros 6, 2026-11-24, vr-colour-fusion) ---------------------------------------------------
+// A colour scan: one voxel = `bytesPerVoxel` bytes (the app's colour scans: 4 bytes A, R, G, B), the colour channels
+// at byte offsets redByte / greenByte / blueByte.
+typedef struct {
+    const uint8_t *bytes;           // width * height * depth voxels, x fastest, then y, then slice
+    int32_t width, height, depth;
+    int32_t bytesPerVoxel;
+    int32_t redByte, greenByte, blueByte;
+    double patientToVoxel[16];      // patient mm -> voxel index (x, y, slice), column by column
+} BKRayColorVolume;
+
+// What: BKVolumeRayFirstHit for a colour scan, with the same rules as the 3D picture of a colour scan
+// (BKVolumeFusionCore.h): a step's opacity = the opacity table's value of its red byte + of its green byte + of its blue
+// byte, capped at 1 (table over byte values, e.g. 0..255); the reported value (and the maximum-mode "brightness") is
+// the grey value (R + G + B) / 3 - the same grey the app's ROI values use for colour images. Nearest voxel.
+// Why: the 3D point tool, double-click and bone removal on colour scans without VTK.
+int BKVolumeRayFirstHitColor(const BKRayColorVolume *volume, const double start[3], const double end[3], double stepMM,
+                             const BKRayOpacityTable *table, int32_t mode, double threshold, double minValue,
+                             const float *hiddenPlanes, int32_t planeCount, BKRayHit *hit);
+
+// What: the opacity of one colour voxel under `table` (the rule above). Shared by the walk and its tests.
+double BKRayColorOpacity(const BKRayOpacityTable *table, const uint8_t *voxel, int32_t redByte, int32_t greenByte,
+                         int32_t blueByte);
+
 #ifdef __cplusplus
 }
 #endif

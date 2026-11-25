@@ -61,6 +61,29 @@ extern NSErrorDomain const BKRenderErrorDomain;
                                       device:(id<MTLDevice>)device
                                        error:(NSError * _Nullable * _Nullable)error;
 
+// Colour (RGB) scans (Boros 6, 2026-11-24, vr-colour-fusion): uploads a colour scan as an RGBA8 3D texture (red,
+// green, blue in .rgb, 0..1 = byte / 255; .a = 1). voxels: width*height*depth voxels of bytesPerVoxel bytes each, x
+// fastest; the red / green / blue bytes of a voxel at offsets redByte / greenByte / blueByte (the app's colour scans:
+// 4 bytes A, R, G, B -> 1, 2, 3). patientToVoxel / minPixelSpacing as for -initWithFloatVoxels:... . The "values" of
+// a colour scan are the channel bytes: valueScale 255, valueOffset 0, minimum 0, maximum 255, outside value 0.
+// Why: the native 3D window draws colour scans with BorosKit (no VTK); the renderer reads the three channels.
+// PORTING NOTE: RGBA8_UNORM 3D with linear filtering is core Vulkan (mandatory format feature).
+- (nullable instancetype)initWithColorVoxels:(const uint8_t *)voxels
+                               bytesPerVoxel:(NSUInteger)bytesPerVoxel
+                                     redByte:(NSUInteger)redByte
+                                   greenByte:(NSUInteger)greenByte
+                                    blueByte:(NSUInteger)blueByte
+                                       width:(NSUInteger)width
+                                      height:(NSUInteger)height
+                                       depth:(NSUInteger)depth
+                              patientToVoxel:(const double[_Nonnull 16])patientToVoxel
+                             minPixelSpacing:(double)minPixelSpacing
+                                      device:(id<MTLDevice>)device
+                                       error:(NSError * _Nullable * _Nullable)error;
+
+// YES for a colour scan (see above): the texture is RGBA8 and the renderer reads its three channels.
+@property (nonatomic, readonly, getter=isColor) BOOL color;
+
 @property (nonatomic, readonly) id<MTLTexture> texture;
 
 @property (nonatomic, readonly) NSUInteger pixelsWide;

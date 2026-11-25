@@ -16,6 +16,7 @@
 #import "BKTransferFunction.h"
 #import "BKShaderTypes.h"
 #import "BKRenderCore.h"
+#import "BKVolumeFusionCore.h"   // colour scans + fusion rules (plain C, 2026-11-24)
 #import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
 #import "CPRVolumeData.h"
 
@@ -134,6 +135,11 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     id<MTLTexture> _noGeometryColor;
     id<MTLTexture> _noGeometryDistance;
 
+    // --- Fusion (2026-11-24, vr-colour-fusion): the fused scan's baked table and the stand-ins bound without one ---
+    id<MTLTexture> _blendTfTexture;              // 4096 x 1 RGBA float, the fused scan's colour / opacity
+    BKTransferFunction *_bakedBlendTransferFunction;
+    id<MTLTexture> _noBlendVolume;               // 1 x 1 x 1 R16 3D texture bound at slot 5 when nothing is fused
+
     // --- Extra clipping planes (see -setPackedClipPlanes:count: / -setClipPlanes:count:) ---
     // Kept in the GPU packing (nx, ny, nz, w; cut where n.x + w > 0), so the simd setter needs no
     // conversion and the N3Plane setter converts once with BKClipPlanesPack.
@@ -143,6 +149,7 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
 
 // Both accessors are custom (they copy), so the backing variable must be declared explicitly.
 @synthesize transferFunction = _transferFunction;
+@synthesize blendTransferFunction = _blendTransferFunction;
 
 // Compiles the shader library once per GPU and shares it between renderers, since
 // compiling is the slow part of creating a renderer.
@@ -184,6 +191,13 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     _noGeometryColor = [_device newTextureWithDescriptor:[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO]];
     _noGeometryDistance = [_device newTextureWithDescriptor:[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:1 height:1 mipmapped:NO]];
     if (!_noGeometryColor || !_noGeometryDistance) return nil;
+    MTLTextureDescriptor *noBlend = [[MTLTextureDescriptor alloc] init];
+    noBlend.textureType = MTLTextureType3D;
+    noBlend.pixelFormat = MTLPixelFormatR16Unorm;
+    noBlend.width = noBlend.height = noBlend.depth = 1;
+    _noBlendVolume = [_device newTextureWithDescriptor:noBlend];
+    if (!_noBlendVolume) return nil;
+    _blendOpacityUnitDistance = 1;
     _queue = [_device newCommandQueue];
 
     // Defaults (documented in the header).
@@ -342,6 +356,97 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     return [_transferFunction copy];
 }
 
+#pragma mark - Fusion (2026-11-24, vr-colour-fusion)
+
+- (void)setBlendTransferFunction:(BKTransferFunction *)blendTransferFunction
+{
+    _blendTransferFunction = [blendTransferFunction copy];   // private copy: the "changed?" check stays reliable
+}
+
+- (BKTransferFunction *)blendTransferFunction
+{
+    return [_blendTransferFunction copy];
+}
+
+// What: the classic fused-scan look as a transfer function (see the header).
+- (void)setBlendColorTableRed:(const uint8_t *)red green:(const uint8_t *)green blue:(const uint8_t *)blue
+                    opacities:(const float *)opacities windowLow:(float)windowLow windowHigh:(float)windowHigh
+{
+    BKTransferFunction *tf = [[BKTransferFunction alloc] init];
+    if (!(windowHigh > windowLow)) windowHigh = windowLow + 1e-3f;
+    for (int32_t i = 0; i < 255; i++) {
+        float v = BKFusionTableEntryValue(windowLow, windowHigh, i);   // plain-C core
+        float g = (float)i / 255.0f;
+        [tf addColorPointAtValue:v red:red ? red[i] / 255.0f : g green:green ? green[i] / 255.0f : g blue:blue ? blue[i] / 255.0f : g];
+        [tf addOpacityPointAtValue:v opacity:opacities ? opacities[i] : 0];
+    }
+    _blendTransferFunction = tf;
+}
+
+// What: the fused scan's table on the GPU, re-baked only when the function changed. nil when nothing is fused.
+- (id<MTLTexture>)bakedBlendTable
+{
+    BKTransferFunction *tf = _blendTransferFunction;
+    if (!_blendVolumeTexture || !tf) return nil;
+    if (_blendTfTexture && _bakedBlendTransferFunction == tf) return _blendTfTexture;
+    // A NEW texture every time, so a frame still being drawn keeps reading the old one (rare: slider / window moves).
+    MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+                                                                                     width:kTransferFunctionEntries height:1 mipmapped:NO];
+    desc.usage = MTLTextureUsageShaderRead;
+    desc.storageMode = MTLStorageModeShared;
+#if TARGET_OS_OSX
+    if (!_device.hasUnifiedMemory) desc.storageMode = MTLStorageModeManaged;
+#endif
+    id<MTLTexture> texture = [_device newTextureWithDescriptor:desc];
+    if (!texture) return nil;
+    float *rgba = malloc(kTransferFunctionEntries * 4 * sizeof(float));
+    [tf bakeIntoRGBA:rgba count:kTransferFunctionEntries];
+    [texture replaceRegion:MTLRegionMake2D(0, 0, kTransferFunctionEntries, 1) mipmapLevel:0
+                 withBytes:rgba bytesPerRow:kTransferFunctionEntries * 4 * sizeof(float)];
+    free(rgba);
+    _blendTfTexture = texture;
+    _bakedBlendTransferFunction = tf;
+    return texture;
+}
+
+// What: YES when a fused scan is set up completely (volume + table) and lives on this renderer's device.
+- (BOOL)hasBlend
+{
+    return _blendVolumeTexture && _blendTransferFunction && _blendVolumeTexture.texture.device == _device;
+}
+
+// What: binds the fused scan (or the stand-ins) at the kernels' slots 5 and 6.
+- (void)bindBlendToEncoder:(id<MTLComputeCommandEncoder>)enc
+{
+    id<MTLTexture> table = [self hasBlend] ? [self bakedBlendTable] : nil;
+    [enc setTexture:table ? _blendVolumeTexture.texture : _noBlendVolume atIndex:5];
+    [enc setTexture:table ?: _tfTexture atIndex:6];
+}
+
+// What: the fusion / colour part of the parameter block (fields documented in BKShaderTypes.h).
+- (void)fillBlendParams:(BKRenderParams *)p
+{
+    p->colorVolume = _volumeTexture.color ? 1 : 0;
+    p->colorUsesTable = _colorChannelsUseTableColors ? 1 : 0;
+    p->blendOpacityUnitDistance = _blendOpacityUnitDistance > 0 ? _blendOpacityUnitDistance : 1.0f;
+    p->blendProjection = BKFusionBlendProjection(_mode);   // plain-C core (classic rule)
+    if (![self hasBlend] || ![self bakedBlendTable]) { p->useBlend = 0; return; }
+    BKVolumeTexture *bt = _blendVolumeTexture;
+    BKTransferFunction *tf = _blendTransferFunction;
+    N3AffineTransform m = bt.volumeTransform;   // same row-vector reading as the first scan's (see -fillParams:)
+    p->blendPatientToVoxelColumns[0] = BKFloat4(simd_make_float3(m.m11, m.m12, m.m13));
+    p->blendPatientToVoxelColumns[1] = BKFloat4(simd_make_float3(m.m21, m.m22, m.m23));
+    p->blendPatientToVoxelColumns[2] = BKFloat4(simd_make_float3(m.m31, m.m32, m.m33));
+    p->blendPatientToVoxelTranslation = BKFloat4(simd_make_float3(m.m41, m.m42, m.m43));
+    p->blendVolumeSize = BKFloat4(simd_make_float3(bt.pixelsWide, bt.pixelsHigh, bt.pixelsDeep));
+    p->blendValueScale = bt.valueScale;
+    p->blendValueOffset = bt.valueOffset;
+    p->blendTfMin = tf.minimumValue;
+    p->blendTfMax = tf.maximumValue;
+    p->blendColorVolume = bt.color ? 1 : 0;
+    p->useBlend = 1;
+}
+
 // Fills the GPU parameter block from the current settings. Builds an orthonormal
 // camera frame (right, up, forward) from direction + up so callers may pass any
 // non-parallel vectors.
@@ -433,6 +538,7 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     p->shading = _shadingEnabled ? 1 : 0;
     p->manualFiltering = _manualFiltering ? 1 : 0;
     p->useGeometry = [self hasGeometry] ? 1 : 0;   // embedded objects (2026-11-14)
+    [self fillBlendParams:p];                       // colour scans + fusion (2026-11-24)
     return YES;
 }
 
@@ -513,6 +619,9 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     params->skipEmptySpace = 0;
     // The average along the ray needs every sample, so nothing to skip there.
     if (!_skipsEmptySpace || _mode == BKRenderModeAverage) return;
+    // Colour scans and fusion (2026-11-24): the bricks describe only a grey first scan, so no skipping (the shader's
+    // colour / fusion path never reads them).
+    if (params->colorVolume != 0 || params->useBlend != 0) return;
 
     BKVolumeTexture *vt = _volumeTexture;
     id<MTLBuffer> ranges = [self brickRangesForVolume:vt];
@@ -576,6 +685,7 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     [enc setBuffer:brickEmpty offset:0 atIndex:3];
     [enc setBuffer:brickRange offset:0 atIndex:4];
     [self bindGeometryToEncoder:enc];   // embedded objects (2026-11-14)
+    [self bindBlendToEncoder:enc];      // fused scan (2026-11-24)
     // 8x8 tiles: neighbouring rays read neighbouring voxels, which keeps the texture
     // cache warm. Thread groups are dispatched to cover the image; the kernel skips
     // threads that fall outside it.
@@ -730,6 +840,7 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     [enc setBuffer:brickEmpty offset:0 atIndex:2];
     [enc setBuffer:brickRange offset:0 atIndex:3];
     [self bindGeometryToEncoder:enc];   // embedded objects (2026-11-14)
+    [self bindBlendToEncoder:enc];      // fused scan (2026-11-24)
     [enc dispatchThreadgroups:MTLSizeMake((width + 7) / 8, (height + 7) / 8, 1)
         threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
     [enc endEncoding];
