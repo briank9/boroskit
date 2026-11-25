@@ -74,7 +74,9 @@ static NSError *BKZipError(NSString *text)
     [handle closeFile];
     if (ok && written != entry->uncompressedSize) { ok = NO; *reason = @"A file inside the archive has the wrong size."; }
     if (ok && crc != entry->crc32) { ok = NO; *reason = @"A file inside the archive is damaged (checksum mismatch)."; }
-    if (!ok) [[NSFileManager defaultManager] trashItemAtURL:url resultingItemURL:nil error:nil] ?: [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
+    // A half-written output of THIS call is removed (not trashed): it is not a user file, and on iOS
+    // trashItemAtURL only fills a hidden .Trash in the app's Documents that nobody can empty.
+    if (!ok) [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
     return ok;
 }
 
