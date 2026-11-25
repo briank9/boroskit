@@ -31,6 +31,8 @@ let package = Package(
         ),
         .target(
             name: "BorosKitCore",
+            // Vec (2026-11-24, vtk-data): the plain-C maths cores here (BKRigidFitCore ...) use BKVec3d.
+            dependencies: ["BorosKitVec"],
             path: "Sources/BorosKitCore",
             publicHeadersPath: "include",
             cSettings: [
