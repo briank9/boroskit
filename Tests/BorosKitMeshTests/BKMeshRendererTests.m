@@ -273,7 +273,7 @@ static void BKExpectedAxes(BKStandardView view, simd_float3 *right, simd_float3 
     r.objects = @[glass, back];   // see-through listed first: must still be drawn last
     BKRenderResult *result = [self render:r size:100];
     [result getRGBA8:px atX:50 y:50];
-    // Two see-through faces (front and back of the glass box) over the blue wall.
+    // The glass box's nearest face (2026-11-25: one layer per see-through mesh) over the blue wall.
     XCTAssertGreaterThan(px[0], 100);
     XCTAssertGreaterThan(px[2], 10);
     XCTAssertEqual(px[3], 255);
@@ -284,6 +284,56 @@ static void BKExpectedAxes(BKStandardView view, simd_float3 *right, simd_float3 
     glass.visible = NO;
     back.opacity = 0;
     XCTAssertEqual(BKCoverageOf([self render:r size:32]).count, 0u);
+}
+
+// 2026-11-25: a see-through mesh shows only its NEAREST surface, whatever order its triangles
+// are stored in. Why: surfaces made from scan slices are stored slice by slice; blending them in
+// that order let far surfaces show ON TOP in sharp-edged zones that moved as the object turned
+// (AI dental skull at 45% opacity). One mesh = a near red square and a far green square, both on
+// the line of sight, stored near-first and far-first: both orders must give the same pixel, with
+// no green in it.
+- (void)testSeeThroughMeshIsOrderIndependent
+{
+    BKMeshRenderer *r = [self renderer];
+    if (!r) return;
+    r.specular = 0;
+    // Front view: the camera looks along +y, so smaller y = nearer. Square side 20 mm.
+    simd_float3 v[8] = {
+        {-10, -10, -10}, {10, -10, -10}, {10, -10, 10}, {-10, -10, 10},   // near (y = -10)
+        {-10,  10, -10}, {10,  10, -10}, {10,  10, 10}, {-10,  10, 10},   // far  (y = +10)
+    };
+    simd_float4 c[8];
+    for (int i = 0; i < 4; i++) { c[i] = simd_make_float4(1, 0, 0, 1); c[i + 4] = simd_make_float4(0, 1, 0, 1); }
+    uint32_t nearFirst[12] = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+    uint32_t farFirst[12]  = {4, 5, 6, 4, 6, 7, 0, 1, 2, 0, 2, 3};
+    uint8_t pixels[2][4];
+    for (int k = 0; k < 2; k++) {
+        NSError *error = nil;
+        BKMesh *mesh = [[BKMesh alloc] initWithVertices:v vertexCount:8 indices:k ? farFirst : nearFirst indexCount:12
+                                                normals:NULL colors:c error:&error];
+        XCTAssertNotNil(mesh, @"%@", error);
+        BKMeshObject *o = [[BKMeshObject alloc] initWithMesh:mesh];
+        o.useVertexColors = YES;
+        o.lit = NO;           // flat colours, so the numbers are exact
+        o.opacity = 0.5f;
+        r.objects = @[o];
+        [[self render:r size:64] getRGBA8:pixels[k] atX:32 y:32];
+    }
+    for (int i = 0; i < 4; i++) XCTAssertEqual(pixels[0][i], pixels[1][i], @"channel %d differs between triangle orders", i);
+    XCTAssertEqual(pixels[0][1], 0);   // the far green square does not show through
+    // Same pixel as the near square drawn on its own.
+    NSError *error = nil;
+    uint32_t nearOnly[6] = {0, 1, 2, 0, 2, 3};
+    BKMeshObject *o = [[BKMeshObject alloc] initWithMesh:[[BKMesh alloc] initWithVertices:v vertexCount:8 indices:nearOnly indexCount:6
+                                                                                  normals:NULL colors:c error:&error]];
+    o.useVertexColors = YES;
+    o.lit = NO;
+    o.opacity = 0.5f;
+    r.objects = @[o];
+    uint8_t alone[4];
+    [[self render:r size:64] getRGBA8:alone atX:32 y:32];
+    for (int i = 0; i < 4; i++) XCTAssertEqual(pixels[0][i], alone[i], @"channel %d differs from the near square alone", i);
+    XCTAssertGreaterThan(alone[0], 100);   // it is really drawn (red, about half strength)
 }
 
 - (void)testVertexColours

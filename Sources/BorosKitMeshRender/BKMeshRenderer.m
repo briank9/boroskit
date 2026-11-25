@@ -416,6 +416,9 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     NSMutableDictionary<NSString *, id<MTLRenderPipelineState>> *_pipelines;  // per target format / pass
     id<MTLDepthStencilState> _opaqueDepthState;       // test + write depth
     id<MTLDepthStencilState> _transparentDepthState;  // test only
+    // 2026-11-25: colour pass of a see-through mesh after its depth-only pass: draw only where the
+    // depth equals the nearest surface of that mesh ("less or equal"), no depth write.
+    id<MTLDepthStencilState> _transparentNearestDepthState;
     id<MTLTexture> _depthTexture;                     // reused while the size stays the same
     id<MTLSamplerState> _samplers[4];                 // 2026-11-14: [interpolate * 2 + repeat]
 }
@@ -458,6 +461,8 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     _opaqueDepthState = [_device newDepthStencilStateWithDescriptor:depth];
     depth.depthWriteEnabled = NO;
     _transparentDepthState = [_device newDepthStencilStateWithDescriptor:depth];
+    depth.depthCompareFunction = MTLCompareFunctionLessEqual;
+    _transparentNearestDepthState = [_device newDepthStencilStateWithDescriptor:depth];
 
     _objects = @[];
     _lineObjects = @[];
@@ -572,6 +577,26 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     NSString *fragment = withDistance ? @"bk_mesh_fragment_distance" : @"bk_mesh_fragment";
     d.fragmentFunction = [_library newFunctionWithName:textured ? [fragment stringByAppendingString:@"_textured"] : fragment];
     [self configurePipeline:d colorFormat:format withDistance:withDistance transparent:transparent];
+    pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
+    if (pipeline) _pipelines[key] = pipeline;
+    return pipeline;
+}
+
+// What (2026-11-25): the depth-only pipeline for see-through meshes: same vertex function as the
+// colour pipeline (identical depths, see [[invariant]] in the shader), nothing written to colour or
+// ray distance - only the depth buffer.
+// Why: see SEE-THROUGH MESHES in the draw loop.
+- (id<MTLRenderPipelineState>)depthOnlyPipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance error:(NSError **)error
+{
+    NSString *key = [NSString stringWithFormat:@"%lu-%d-depthonly", (unsigned long)format, withDistance];
+    id<MTLRenderPipelineState> pipeline = _pipelines[key];
+    if (pipeline) return pipeline;
+    MTLRenderPipelineDescriptor *d = [[MTLRenderPipelineDescriptor alloc] init];
+    d.vertexFunction = [_library newFunctionWithName:@"bk_mesh_vertex"];
+    d.fragmentFunction = [_library newFunctionWithName:withDistance ? @"bk_mesh_fragment_distance" : @"bk_mesh_fragment"];
+    [self configurePipeline:d colorFormat:format withDistance:withDistance transparent:YES];
+    d.colorAttachments[0].writeMask = MTLColorWriteMaskNone;
+    if (withDistance) d.colorAttachments[1].writeMask = MTLColorWriteMaskNone;
     pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
     if (pipeline) _pipelines[key] = pipeline;
     return pipeline;
@@ -757,7 +782,8 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     id<MTLRenderPipelineState> transparentPipeline = [self pipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES error:error];
     id<MTLRenderPipelineState> opaqueLinePipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO error:error];
     id<MTLRenderPipelineState> transparentLinePipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES error:error];
-    if (!opaquePipeline || !transparentPipeline || !opaqueLinePipeline || !transparentLinePipeline) return NO;
+    id<MTLRenderPipelineState> depthOnlyPipeline = [self depthOnlyPipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil error:error];
+    if (!opaquePipeline || !transparentPipeline || !opaqueLinePipeline || !transparentLinePipeline || !depthOnlyPipeline) return NO;
     // 2026-11-14: textured-mesh and point pipelines, made only when the scene has such objects.
     BOOL anyTextured = NO, anyPoints = NO;
     for (BKMeshObject *object in _objects) if (object.visible && object.textured) { anyTextured = YES; break; }
@@ -891,8 +917,6 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                         [enc setFragmentSamplerState:_samplers[(texture.interpolate ? 2 : 0) + (texture.repeat ? 1 : 0)] atIndex:0];
                     }
                 }
-                if (textured) [enc setRenderPipelineState:see ? transparentTexturedPipeline : opaqueTexturedPipeline];
-                else [enc setRenderPipelineState:see ? transparentPipeline : opaquePipeline];
                 BKMeshUniforms u = base;
                 u.model = o.transform;
                 simd_float3x3 linear = simd_matrix(o.transform.columns[0].xyz, o.transform.columns[1].xyz, o.transform.columns[2].xyz);
@@ -912,8 +936,30 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                 [enc setVertexBuffer:[o vertexBuffer] offset:0 atIndex:0];
                 [enc setVertexBytes:&u length:sizeof u atIndex:1];
                 [enc setFragmentBytes:&u length:sizeof u atIndex:1];
+                // SEE-THROUGH MESHES (2026-11-25): first a depth-only pass that keeps this mesh's
+                // NEAREST surface in each pixel, then the colour pass drawn only there.
+                // Why: without it the mesh's own triangles blend in the order they are stored. A
+                // surface from scan slices is stored slice by slice, so where far triangles come
+                // after near ones they were blended ON TOP: inner/back surfaces showed through in
+                // sharp-edged zones bounded by a slice plane that moved as the object turned (user
+                // report: AI dental skull at 45% opacity, "linear loss of detail" when rotating).
+                // Now each see-through mesh shows one clean layer, the same from every angle, over
+                // whatever is behind it (solid objects and farther see-through objects, drawn first).
+                // Textured meshes keep the old single pass: transparent texels must not hide what
+                // is behind them in the depth buffer.
+                BOOL twoPass = see && !textured;
+                if (twoPass) {
+                    [enc setRenderPipelineState:depthOnlyPipeline];
+                    [enc setDepthStencilState:_opaqueDepthState];   // test + write
+                    [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:mesh.triangleCount * 3
+                                     indexType:MTLIndexTypeUInt32 indexBuffer:[o indexBuffer] indexBufferOffset:0];
+                    [enc setDepthStencilState:_transparentNearestDepthState];
+                }
+                if (textured) [enc setRenderPipelineState:see ? transparentTexturedPipeline : opaqueTexturedPipeline];
+                else [enc setRenderPipelineState:see ? transparentPipeline : opaquePipeline];
                 [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:mesh.triangleCount * 3
                                  indexType:MTLIndexTypeUInt32 indexBuffer:[o indexBuffer] indexBufferOffset:0];
+                if (twoPass) [enc setDepthStencilState:_transparentDepthState];   // back to the pass's own state
             }
         }
     }

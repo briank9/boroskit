@@ -7,7 +7,7 @@ mesh_smooth_taubin10.bkmesh  174992  8e1f24abb81d5839
 meshrender_bone_ortho.distance.pfm  36878  7765f72e4934b62f
 meshrender_bone_ortho.rgba.pam  36931  feab2e0412e196a6
 meshrender_bone_persp_seethrough.distance.pfm  30734  a19cc279fcbbc75d
-meshrender_bone_persp_seethrough.rgba.pam  30787  66f6ea5c9d35ad17
+meshrender_bone_persp_seethrough.rgba.pam  30787  8873822cd61c227b
 minip_axial_slab10.rgba.pam  36931  751581459f917ddf
 minip_axial_slab10.values.pfm  36878  645877564fa8fc63
 mip_axial_slab10.rgba.pam  36931  dd4352b185897db3

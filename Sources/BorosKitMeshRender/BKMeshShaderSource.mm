@@ -45,7 +45,10 @@ struct BKMeshVertexIn {
 };
 
 struct BKMeshVaryings {
-    float4 position [[position]];
+    // 2026-11-25: invariant - a see-through mesh is drawn twice (depth-only, then colour with
+    // "less or equal"), so both passes must compute bit-identical depths (needs
+    // MTLCompileOptions.preserveInvariance, set in BKMetalDevice).
+    float4 position [[position, invariant]];
     float3 world;       // patient mm
     float3 normal;      // patient space, not normalised yet
     float4 color;

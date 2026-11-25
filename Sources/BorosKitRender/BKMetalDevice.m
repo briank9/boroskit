@@ -54,6 +54,9 @@ static BKShaderMath gBKShaderMath = BKShaderMathRelaxed;
 + (MTLCompileOptions *)shaderCompileOptions
 {
     MTLCompileOptions *options = [[MTLCompileOptions alloc] init];
+    // 2026-11-25: honour [[invariant]] positions (BKMeshRenderer's two-pass see-through meshes
+    // need identical depths in both passes). No effect on shaders that do not use it.
+    options.preserveInvariance = YES;
     if (@available(macOS 15.0, iOS 18.0, *)) {
         switch (gBKShaderMath) {
             case BKShaderMathFast:

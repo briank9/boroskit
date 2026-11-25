@@ -32,6 +32,11 @@
 //    vertices, vertex index / 6 = point), from the same packed float x3 array as lines.
 //  - Two colour targets (RGBA8 colour + R32_SFLOAT ray distance) with premultiplied
 //    "over" blending on the first only, plus a D32_SFLOAT depth buffer.
+//  - 2026-11-25: every untextured SEE-THROUGH mesh is drawn twice: (1) depth-only (colour write
+//    masks 0, depth test LESS + write), (2) colour with depth test LESS_OR_EQUAL, no depth write.
+//    Both passes use the same vertex shader; its position output is invariant (GLSL:
+//    `invariant gl_Position;`), so the depths match exactly. See-through objects are still
+//    drawn farthest first (object centres); lines/points and textured meshes: one pass.
 // ---------------------------------------------------------------------------------------
 
 #ifndef BK_MESH_SHADER_TYPES_H
