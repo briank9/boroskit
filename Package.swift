@@ -21,6 +21,8 @@ let package = Package(
         .library(name: "BorosKitSurface", targets: ["BorosKitSurface"]),
         // BorosKitDICOM (2026-11-24, iOS app): BorosKit's own licence-free DICOM reader
         .library(name: "BorosKitDICOM", targets: ["BorosKitDICOM"]),
+        // BorosKitVec (2026-11-24): exported so app code (Swift) can use the BKVec types of the plain-C cores
+        .library(name: "BorosKitVec", targets: ["BorosKitVec"]),
     ],
     targets: [
         // BorosKitVec (2026-11-14): BorosKit's own neutral vector types for the plain-C cores
