@@ -757,7 +757,9 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     // start and a whole number of pages (the caller allocates it that way, see the header).
     // Otherwise: one GPU buffer and one copy at the end (same result).
     NSUInteger page = (NSUInteger)getpagesize();
-    BOOL direct = ((uintptr_t)destination % page) == 0 && capacityBytes % page == 0;
+    // iOS Simulator (2026-11-24, Boros Mobile): its Metal driver traps on newBufferWithBytesNoCopy over app memory
+    // (XPC shared-memory misuse), so the simulator always takes the copy path. Devices and Macs are unchanged.
+    BOOL direct = !TARGET_OS_SIMULATOR && ((uintptr_t)destination % page) == 0 && capacityBytes % page == 0;
     id<MTLBuffer> valueBuffer = direct
         ? [_device newBufferWithBytesNoCopy:destination length:capacityBytes options:MTLResourceStorageModeShared deallocator:nil]
         : [_device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
@@ -781,8 +783,9 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     NSUInteger page = (NSUInteger)getpagesize();
     if (!_volumeTexture || width == 0 || height == 0 || destination == NULL ||
         capacityBytes < width * height * sizeof(float) ||
-        ((uintptr_t)destination % page) != 0 || capacityBytes % page != 0) {
-        if (error) *error = BKRendererError(14, @"Render-ahead needs a volume and page-aligned memory of whole pages.");
+        ((uintptr_t)destination % page) != 0 || capacityBytes % page != 0 || TARGET_OS_SIMULATOR) {
+        // (The iOS Simulator cannot wrap app memory in a Metal buffer: callers use -renderValuesInto: there.)
+        if (error) *error = BKRendererError(14, @"Render-ahead needs a volume and page-aligned memory of whole pages (not available in the iOS Simulator).");
         return nil;
     }
     id<MTLBuffer> valueBuffer = [_device newBufferWithBytesNoCopy:destination length:capacityBytes

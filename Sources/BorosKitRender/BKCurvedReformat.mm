@@ -193,7 +193,9 @@ static BKReformatParams BKReformatWithVolume(BKReformatParams params, BKVolumeTe
         return NO;
     }
     NSUInteger page = (NSUInteger)getpagesize();
-    BOOL direct = ((uintptr_t)destination % page) == 0 && capacityBytes % page == 0;
+    // iOS Simulator (2026-11-24, Boros Mobile): its Metal driver traps on newBufferWithBytesNoCopy over app memory
+    // (XPC shared-memory misuse), so the simulator always takes the copy path. Devices and Macs are unchanged.
+    BOOL direct = !TARGET_OS_SIMULATOR && ((uintptr_t)destination % page) == 0 && capacityBytes % page == 0;
     id<MTLBuffer> valueBuffer = direct
         ? [_device newBufferWithBytesNoCopy:destination length:capacityBytes options:MTLResourceStorageModeShared deallocator:nil]
         : [_device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
@@ -216,8 +218,9 @@ static BKReformatParams BKReformatWithVolume(BKReformatParams params, BKVolumeTe
                                 into:(float *)destination capacity:(NSUInteger)capacityBytes error:(NSError **)error
 {
     NSUInteger bytes = (NSUInteger)params.width * params.height * sizeof(float), page = (NSUInteger)getpagesize();
-    if (destination == NULL || capacityBytes < bytes || bytes == 0 || ((uintptr_t)destination % page) != 0 || capacityBytes % page != 0) {
-        if (error) *error = BKReformatError(7, @"Drawing ahead needs page-aligned memory of whole pages.");
+    if (destination == NULL || capacityBytes < bytes || bytes == 0 || ((uintptr_t)destination % page) != 0 || capacityBytes % page != 0 || TARGET_OS_SIMULATOR) {
+        // (The iOS Simulator cannot wrap app memory in a Metal buffer: callers use -renderParams: there.)
+        if (error) *error = BKReformatError(7, @"Drawing ahead needs page-aligned memory of whole pages (not available in the iOS Simulator).");
         return nil;
     }
     id<MTLBuffer> valueBuffer = [_device newBufferWithBytesNoCopy:destination length:capacityBytes options:MTLResourceStorageModeShared deallocator:nil];
