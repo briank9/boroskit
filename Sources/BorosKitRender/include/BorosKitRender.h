@@ -17,6 +17,7 @@
 #import "BKVolumeRayCore.h"      // 2026-11-18: what is under the mouse in a volume (plain C)
 #import "BKSlabGeometryCore.h" // MPR / curved-MPR slab picture geometry (plain C, 2026-11-14)
 #import "BKSlabCameraCore.h"   // MPR / curved-MPR slab camera + mouse tools (plain C, 2026-11-15)
+#import "BKSlabViewCore.h"     // MPR / curved-MPR slab view rules: tools, WL drag, export formats (plain C, 2026-11-24)
 #import "BKCurveCore.h"         // curved-MPR curve maths (plain C, 2026-11-15)
 #import "BKCurvePath.h"         // curved-MPR path object (2026-11-15)
 #import "BKCurvedReformatCore.h" // curved-MPR / cross-section picture definition + CPU reference (plain C, 2026-11-15)
