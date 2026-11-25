@@ -134,11 +134,35 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
     if (old == nil || volumeData.pixelsWide != old.pixelsWide || volumeData.pixelsHigh != old.pixelsHigh
         || volumeData.pixelsDeep != old.pixelsDeep)
         return [self setVolumeData:volumeData error:error];   // a different scan: open it fully
+    // The crop planes belong to the view, not to the values: keep them across the new texture (setting a texture
+    // resets them in the renderer - right for a new study, wrong here; 2026-11-24 fix: a scissors cut on a cropped
+    // volume showed the whole volume again until the crop box moved).
+    simd_float4 planes[BK_MAX_CLIP_PLANES];
+    NSUInteger count = _renderer.clipPlaneCount;
+    for (NSUInteger i = 0; i < count && i < BK_MAX_CLIP_PLANES; i++) planes[i] = [_renderer packedClipPlaneAtIndex:i];
     if (![_renderer setVolumeData:volumeData error:error]) return NO;
+    [_renderer setPackedClipPlanes:planes count:MIN(count, (NSUInteger)BK_MAX_CLIP_PLANES)];
     // Only the bounds: the preset is NOT re-applied (that would undo the user's window/level; the
     // app keeps its own colour/opacity in sync) and the camera is NOT reset.
     [self recomputeVolumeBounds];
     return YES;
+}
+
+// What / why: see the header (2026-11-24, vr-colour-fusion).
+- (void)replaceVolumeTexture:(BKVolumeTexture *)volumeTexture
+{
+    BKVolumeTexture *old = _renderer.volumeTexture;
+    if (old == nil || volumeTexture == nil || volumeTexture.pixelsWide != old.pixelsWide
+        || volumeTexture.pixelsHigh != old.pixelsHigh || volumeTexture.pixelsDeep != old.pixelsDeep) {
+        self.volumeTexture = volumeTexture;   // a different scan: open it fully
+        return;
+    }
+    simd_float4 planes[BK_MAX_CLIP_PLANES];
+    NSUInteger count = MIN(_renderer.clipPlaneCount, (NSUInteger)BK_MAX_CLIP_PLANES);
+    for (NSUInteger i = 0; i < count; i++) planes[i] = [_renderer packedClipPlaneAtIndex:i];
+    _renderer.volumeTexture = volumeTexture;
+    [_renderer setPackedClipPlanes:planes count:count];
+    [self recomputeVolumeBounds];
 }
 
 - (BKVolumeTexture *)volumeTexture

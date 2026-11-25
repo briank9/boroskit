@@ -203,6 +203,35 @@ typedef NS_ENUM(int32_t, BKProjection) {
 @property (nonatomic, strong, nullable) id<MTLTexture> geometryColorTexture;
 @property (nonatomic, strong, nullable) id<MTLTexture> geometryRayDistanceTexture;
 
+// --- Colour (RGB) scans (Boros 6, 2026-11-24, vr-colour-fusion) ------------------------------------------------
+// When volumeTexture is a colour scan (BKVolumeTexture.color), each ray reads its three channels (0..255) and turns
+// them into colour + opacity by the rules of BKVolumeFusionCore.h: every channel is looked up in the transfer function
+// (over byte values, e.g. the window [wl - ww/2, wl + ww/2] of the preset); its colour is a pure red / green / blue
+// ramp, or - when this is YES - the transfer function's colour at that byte (a colour table chosen in the window).
+// MIP / MinIP / mean: each channel projected and windowed (windowCenter / windowWidth); the value output is the grey
+// (R + G + B) / 3. Empty-space skipping is not used for colour scans. Default NO.
+@property (nonatomic) BOOL colorChannelsUseTableColors;
+
+// --- Fusion: a second scan blended over the first (Boros 6, 2026-11-24, vr-colour-fusion) ------------------------
+// blendVolumeTexture: the fused scan, uploaded on the same device (grey or colour), placed by its OWN patient -> voxel
+// transform (so it may be bigger, smaller, moved or tilted against the first scan). nil (default) = no fusion.
+// blendTransferFunction: its colour / opacity over its own values (see -setBlendColorTableRed:...). In 3D mode both
+// scans are sampled at the same points of every ray and mixed there (BKFusionMixSamples); the fused scan is not lit
+// (as classic). MIP / MinIP / mean: its own projection (BKFusionBlendProjection of `mode`) is looked up in its table
+// and laid over the first scan's picture. The crop planes, slab and clip plane cut both scans; the value output
+// (float pictures, 16-bit exports) is the first scan's only. Empty-space skipping is off while a scan is fused.
+@property (nonatomic, strong, nullable) BKVolumeTexture *blendVolumeTexture;
+@property (nonatomic, strong, nullable) BKTransferFunction *blendTransferFunction;   // copied in and out
+// mm over which the fused scan's table opacity applies in 3D mode (default 1; see BKFusionBlendOpacityUnitDistance).
+@property (nonatomic) float blendOpacityUnitDistance;
+
+// What: builds blendTransferFunction the way the classic window built the fused scan's look: the colour table's first
+// 255 entries (red / green / blue 0..255 each; NULL = grey ramp) and the first 255 of `opacities` (256 values 0..1,
+// e.g. BKFusionBlendOpacityTable) spread over [windowLow, windowHigh] of the fused scan's values (entry 254 on the
+// window's end; outside the window the end values).
+- (void)setBlendColorTableRed:(nullable const uint8_t *)red green:(nullable const uint8_t *)green blue:(nullable const uint8_t *)blue
+                    opacities:(const float *)opacities windowLow:(float)windowLow windowHigh:(float)windowHigh;
+
 // Renders one image of width x height pixels and waits for the GPU to finish.
 // Returns nil + error if no volume is set or the GPU work fails.
 - (nullable BKRenderResult *)renderWithWidth:(NSUInteger)width

@@ -425,6 +425,370 @@ static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transfer
     return r;
 }
 
+// ---- Colour (RGB) scans and fusion (Boros 6, 2026-11-24, vr-colour-fusion) -------------------------
+// The rules are those of BKVolumeFusionCore.h; the C functions there are the CPU reference these GPU helpers mirror
+// line by line (bk_table = BKFusionTableLookup, bk_step_opacity = BKFusionStepOpacity, bk_color_step =
+// BKColorVoxelStep, bk_mix_steps = BKFusionMixSamples, bk_box_interval = BKFusionRayBoxInterval).
+// The plain grey path (bk_trace above) is untouched: these run only when p.colorVolume or p.useBlend is 1.
+// PORTING NOTE: everything here is core Vulkan: sampled 3D images (R16_UNORM / RGBA8_UNORM), a second table image,
+// plain loops; no subgroup operations, no optional formats beyond those bk_sample already documents.
+
+// All four channels of a 3D texture at voxel position `voxel` (voxel centres at whole numbers): the hardware filter,
+// or with manual filtering 8 exact reads blended in 32-bit float (same clamp-to-edge rule as bk_sample).
+static float4 bk_sample4(texture3d<float> volume, sampler s, float3 voxel, float3 size, int manual)
+{
+    if (manual != 0) {
+        float3 last = size - 1.0f;
+        float3 v = clamp(voxel, float3(0.0f), last);
+        float3 base = floor(v);
+        float3 f = v - base;
+        uint3 a = uint3(base);
+        uint3 b = uint3(min(base + 1.0f, last));
+        float4 c000 = volume.read(uint3(a.x, a.y, a.z)), c100 = volume.read(uint3(b.x, a.y, a.z));
+        float4 c010 = volume.read(uint3(a.x, b.y, a.z)), c110 = volume.read(uint3(b.x, b.y, a.z));
+        float4 c001 = volume.read(uint3(a.x, a.y, b.z)), c101 = volume.read(uint3(b.x, a.y, b.z));
+        float4 c011 = volume.read(uint3(a.x, b.y, b.z)), c111 = volume.read(uint3(b.x, b.y, b.z));
+        float4 c0 = mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y);
+        float4 c1 = mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y);
+        return mix(c0, c1, f.z);
+    }
+    return volume.sample(s, (voxel + 0.5f) / size);
+}
+
+// A table lookup for a value, the table spread over [lo, hi] (BKFusionTableLookup).
+static float4 bk_table(texture2d<float> fn, sampler s, float value, float lo, float hi, constant BKRenderParams &p)
+{
+    return bk_transfer(fn, s, (value - lo) / max(hi - lo, 1e-6f), p);
+}
+
+// One step's opacity from a table opacity (BKFusionStepOpacity).
+static float bk_step_opacity(float tableOpacity, float exponent)
+{
+    if (!(tableOpacity > 0.0f)) return 0.0f;
+    return 1.0f - pow(1.0f - min(tableOpacity, 0.9999f), exponent);
+}
+
+// One step of a colour scan (BKColorVoxelStep): rgb = channels 0..255; returns premultiplied RGB + opacity.
+static float4 bk_color_step(float3 rgb, texture2d<float> fn, sampler s, float lo, float hi, float exponent,
+                            int useTable, constant BKRenderParams &p)
+{
+    float3 premult = float3(0.0f);
+    float alpha = 0.0f;
+    for (int c = 0; c < 3; c++) {
+        float4 e = bk_table(fn, s, rgb[c], lo, hi, p);
+        float a = bk_step_opacity(e.a, exponent);
+        if (!(a > 0.0f)) continue;
+        float3 colour = float3(0.0f);
+        if (useTable != 0) colour = e.rgb;
+        else colour[c] = clamp(rgb[c] / 255.0f, 0.0f, 1.0f);
+        premult += a * colour;
+        alpha += a;
+    }
+    alpha = min(alpha, 1.0f);
+    return float4(min(premult, float3(alpha)), alpha);
+}
+
+// Two steps at the same spot mixed (BKFusionMixSamples).
+static float4 bk_mix_steps(float4 a, float4 b)
+{
+    if (!(b.a > 0.0f)) return (a.a > 0.0f) ? a : float4(0.0f);   // one side empty: the other unchanged
+    if (!(a.a > 0.0f)) return b;
+    float sum = a.a + b.a;
+    float alpha = 1.0f - (1.0f - a.a) * (1.0f - b.a);
+    return float4((a.rgb + b.rgb) * (alpha / sum), alpha);
+}
+
+// Inside a voxel box (with a tiny margin for rounding at the box's faces).
+static bool bk_inside(float3 v, float3 lo, float3 hi)
+{
+    return all(v >= lo - 1e-3f) && all(v <= hi + 1e-3f);
+}
+
+// Shortens [tLo, tHi] to the part of the ray ov + t * dv inside the voxel box [lo, hi] (BKFusionRayBoxInterval; the
+// same arithmetic as the box test inside bk_trace).
+static void bk_box_interval(float3 ov, float3 dv, float3 boxMin, float3 boxMax, thread float &tLo, thread float &tHi)
+{
+    float3 inv = 1.0f / dv;
+    float3 t0 = (boxMin - ov) * inv;
+    float3 t1 = (boxMax - ov) * inv;
+    float3 tSmall = min(t0, t1), tBig = max(t0, t1);
+    for (int k = 0; k < 3; k++) {
+        if (dv[k] == 0.0f) {
+            bool inside = ov[k] >= boxMin[k] && ov[k] <= boxMax[k];
+            tSmall[k] = inside ? -INFINITY : INFINITY;
+            tBig[k]   = inside ?  INFINITY : -INFINITY;
+        }
+    }
+    tLo = max(tLo, max(tSmall.x, max(tSmall.y, tSmall.z)));
+    tHi = min(tHi, min(tBig.x, min(tBig.y, tBig.z)));
+}
+
+// The head-light terms for a value gradient g: x = ambient + diffuse * cos, y = specular * cos^power (flat region:
+// ambient + diffuse, 0) - the same lighting as bk_trace's composite loop.
+static float2 bk_light_terms(float3 g, float3 light, constant BKRenderParams &p)
+{
+    float len = length(g);
+    if (len > 1e-3f) {
+        float ndl = fabs(dot(g / len, light));
+        return float2(p.ambient + p.diffuse * ndl, p.specular * pow(ndl, p.specularPower));
+    }
+    return float2(p.ambient + p.diffuse, 0.0f);
+}
+
+// A colour scan's surface normal for lighting: the gradient of its grey value (R + G + B) / 3 (central differences,
+// converted to patient space like bk_gradient).
+static float3 bk_gradient_rgb(texture3d<float> volume, sampler s, float3 v, constant BKRenderParams &p)
+{
+    float3 size = p.volumeSize.xyz;
+    int m = p.manualFiltering;
+    const float3 third = float3(1.0f / 3.0f);
+    float3 g;
+    g.x = dot(bk_sample4(volume, s, v + float3(1,0,0), size, m).rgb - bk_sample4(volume, s, v - float3(1,0,0), size, m).rgb, third);
+    g.y = dot(bk_sample4(volume, s, v + float3(0,1,0), size, m).rgb - bk_sample4(volume, s, v - float3(0,1,0), size, m).rgb, third);
+    g.z = dot(bk_sample4(volume, s, v + float3(0,0,1), size, m).rgb - bk_sample4(volume, s, v - float3(0,0,1), size, m).rgb, third);
+    return transpose(bk_patient_to_voxel(p)) * (0.5f * p.valueScale * g);
+}
+
+// One 3D-mode step of the FIRST scan (grey or colour) at voxel position v: premultiplied RGB + opacity, lit.
+static float4 bk_main_step(texture3d<float> volume, texture2d<float> transferFn, sampler vs, sampler ts, float3 v,
+                           float exponent, float3 light, constant BKRenderParams &p)
+{
+    if (p.colorVolume != 0) {
+        float3 rgb = bk_sample4(volume, vs, v, p.volumeSize.xyz, p.manualFiltering).rgb * p.valueScale + p.valueOffset;
+        float4 st = bk_color_step(rgb, transferFn, ts, p.tfMin, p.tfMax, exponent, p.colorUsesTable, p);
+        if (!(st.a > 0.0f)) return float4(0.0f);
+        if (p.shading != 0) {
+            float2 l = bk_light_terms(bk_gradient_rgb(volume, vs, v, p), light, p);
+            st.rgb = st.rgb * l.x + st.a * l.y;   // premultiplied form of rgb * light + specular
+        }
+        return st;
+    }
+    float value = bk_sample(volume, vs, v, p);
+    float4 c = bk_table(transferFn, ts, value, p.tfMin, p.tfMax, p);
+    float a = bk_step_opacity(c.a, exponent);
+    if (!(a > 0.0f)) return float4(0.0f);
+    float3 rgb = c.rgb;
+    if (p.shading != 0) {
+        float2 l = bk_light_terms(bk_gradient(volume, vs, v, p), light, p);
+        rgb = rgb * l.x + l.y;
+    }
+    return float4(a * rgb, a);
+}
+
+// One 3D-mode step of the FUSED scan at its voxel position vb: premultiplied RGB + opacity (not lit, as classic).
+static float4 bk_blend_step(texture3d<float> blendVolume, texture2d<float> blendFn, sampler vs, sampler ts, float3 vb,
+                            float exponent, constant BKRenderParams &p)
+{
+    float4 texel = bk_sample4(blendVolume, vs, vb, p.blendVolumeSize.xyz, p.manualFiltering);
+    if (p.blendColorVolume != 0)
+        return bk_color_step(texel.rgb * p.blendValueScale + p.blendValueOffset, blendFn, ts, p.blendTfMin, p.blendTfMax, exponent, 0, p);
+    float4 c = bk_table(blendFn, ts, texel.r * p.blendValueScale + p.blendValueOffset, p.blendTfMin, p.blendTfMax, p);
+    float a = bk_step_opacity(c.a, exponent);
+    return float4(a * c.rgb, a);
+}
+
+// What: the ray of output pixel `gid` for a colour first scan and / or with a fused scan (see the section comment).
+// Same camera, slab, clip, crop-plane and embedded-object rules as bk_trace. The ray covers the first scan's box AND
+// the fused scan's box (each scan only contributes where the ray is inside it), so a fused scan larger than the first
+// one still shows around it. Empty-space skipping is not used here (the bricks only describe the first, grey scan).
+// 3D: both scans sampled at the same points, mixed per step. MIP / MinIP / mean: the first scan's projection gives
+// the picture (grey window; colour scan: each channel windowed) and the value; the fused scan's own projection
+// (BKFusionProjection*) is laid over it through its table. The value output never includes the fused scan
+// (16-bit exports are the first scan's values, as classic).
+static BKTraceResult bk_trace_ext(texture3d<float> volume, texture2d<float> transferFn,
+                                  texture3d<float> blendVolume, texture2d<float> blendFn,
+                                  constant BKRenderParams &p, uint2 gid, float geomT, float4 geomColor)
+{
+    constexpr sampler linearSampler(coord::normalized, filter::linear, address::clamp_to_edge);
+    constexpr sampler tfSampler(coord::normalized, filter::linear, address::clamp_to_edge);
+
+    float u = ((float)gid.x + 0.5f) / (float)p.width - 0.5f;
+    float w = 0.5f - ((float)gid.y + 0.5f) / (float)p.height;
+    float3 origin, dir;
+    float tBase0, tBase1;
+    if (p.projection == BKProjPerspective) {
+        origin = p.cameraPosition.xyz;
+        dir = normalize(p.cameraForward.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight));
+        tBase0 = 0.0f; tBase1 = INFINITY;
+    } else {
+        origin = p.cameraPosition.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight);
+        dir = p.cameraForward.xyz;
+        tBase0 = -INFINITY; tBase1 = INFINITY;
+    }
+
+    // The first scan's part of the ray (voxel space).
+    float3x3 patientToVoxel = bk_patient_to_voxel(p);
+    float3 ov = patientToVoxel * origin + p.patientToVoxelTranslation.xyz;
+    float3 dv = patientToVoxel * dir;
+    float mLo = tBase0, mHi = tBase1;
+    bk_box_interval(ov, dv, p.boxMin.xyz, p.boxMax.xyz, mLo, mHi);
+    bool hasMain = (mHi >= mLo) && !isinf(mLo) && !isinf(mHi);
+
+    // The fused scan's part (its own voxel space; the transform is affine so t is the same parameter).
+    float3 ob = float3(0.0f), db = float3(0.0f);
+    float3 blendMax = p.blendVolumeSize.xyz - 1.0f;
+    bool hasBlend = false;
+    if (p.useBlend != 0) {
+        float3x3 toBlend = float3x3(p.blendPatientToVoxelColumns[0].xyz, p.blendPatientToVoxelColumns[1].xyz, p.blendPatientToVoxelColumns[2].xyz);
+        ob = toBlend * origin + p.blendPatientToVoxelTranslation.xyz;
+        db = toBlend * dir;
+        float bLo = tBase0, bHi = tBase1;
+        bk_box_interval(ob, db, float3(0.0f), blendMax, bLo, bHi);
+        hasBlend = (bHi >= bLo) && !isinf(bLo) && !isinf(bHi);
+        if (hasBlend && hasMain) { mLo = min(mLo, bLo); mHi = max(mHi, bHi); }
+        else if (hasBlend) { mLo = bLo; mHi = bHi; }
+    }
+    float tLo = mLo, tHi = mHi;
+    if (!hasMain && !hasBlend) { tLo = 0.0f; tHi = -INFINITY; }
+
+    // Slab, clipping plane and extra planes: the same rules as bk_trace (they cut both scans).
+    bool singlePlane = false;
+    float slabLo = -INFINITY, slabHi = INFINITY;
+    if (p.useSlab != 0) {
+        float s0 = dot(origin - p.slabPoint.xyz, p.slabNormal.xyz);
+        float dn = dot(dir, p.slabNormal.xyz);
+        float halfThick = 0.5f * p.slabThickness;
+        if (p.slabThickness <= 0.0f) {
+            if (fabs(dn) < 1e-6f) { tHi = -INFINITY; slabHi = -INFINITY; }
+            else { float t = -s0 / dn; tLo = max(tLo, t); tHi = min(tHi, t); singlePlane = true; slabLo = slabHi = t; }
+        } else if (fabs(dn) < 1e-6f) {
+            if (fabs(s0) > halfThick) { tHi = -INFINITY; slabHi = -INFINITY; }
+        } else {
+            float ta = (-halfThick - s0) / dn, tb = (halfThick - s0) / dn;
+            tLo = max(tLo, min(ta, tb));
+            tHi = min(tHi, max(ta, tb));
+            slabLo = min(ta, tb); slabHi = max(ta, tb);
+        }
+    }
+    if (p.useClip != 0) {
+        float c0 = dot(origin - p.clipPoint.xyz, p.clipNormal.xyz);
+        float cn = dot(dir, p.clipNormal.xyz);
+        if (fabs(cn) < 1e-6f) { if (c0 > 0.0f) tHi = -INFINITY; }
+        else if (cn > 0.0f) tHi = min(tHi, -c0 / cn);
+        else tLo = max(tLo, -c0 / cn);
+    }
+    for (int i = 0; i < p.clipPlaneCount && i < BKMaxClipPlanes; i++) {
+        float3 n = p.clipPlanes[i].xyz;
+        float c0 = dot(origin, n) + p.clipPlanes[i].w;
+        float cn = dot(dir, n);
+        if (fabs(cn) < 1e-6f) { if (c0 > 0.0f) tHi = -INFINITY; }
+        else if (cn > 0.0f) tHi = min(tHi, -c0 / cn);
+        else tLo = max(tLo, -c0 / cn);
+    }
+
+    bool composite = (p.mode == BKModeComposite);
+    BKTraceResult r;
+    if (p.useGeometry != 0 && p.useSlab != 0 && !(geomT >= slabLo && geomT <= slabHi)) {
+        geomT = INFINITY;
+        geomColor = float4(0.0f);
+    }
+    if (composite && geomT < tHi) tHi = geomT;
+    if (!(tHi >= tLo) || isinf(tLo) || isinf(tHi)) {
+        r.value = composite ? geomColor.a : p.outOfBoundsValue;
+        r.color = composite ? geomColor : float4(geomColor.rgb + (1.0f - geomColor.a) * float3(0.0f), 1.0f);
+        return r;
+    }
+    int n = singlePlane ? 1 : max(1, (int)ceil((tHi - tLo) / p.stepSize));
+    float step = singlePlane ? 0.0f : (tHi - tLo) / (float)n;
+
+    if (composite) {
+        float3 color = float3(0.0f);
+        float alpha = 0.0f;
+        float3 light = -dir;
+        float len = singlePlane ? p.stepSize : step;
+        float expMain = len / p.opacityUnitDistance;
+        float expBlend = len / max(p.blendOpacityUnitDistance, 1e-6f);
+        for (int i = 0; i < n && alpha < 0.99f; i++) {
+            float t = tLo + ((float)i + 0.5f) * step;
+            float4 s = float4(0.0f);
+            float3 v = ov + t * dv;
+            if (hasMain && bk_inside(v, p.boxMin.xyz, p.boxMax.xyz))
+                s = bk_main_step(volume, transferFn, linearSampler, tfSampler, v, expMain, light, p);
+            if (hasBlend) {
+                float3 vb = ob + t * db;
+                if (bk_inside(vb, float3(0.0f), blendMax))
+                    s = bk_mix_steps(s, bk_blend_step(blendVolume, blendFn, linearSampler, tfSampler, vb, expBlend, p));
+            }
+            if (!(s.a > 0.0f)) continue;
+            color += (1.0f - alpha) * s.rgb;   // front-to-back compositing (premultiplied)
+            alpha += (1.0f - alpha) * s.a;
+        }
+        color += (1.0f - alpha) * geomColor.rgb;
+        alpha += (1.0f - alpha) * geomColor.a;
+        r.value = alpha;
+        r.color = float4(color, alpha);
+        return r;
+    }
+
+    // MIP / MinIP / mean.
+    bool isMax = (p.mode == BKModeMIP), isMin = (p.mode == BKModeMinIP);
+    float start = isMax ? -INFINITY : (isMin ? INFINITY : 0.0f);
+    float result = start;
+    float3 resultRGB = float3(start);
+    int mainCount = 0;
+    bool blendMaxMode = (p.blendProjection == 1);
+    float bres = blendMaxMode ? -INFINITY : INFINITY;
+    float3 bresRGB = float3(bres);
+    int blendCount = 0;
+    for (int i = 0; i < n; i++) {
+        float t = tLo + ((float)i + 0.5f) * step;
+        float3 v = ov + t * dv;
+        if (hasMain && bk_inside(v, p.boxMin.xyz, p.boxMax.xyz)) {
+            if (p.colorVolume != 0) {
+                float3 rgb = bk_sample4(volume, linearSampler, v, p.volumeSize.xyz, p.manualFiltering).rgb * p.valueScale + p.valueOffset;
+                if (isMax) resultRGB = max(resultRGB, rgb);
+                else if (isMin) resultRGB = min(resultRGB, rgb);
+                else resultRGB += rgb;
+            } else {
+                float value = bk_sample(volume, linearSampler, v, p);
+                if (isMax) result = max(result, value);
+                else if (isMin) result = min(result, value);
+                else result += value;
+            }
+            mainCount++;
+        }
+        if (hasBlend) {
+            float3 vb = ob + t * db;
+            if (bk_inside(vb, float3(0.0f), blendMax)) {
+                float4 texel = bk_sample4(blendVolume, linearSampler, vb, p.blendVolumeSize.xyz, p.manualFiltering);
+                if (p.blendColorVolume != 0) {
+                    float3 rgb = texel.rgb * p.blendValueScale + p.blendValueOffset;
+                    bresRGB = blendMaxMode ? max(bresRGB, rgb) : min(bresRGB, rgb);
+                } else {
+                    float value = texel.r * p.blendValueScale + p.blendValueOffset;
+                    bres = blendMaxMode ? max(bres, value) : min(bres, value);
+                }
+                blendCount++;
+            }
+        }
+    }
+    float3 under = float3(0.0f);
+    float lowEnd = p.windowCenter - 0.5f * p.windowWidth, width = max(p.windowWidth, 1e-6f);
+    if (mainCount == 0) {
+        r.value = p.outOfBoundsValue;
+    } else if (p.colorVolume != 0) {
+        if (!isMax && !isMin) resultRGB /= (float)mainCount;
+        r.value = (resultRGB.r + resultRGB.g + resultRGB.b) / 3.0f;
+        under = clamp((resultRGB - lowEnd) / width, 0.0f, 1.0f);
+    } else {
+        if (!isMax && !isMin) result /= (float)mainCount;
+        r.value = result;
+        under = float3(clamp((result - lowEnd) / width, 0.0f, 1.0f));
+    }
+    if (blendCount > 0) {
+        float4 over;
+        if (p.blendColorVolume != 0) over = bk_color_step(bresRGB, blendFn, tfSampler, p.blendTfMin, p.blendTfMax, 1.0f, 0, p);
+        else {
+            float4 c = bk_table(blendFn, tfSampler, bres, p.blendTfMin, p.blendTfMax, p);
+            float a = bk_step_opacity(c.a, 1.0f);
+            over = float4(a * c.rgb, a);
+        }
+        under = over.rgb + (1.0f - over.a) * under;   // BKFusionOverlay
+    }
+    r.color = float4(geomColor.rgb + (1.0f - geomColor.a) * under, 1.0f);
+    return r;
+}
+
 // What: the embedded objects under output pixel `gid` (see bk_trace): their ray distance (mm)
 // and premultiplied colour, read from the geometry pictures. Those may be bigger than the output
 // (e.g. full size while the volume is ray-cast at reduced size during a drag): the texel under
@@ -456,13 +820,17 @@ kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
                        device const uint *brickRange    [[buffer(4)]],   /* lowest | highest << 16 */
                        texture2d<float> geometryColor    [[texture(3)]],  /* embedded objects (p.useGeometry) */
                        texture2d<float> geometryDistance [[texture(4)]],
+                       texture3d<float> blendVolume      [[texture(5)]],  /* fused scan (p.useBlend; placeholder otherwise) */
+                       texture2d<float> blendFn          [[texture(6)]],  /* fused scan's colour / opacity table */
                        uint2 gid                     [[thread_position_in_grid]])
 {
     if (gid.x >= p.width || gid.y >= p.height) return;
     uint index = gid.y * p.width + gid.x;
     float geomT; float4 geomColor;
     bk_geometry_at(p, gid, geometryColor, geometryDistance, geomT, geomColor);
-    BKTraceResult r = bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange, geomT, geomColor);
+    BKTraceResult r = (p.colorVolume != 0 || p.useBlend != 0)
+        ? bk_trace_ext(volume, transferFn, blendVolume, blendFn, p, gid, geomT, geomColor)   /* colour / fusion (2026-11-24) */
+        : bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange, geomT, geomColor);
     valueOut[index] = r.value;
     if (p.valuesOnly == 0) colorOut[index] = bk_pack(r.color);   /* slabs: values only (less memory traffic) */
 }
@@ -479,12 +847,16 @@ kernel void bk_raycast_texture(texture3d<float> volume                      [[te
                                device const uint *brickRange                [[buffer(3)]],
                                texture2d<float> geometryColor               [[texture(3)]],  /* embedded objects (p.useGeometry) */
                                texture2d<float> geometryDistance            [[texture(4)]],
+                               texture3d<float> blendVolume                 [[texture(5)]],  /* fused scan (p.useBlend) */
+                               texture2d<float> blendFn                     [[texture(6)]],
                                uint2 gid                                    [[thread_position_in_grid]])
 {
     if (gid.x >= p.width || gid.y >= p.height) return;
     float geomT; float4 geomColor;
     bk_geometry_at(p, gid, geometryColor, geometryDistance, geomT, geomColor);
-    BKTraceResult r = bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange, geomT, geomColor);
+    BKTraceResult r = (p.colorVolume != 0 || p.useBlend != 0)
+        ? bk_trace_ext(volume, transferFn, blendVolume, blendFn, p, gid, geomT, geomColor)   /* colour / fusion (2026-11-24) */
+        : bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange, geomT, geomColor);
     float3 rgb = r.color.rgb + (1.0f - r.color.a) * background.rgb;  // colour is premultiplied
     target.write(float4(clamp(rgb, 0.0f, 1.0f), 1.0f), gid);
 }

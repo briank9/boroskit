@@ -142,6 +142,11 @@ NSInteger BKNextInteractiveQualityLevel(const BKQualityLevel *levels, NSInteger 
 // Why (2026-11-14): Metal uploaded the scan once, so cuts never showed while Metal drew.
 - (BOOL)replaceVolumeValues:(CPRVolumeData *)volumeData error:(NSError * _Nullable * _Nullable)error;
 
+// What (2026-11-24, vr-colour-fusion): the same for an already uploaded texture (e.g. a colour scan, which has no
+// CPRVolumeData form): same size -> camera, preset, window, slab and crop kept; another size -> opened like a new scan.
+// (Both replace forms keep the renderer's extra clip planes - the crop box - which a texture change used to reset.)
+- (void)replaceVolumeTexture:(BKVolumeTexture *)volumeTexture;
+
 // Encodes one frame into `target` (needs MTLTextureUsageShaderWrite) at the current
 // quality level, without waiting. Measures the GPU time when the command buffer
 // completes. Returns NO + error if nothing can be drawn (e.g. no volume).

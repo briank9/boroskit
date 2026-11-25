@@ -5,6 +5,7 @@
 #include "BKVolumeRayCore.h"
 #include <math.h>
 #include <float.h>
+#include <stddef.h>
 
 double BKRayOpacityAt(const BKRayOpacityTable *table, double value)
 {
@@ -24,12 +25,22 @@ static void ToVoxel(const double m[16], const double p[3], double out[3])
         out[r] = m[0 * 4 + r] * p[0] + m[1 * 4 + r] * p[1] + m[2 * 4 + r] * p[2] + m[3 * 4 + r];
 }
 
-int BKVolumeRayFirstHit(const BKRayVolume *volume, const double start[3], const double end[3], double stepMM,
-                        const BKRayOpacityTable *table, int32_t mode, double threshold, double minValue,
-                        const float *hiddenPlanes, int32_t planeCount, BKRayHit *hit)
+// What: the shared walk. Exactly one of `grey` / `colour` is set; the per-step value and opacity come from it.
+static int RayWalk(const BKRayVolume *grey, const BKRayColorVolume *colour, const double start[3], const double end[3],
+                   double stepMM, const BKRayOpacityTable *table, int32_t mode, double threshold, double minValue,
+                   const float *hiddenPlanes, int32_t planeCount, BKRayHit *hit)
 {
-    if (volume == 0 || volume->voxels == 0 || hit == 0 || !(stepMM > 0)) return 0;
-    if (volume->width <= 0 || volume->height <= 0 || volume->depth <= 0) return 0;
+    if (hit == 0 || !(stepMM > 0)) return 0;
+    int32_t w, h, depth;
+    const double *toVoxel;
+    if (grey) {
+        if (grey->voxels == 0) return 0;
+        w = grey->width; h = grey->height; depth = grey->depth; toVoxel = grey->patientToVoxel;
+    } else {
+        if (colour == 0 || colour->bytes == 0 || colour->bytesPerVoxel <= 0) return 0;
+        w = colour->width; h = colour->height; depth = colour->depth; toVoxel = colour->patientToVoxel;
+    }
+    if (w <= 0 || h <= 0 || depth <= 0) return 0;
     double d[3] = { end[0] - start[0], end[1] - start[1], end[2] - start[2] };
     double length = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
     if (!(length > 0)) return 0;
@@ -47,15 +58,25 @@ int BKVolumeRayFirstHit(const BKRayVolume *volume, const double start[3], const 
         }
         if (hidden) continue;
         double v[3];
-        ToVoxel(volume->patientToVoxel, p, v);
+        ToVoxel(toVoxel, p, v);
         long x = lround(v[0]), y = lround(v[1]), z = lround(v[2]);
-        if (x < 0 || y < 0 || z < 0 || x >= volume->width || y >= volume->height || z >= volume->depth) continue;
-        float value = volume->voxels[(size_t)z * (size_t)volume->width * (size_t)volume->height + (size_t)y * (size_t)volume->width + (size_t)x];
+        if (x < 0 || y < 0 || z < 0 || x >= w || y >= h || z >= depth) continue;
+        size_t index = (size_t)z * (size_t)w * (size_t)h + (size_t)y * (size_t)w + (size_t)x;
+        float value;
+        double opacity;
+        if (grey) {
+            value = grey->voxels[index];
+            opacity = (mode == BKRayModeMaximum) ? 0 : BKRayOpacityAt(table, value);
+        } else {
+            const uint8_t *vox = colour->bytes + index * (size_t)colour->bytesPerVoxel;
+            value = ((float)vox[colour->redByte] + (float)vox[colour->greenByte] + (float)vox[colour->blueByte]) / 3.0f;
+            opacity = (mode == BKRayModeMaximum) ? 0 : BKRayColorOpacity(table, vox, colour->redByte, colour->greenByte, colour->blueByte);
+        }
         int candidate = 0;
         if (mode == BKRayModeMaximum) {
             if (value > best && (minValue == 0 || value >= minValue)) { best = value; candidate = 1; }
         } else {
-            sum += BKRayOpacityAt(table, value);
+            sum += opacity;
             candidate = sum >= threshold && (minValue == 0 || value >= minValue);
         }
         if (candidate) {
@@ -67,4 +88,28 @@ int BKVolumeRayFirstHit(const BKRayVolume *volume, const double start[3], const 
         }
     }
     return found;
+}
+
+int BKVolumeRayFirstHit(const BKRayVolume *volume, const double start[3], const double end[3], double stepMM,
+                        const BKRayOpacityTable *table, int32_t mode, double threshold, double minValue,
+                        const float *hiddenPlanes, int32_t planeCount, BKRayHit *hit)
+{
+    if (volume == 0) return 0;
+    return RayWalk(volume, 0, start, end, stepMM, table, mode, threshold, minValue, hiddenPlanes, planeCount, hit);
+}
+
+// Boros 6 (2026-11-24, vr-colour-fusion): colour scans - see the header.
+double BKRayColorOpacity(const BKRayOpacityTable *table, const uint8_t *voxel, int32_t redByte, int32_t greenByte,
+                         int32_t blueByte)
+{
+    double a = BKRayOpacityAt(table, voxel[redByte]) + BKRayOpacityAt(table, voxel[greenByte]) + BKRayOpacityAt(table, voxel[blueByte]);
+    return a > 1.0 ? 1.0 : a;
+}
+
+int BKVolumeRayFirstHitColor(const BKRayColorVolume *volume, const double start[3], const double end[3], double stepMM,
+                             const BKRayOpacityTable *table, int32_t mode, double threshold, double minValue,
+                             const float *hiddenPlanes, int32_t planeCount, BKRayHit *hit)
+{
+    if (volume == 0) return 0;
+    return RayWalk(0, volume, start, end, stepMM, table, mode, threshold, minValue, hiddenPlanes, planeCount, hit);
 }

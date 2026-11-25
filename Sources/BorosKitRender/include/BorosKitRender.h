@@ -15,6 +15,7 @@
 #import "BKScanGeometryCore.h"   // 2026-11-17: scan placement, orientation letters, trackball maths (plain C)
 #import "BKStereoCore.h"         // 2026-11-17: red / blue stereo mixing (plain C)
 #import "BKVolumeRayCore.h"      // 2026-11-18: what is under the mouse in a volume (plain C)
+#import "BKVolumeFusionCore.h"   // 2026-11-24: colour scans + fusion in the 3D picture (plain C)
 #import "BKSlabGeometryCore.h" // MPR / curved-MPR slab picture geometry (plain C, 2026-11-14)
 #import "BKSlabCameraCore.h"   // MPR / curved-MPR slab camera + mouse tools (plain C, 2026-11-15)
 #import "BKCurveCore.h"         // curved-MPR curve maths (plain C, 2026-11-15)

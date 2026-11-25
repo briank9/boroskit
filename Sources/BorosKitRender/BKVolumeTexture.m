@@ -94,6 +94,92 @@ static NSError *BKMakeError(NSInteger code, NSString *message)
     return [self uploadFloats:voxels device:device error:error] ? self : nil;
 }
 
+// Boros 6 (2026-11-24, vr-colour-fusion): a colour scan as an RGBA8 3D texture (see the header).
+// How: the same checks as the grey upload; the channels are re-ordered into R, G, B, 255 slice-chunk by slice-chunk
+// into a staging buffer (about 64 MB at a time) and blitted into a GPU-private texture.
+- (instancetype)initWithColorVoxels:(const uint8_t *)voxels bytesPerVoxel:(NSUInteger)bytesPerVoxel
+                            redByte:(NSUInteger)redByte greenByte:(NSUInteger)greenByte blueByte:(NSUInteger)blueByte
+                              width:(NSUInteger)width height:(NSUInteger)height depth:(NSUInteger)depth
+                     patientToVoxel:(const double[16])m minPixelSpacing:(double)minPixelSpacing
+                             device:(id<MTLDevice>)device error:(NSError **)error
+{
+    if (!(self = [super init])) return nil;
+    _pixelsWide = width;
+    _pixelsHigh = height;
+    _pixelsDeep = depth;
+    N3AffineTransform t;   // same element order as the float initializer (see there)
+    t.m11 = m[0];  t.m12 = m[1];  t.m13 = m[2];  t.m14 = m[3];
+    t.m21 = m[4];  t.m22 = m[5];  t.m23 = m[6];  t.m24 = m[7];
+    t.m31 = m[8];  t.m32 = m[9];  t.m33 = m[10]; t.m34 = m[11];
+    t.m41 = m[12]; t.m42 = m[13]; t.m43 = m[14]; t.m44 = m[15];
+    _volumeTransform = t;
+    _minPixelSpacing = minPixelSpacing;
+    _outOfBoundsValue = 0;
+    _color = YES;
+    _valueScale = 255.0f;   // texel 0..1 -> byte 0..255
+    _valueOffset = 0;
+    _minimumValue = 0;
+    _maximumValue = 255;
+    _lossless = YES;
+
+    if (!voxels || _pixelsWide == 0 || _pixelsHigh == 0 || _pixelsDeep == 0 || bytesPerVoxel == 0
+        || redByte >= bytesPerVoxel || greenByte >= bytesPerVoxel || blueByte >= bytesPerVoxel) {
+        if (error) *error = BKMakeError(1, @"The colour volume is empty or its channel layout is invalid.");
+        return nil;
+    }
+    if (_pixelsWide > 2048 || _pixelsHigh > 2048 || _pixelsDeep > 2048) {
+        if (error) *error = BKMakeError(2, @"The volume is larger than 2048 voxels on one side, which the GPU cannot hold as one 3D texture.");
+        return nil;
+    }
+    MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
+    desc.textureType = MTLTextureType3D;
+    desc.pixelFormat = MTLPixelFormatRGBA8Unorm;
+    desc.width = _pixelsWide;
+    desc.height = _pixelsHigh;
+    desc.depth = _pixelsDeep;
+    desc.storageMode = MTLStorageModePrivate;
+    desc.usage = MTLTextureUsageShaderRead;
+    _texture = [device newTextureWithDescriptor:desc];
+    if (!_texture) {
+        if (error) *error = BKMakeError(4, @"Not enough GPU memory for this volume.");
+        return nil;
+    }
+    _texture.label = @"BorosKit colour volume";
+
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    const NSUInteger sliceVoxels = _pixelsWide * _pixelsHigh, bytesPerSlice = sliceVoxels * 4;
+    NSUInteger slicesPerChunk = MAX((NSUInteger)1, (NSUInteger)(64 * 1024 * 1024) / bytesPerSlice);
+    slicesPerChunk = MIN(slicesPerChunk, _pixelsDeep);
+    id<MTLBuffer> staging = [device newBufferWithLength:slicesPerChunk * bytesPerSlice options:MTLResourceStorageModeShared];
+    if (!staging) {
+        if (error) *error = BKMakeError(5, @"Not enough memory to prepare the volume for the GPU.");
+        return nil;
+    }
+    for (NSUInteger z0 = 0; z0 < _pixelsDeep; z0 += slicesPerChunk) {
+        NSUInteger n = MIN(slicesPerChunk, _pixelsDeep - z0);
+        uint8_t *dst = staging.contents;
+        const uint8_t *src = voxels + z0 * sliceVoxels * bytesPerVoxel;
+        for (NSUInteger i = 0, count = n * sliceVoxels; i < count; i++, src += bytesPerVoxel, dst += 4) {
+            dst[0] = src[redByte]; dst[1] = src[greenByte]; dst[2] = src[blueByte]; dst[3] = 255;
+        }
+        id<MTLCommandBuffer> cb = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit copyFromBuffer:staging sourceOffset:0
+           sourceBytesPerRow:_pixelsWide * 4 sourceBytesPerImage:bytesPerSlice
+                  sourceSize:MTLSizeMake(_pixelsWide, _pixelsHigh, n)
+                   toTexture:_texture destinationSlice:0 destinationLevel:0
+           destinationOrigin:MTLOriginMake(0, 0, z0)];
+        [blit endEncoding];
+        [cb commit];
+        [cb waitUntilCompleted];   // the staging buffer is reused for the next chunk
+        if (cb.status == MTLCommandBufferStatusError) {
+            if (error) *error = cb.error ?: BKMakeError(6, @"The GPU failed to copy the volume.");
+            return nil;
+        }
+    }
+    return self;
+}
+
 // Does the actual work: (1) one pass to find min/max and whether all values are whole
 // numbers, (2) pick scale/offset so whole-number data is stored exactly, (3) convert
 // to 16-bit in chunks of slices and copy each chunk into a GPU-private texture with a
