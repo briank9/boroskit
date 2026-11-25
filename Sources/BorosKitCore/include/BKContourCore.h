@@ -11,8 +11,8 @@
 // - the pieces are given a direction (inside always on the same side), so each crossing point has exactly one
 //   piece arriving and one leaving: following them gives ordered lines - closed loops, or open lines that end at
 //   the picture border;
-// - a square with two opposite inside corners (a "saddle") is joined through the middle when the average of its 4
-//   values is >= level, otherwise the two inside corners stay apart;
+// - a square with two opposite inside corners (a "saddle") keeps the two inside corners apart: pixels touching
+//   only at a corner are separate regions (as the old VTK marching squares had it);
 // - repeated points (where a pixel value equals the level exactly) are dropped, so no piece has zero length;
 // - order of the points: a loop starts at the crossing found first in scan order and runs the way the old
 //   VTK-based code listed them (inside on the left when y points down the picture, i.e. anticlockwise on screen);

@@ -6,8 +6,12 @@
 // scratch harness linked Boros' VTK 8.2 build, ran vtkMarchingSquares + vtkPolyDataConnectivityFilter (largest
 // region) on this mask and listed the points in the order ITKSegmentation3D's old code read them (even point
 // numbers forward, then odd numbers backward). On 400 generated masks (0/1 and 0/255 values, 1-3 blobs, largest
-// region and all regions) the scratch harness found the same points in the same order. Numbers only - no VTK code
-// is part of BorosKit.
+// region and all regions, vtkMarchingSquares and vtkContourFilter) the scratch harness found: 270 identical (same
+// points, same order), 66 the same points in another order (all-regions lists, whose old order mixed the regions),
+// 64 where the old output was itself broken (0/1 masks at level 1: repeated and stray points such as (0,0) from
+// zero-length pieces) - BorosKit gives the clean outline there. Every 0/255 mask (brush ROIs) matched. Saddles
+// (pixels touching only at a corner) stay apart, as in vtkMarchingSquares. Numbers only - no VTK code is part of
+// BorosKit.
 
 #import <XCTest/XCTest.h>
 #include "BKContourCore.h"
@@ -86,17 +90,21 @@ static void BKTestMask(unsigned char img[120])
 
 - (void)testSaddleAndRowStride
 {
-    // Two diagonal pixels (a saddle in the middle square): average 127.5 >= 100 -> one joined outline;
-    // level 200 -> average below -> two separate outlines. Rows padded to 8 bytes.
+    // Two diagonal pixels (a saddle in the middle square), both diagonal directions, any level: two separate
+    // outlines (recorded VTK vtkMarchingSquares: 2 regions in every case). Rows padded to 8 bytes.
     unsigned char img[4 * 8];
     memset(img, 77, sizeof(img));            // padding bytes must be ignored
     for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) img[y * 8 + x] = 0;
     img[1 * 8 + 1] = 255; img[2 * 8 + 2] = 255;
     BKContourLines L = { 0 };
     BKContourExtractU8(img, 4, 4, 8, 100, &L);
-    XCTAssertEqual(L.lineCount, 1);
+    XCTAssertEqual(L.lineCount, 2);
     BKContourLinesFree(&L);
     BKContourExtractU8(img, 4, 4, 8, 200, &L);
+    XCTAssertEqual(L.lineCount, 2);
+    BKContourLinesFree(&L);
+    img[1 * 8 + 1] = 0; img[2 * 8 + 2] = 0; img[1 * 8 + 2] = 255; img[2 * 8 + 1] = 255;   // the other diagonal
+    BKContourExtractU8(img, 4, 4, 8, 1, &L);
     XCTAssertEqual(L.lineCount, 2);
     BKContourLinesFree(&L);
 }

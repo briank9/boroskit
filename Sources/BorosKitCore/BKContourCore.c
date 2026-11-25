@@ -87,8 +87,10 @@ int BKContourExtractU8(const unsigned char *img, int width, int height, size_t r
                             g.hCount + y * width + (x + 1),           // v1 - v2 (vertical, column x+1)
                             (y + 1) * (width - 1) + x,                // v2 - v3 (horizontal, row y+1)
                             g.hCount + y * width + x };               // v3 - v0 (vertical, column x)
+            // Saddle (two opposite inside corners): the two inside corners stay apart (each gets its own piece),
+            // whatever the values - the old VTK marching squares did the same (checked on recorded VTK output).
             int saddle = (mask == 5 || mask == 10);
-            int joined = saddle && (v[0] + v[1] + v[2] + v[3]) * 0.25 >= level;
+            int joined = 0;
             for (int k = 0; k < 4; k++)
             {
                 if (!(in[k] && !in[(k + 1) & 3])) continue;          // not an exit
