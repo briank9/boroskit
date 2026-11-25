@@ -19,6 +19,8 @@ let package = Package(
         .library(name: "BorosKitMeshRender", targets: ["BorosKitMeshRender"]),
         // BorosKitSurface (bone / skin surfaces from a scan, built on the GPU)
         .library(name: "BorosKitSurface", targets: ["BorosKitSurface"]),
+        // BorosKitDICOM (2026-11-24, iOS app): BorosKit's own licence-free DICOM reader
+        .library(name: "BorosKitDICOM", targets: ["BorosKitDICOM"]),
     ],
     targets: [
         // BorosKitVec (2026-11-14): BorosKit's own neutral vector types for the plain-C cores
@@ -173,6 +175,25 @@ let package = Package(
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
         // --- end BorosKitSurface ---
+        // --- BorosKitDICOM (2026-11-24, Boros Mobile): an original DICOM reader (no DCMTK / GDCM), plain-C cores
+        // (parser, lossless JPEG, RLE, slice sorting) + thin Apple glue (file reading, ImageIO for JPEG / JPEG 2000).
+        .target(
+            name: "BorosKitDICOM",
+            dependencies: ["BorosKitVec"],
+            path: "Sources/BorosKitDICOM",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])],
+            linkerSettings: [.linkedFramework("Foundation"), .linkedFramework("ImageIO"),
+                             .linkedFramework("CoreGraphics"), .linkedLibrary("compression")]
+        ),
+        .testTarget(
+            name: "BorosKitDICOMTests",
+            dependencies: ["BorosKitDICOM", "BorosKitVec"],
+            path: "Tests/BorosKitDICOMTests",
+            cSettings: [.unsafeFlags(["-fobjc-arc"])],
+            linkerSettings: [.linkedFramework("ImageIO"), .linkedFramework("CoreGraphics")]
+        ),
+        // --- end BorosKitDICOM ---
         // --- Golden-output harness: fixed synthetic phantoms run through every GPU operation,
         // compared with recorded reference files (images, meshes, numbers, export bytes).
         // Today Metal records the references; a future Vulkan backend is checked against the
