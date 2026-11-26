@@ -717,20 +717,18 @@ static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
     // 1. Visible objects, uploaded, with their depth extent along the view direction.
     NSMutableArray<BKMeshDrawItem *> *opaque = [NSMutableArray array], *transparent = [NSMutableArray array];
     float nearest = INFINITY, farthest = -INFINITY;
+    BKVec3f cameraF = BKV3f(camera.x, camera.y, camera.z), forwardF = BKV3f(forward.x, forward.y, forward.z);
     for (BKMeshObject *object in _objects) {
         if (!object.visible || !(object.opacity > 0)) continue;
         if (![object prepareBuffersOnDevice:_device]) continue;
         simd_float3 lo, hi;
         [object getPatientBoundsMin:&lo max:&hi];
-        for (int i = 0; i < 8; i++) {
-            simd_float3 c = simd_make_float3((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
-            float z = simd_dot(c - camera, forward);
-            nearest = MIN(nearest, z);
-            farthest = MAX(farthest, z);
-        }
+        // 2026-11-26 (vulkan-engine M9): the depth extent + sort distance rule lives in BKMeshDrawCore.
+        float sortDistance = BKMeshBoxDepthExtent(BKV3f(lo.x, lo.y, lo.z), BKV3f(hi.x, hi.y, hi.z), cameraF, forwardF,
+                                                  &nearest, &farthest);
         BKMeshDrawItem *item = [[BKMeshDrawItem alloc] init];
         item.object = object;
-        item.sortDistance = simd_dot((lo + hi) * 0.5f - camera, forward);
+        item.sortDistance = sortDistance;
         // 2026-11-14: a texture with see-through texels makes the object see-through (as in VTK).
         BOOL solid = object.opacity >= 1 && !(object.textured && !object.texture.opaque);
         [(solid ? opaque : transparent) addObject:item];
@@ -742,15 +740,12 @@ static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
         if (![lines prepareBufferOnDevice:_device]) continue;
         simd_float3 lo, hi;
         [lines getPatientBoundsMin:&lo max:&hi];
-        for (int i = 0; i < 8; i++) {
-            simd_float3 c = simd_make_float3((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
-            float z = simd_dot(c - camera, forward);
-            nearest = MIN(nearest, z);
-            farthest = MAX(farthest, z);
-        }
+        // 2026-11-26 (vulkan-engine M9): the depth extent + sort distance rule lives in BKMeshDrawCore.
+        float sortDistance = BKMeshBoxDepthExtent(BKV3f(lo.x, lo.y, lo.z), BKV3f(hi.x, hi.y, hi.z), cameraF, forwardF,
+                                                  &nearest, &farthest);
         BKMeshDrawItem *item = [[BKMeshDrawItem alloc] init];
         item.lineObject = lines;
-        item.sortDistance = simd_dot((lo + hi) * 0.5f - camera, forward);
+        item.sortDistance = sortDistance;
         [(lines.opacity >= 1 ? opaqueLines : transparent) addObject:item];
     }
     // Points (2026-11-14): same bookkeeping as lines; solid ones are drawn with the solid lines.
@@ -759,15 +754,12 @@ static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
         if (![points prepareBufferOnDevice:_device]) continue;
         simd_float3 lo, hi;
         [points getPatientBoundsMin:&lo max:&hi];
-        for (int i = 0; i < 8; i++) {
-            simd_float3 c = simd_make_float3((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
-            float z = simd_dot(c - camera, forward);
-            nearest = MIN(nearest, z);
-            farthest = MAX(farthest, z);
-        }
+        // 2026-11-26 (vulkan-engine M9): the depth extent + sort distance rule lives in BKMeshDrawCore.
+        float sortDistance = BKMeshBoxDepthExtent(BKV3f(lo.x, lo.y, lo.z), BKV3f(hi.x, hi.y, hi.z), cameraF, forwardF,
+                                                  &nearest, &farthest);
         BKMeshDrawItem *item = [[BKMeshDrawItem alloc] init];
         item.pointObject = points;
-        item.sortDistance = simd_dot((lo + hi) * 0.5f - camera, forward);
+        item.sortDistance = sortDistance;
         [(points.opacity >= 1 ? opaqueLines : transparent) addObject:item];
     }
     // See-through objects: farthest first, so nearer ones are blended over farther ones.

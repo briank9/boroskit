@@ -130,6 +130,13 @@ void BKMeshCameraHalfSize(const BKMeshCamera *camera, float areaWidth, float are
 // Why: a tight range keeps the depth test precise.
 void BKMeshDepthRange(float nearest, float farthest, int32_t perspective, float *nearDistance, float *farDistance);
 
+// What (2026-11-26, vulkan-engine M9): the depth extent of an axis-aligned box (patient mm) along the
+// viewing direction: each of its 8 corners' distance z = dot(corner - camera, forward) widens
+// [*nearest, *farthest] (start them at +inf / -inf). Returns the box centre's distance (the drawing
+// order of see-through objects: farthest first). Float maths in the exact order the renderer always used
+// ((x + y) + z sums, Foundation MIN / MAX comparisons), so Metal and a Vulkan pass agree bit for bit.
+float BKMeshBoxDepthExtent(BKVec3f lo, BKVec3f hi, BKVec3f camera, BKVec3f forward, float *nearest, float *farthest);
+
 // Lighting terms (same meaning as BKVolumeRenderer's).
 typedef struct { float ambient, diffuse, specular, specularPower; } BKMeshLighting;
 

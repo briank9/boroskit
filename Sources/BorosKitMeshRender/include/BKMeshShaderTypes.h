@@ -52,30 +52,9 @@
 typedef bk_float4   bk_mesh_float4;
 typedef bk_float4x4 bk_mesh_float4x4;
 
-#define BK_MESH_UNIFORM_FIELDS \
-    bk_mesh_float4x4 model;        /* object -> patient mm (the object's placement) */ \
-    bk_mesh_float4x4 normalMatrix; /* turns normals with the object (inverse-transpose of model) */ \
-    bk_mesh_float4 cameraPosition; /* xyz: ortho = centre of the image plane; perspective = the eye (mm) */ \
-    bk_mesh_float4 cameraRight;    /* xyz: unit vector to the right of the image */ \
-    bk_mesh_float4 cameraUp;       /* xyz: unit vector to the top of the image */ \
-    bk_mesh_float4 cameraForward;  /* xyz: unit viewing direction */ \
-    bk_mesh_float4 color;          /* rgb = object colour, a = opacity */ \
-    float halfWidth;               /* ortho: half image width in mm; perspective: tan(half horizontal angle) */ \
-    float halfHeight;              /* ortho: half image height in mm; perspective: tan(half vertical angle) */ \
-    float nearDistance;            /* depth range (mm along the view direction) that is kept */ \
-    float farDistance; \
-    float ambient;                 /* lighting, same meaning as BKVolumeRenderer's */ \
-    float diffuse; \
-    float specular; \
-    float specularPower; \
-    int32_t projection;            /* BKProjection: 0 orthographic, 1 perspective */ \
-    int32_t useVertexColors;       /* 1 = take the colour from the mesh's vertices */ \
-    int32_t hasNormals;            /* 0 = no vertex normals: shade each triangle flat */ \
-    int32_t lit;                   /* 0 = flat colour, no lighting (labels, lines) */ \
-    float viewportWidth;           /* size of the drawing area in pixels (lines are sized in pixels) */ \
-    float viewportHeight; \
-    float lineHalfWidth;           /* lines: half the line width in pixels; points: half the point size */ \
-    float paddingForAlignment;
+// The field list lives in BKMeshUniformFields.h (2026-11-26, vulkan-engine M8): that header holds only the
+// #define, so the Vulkan GLSL shaders can #include the very same text.
+#include "BKMeshUniformFields.h"
 
 typedef struct BKMeshUniforms {
     BK_MESH_UNIFORM_FIELDS

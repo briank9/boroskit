@@ -229,3 +229,25 @@ void BKMeshUniformsSetColor(BKMeshUniforms *u, float r, float g, float b, float 
     o = o < 1.0f ? o : 1.0f;
     u->color = bk_make_float4(r, g, b, o);
 }
+
+// ---- Depth extent (2026-11-26, agent "vulkan-engine", step M9; see the header) ----------------------------
+
+// dot(a - b, f) with the sums in Apple simd_dot's order ((x + y) + z).
+static float BKMeshDotOfDifference(BKVec3f a, BKVec3f b, BKVec3f f)
+{
+    float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return dx * f.x + dy * f.y + dz * f.z;
+}
+
+float BKMeshBoxDepthExtent(BKVec3f lo, BKVec3f hi, BKVec3f camera, BKVec3f forward, float *nearest, float *farthest)
+{
+    for (int i = 0; i < 8; i++) {
+        BKVec3f c = BKV3f((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
+        float z = BKMeshDotOfDifference(c, camera, forward);
+        // MIN(a, b) = a < b ? a : b and MAX(a, b) = a < b ? b : a (Foundation, as before).
+        *nearest = *nearest < z ? *nearest : z;
+        *farthest = *farthest < z ? z : *farthest;
+    }
+    BKVec3f centre = BKV3f((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f);
+    return BKMeshDotOfDifference(centre, camera, forward);
+}

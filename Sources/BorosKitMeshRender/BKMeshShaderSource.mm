@@ -16,6 +16,7 @@
 
 #import <Foundation/Foundation.h>
 #import "BKMeshShaderTypes.h"
+#import "BKMeshShaderBodies.h"   // 2026-11-26 (M8): shared Metal / GLSL shader maths
 
 // Returns the full shader source: prelude, the shared uniform struct (from
 // BKMeshShaderTypes.h) and the shader functions. extern "C" because the renderer is
@@ -30,12 +31,25 @@ extern "C" NSString *BKMeshShaderSource(void)
 using namespace metal;
 typedef float4   bk_mesh_float4;
 typedef float4x4 bk_mesh_float4x4;
+// 2026-11-26 (M8): the names the shared bodies (BKMeshShaderBodies.h) use, in Metal.
+typedef float2 bk_float2;
+typedef float3 bk_float3;
+typedef float4 bk_float4;
+#define BK_FN static
+#define BK_MESH_U_PARAM , constant BKMeshUniforms &u
+#define BK_MESH_U_ARG , u
+#define bk_dfdx dfdx
+#define bk_dfdy dfdy
+constant int BKProjPerspective = 1;
 )METAL";
 
         const char *uniforms = "struct BKMeshUniforms { " BK_MESH_STRINGIFY(BK_MESH_UNIFORM_FIELDS) " };\n";
 
+        // The shared bodies (one copy for Metal and Vulkan), pasted in after the uniform struct.
+        const char *bodies = BK_MESH_STRINGIFY(BK_MESH_SHADER_VERTEX_BODIES) "\n"
+                             BK_MESH_STRINGIFY(BK_MESH_SHADER_FRAGMENT_BODIES) "\n";
+
         const char *functions = R"METAL(
-constant int BKProjPerspective = 1;
 
 // Must match BKMeshGPUVertex (10 floats, 40 bytes).
 struct BKMeshVertexIn {
@@ -55,31 +69,7 @@ struct BKMeshVaryings {
     float2 tcoord;      // 2026-11-14: texture coordinates (0 when the mesh is not textured)
 };
 
-// Places a patient-space point on screen with the SAME camera model as the volume ray
-// caster: a pixel's ray there is cameraPosition + right*x + up*y (+ forward*t). Working
-// in camera coordinates (x right, y up, z = distance along the view direction):
-//   orthographic: screen = (x / halfWidth, y / halfHeight)
-//   perspective : screen = (x / z / tan(half angle), y / z / tan(half angle))
-// Shared by meshes and lines so both land on exactly the same pixels.
-static float4 bk_project(float3 world, constant BKMeshUniforms &u)
-{
-    float3 rel = world - u.cameraPosition.xyz;
-    float x = dot(rel, u.cameraRight.xyz);
-    float y = dot(rel, u.cameraUp.xyz);
-    float z = dot(rel, u.cameraForward.xyz);
-    float range = max(u.farDistance - u.nearDistance, 1e-6f);
-    if (u.projection == BKProjPerspective) {
-        // Depth 0 at the near distance, 1 at the far distance (after the divide by z).
-        return float4(x / u.halfWidth, y / u.halfHeight, u.farDistance * (z - u.nearDistance) / range, z);
-    }
-    return float4(x / u.halfWidth, y / u.halfHeight, (z - u.nearDistance) / range, 1.0f);
-}
-
-// Distance of a patient-space point along the viewing direction (camera z).
-static float bk_view_depth(float3 world, constant BKMeshUniforms &u)
-{
-    return dot(world - u.cameraPosition.xyz, u.cameraForward.xyz);
-}
+// bk_project / bk_view_depth: BKMeshShaderBodies.h (shared with the Vulkan shaders since 2026-11-26).
 
 // 2026-11-14: the vertex work as a plain function, shared by the untextured and textured
 // vertex functions (a vertex function can't call another one).
@@ -115,56 +105,23 @@ vertex BKMeshVaryings bk_mesh_vertex_textured(device const BKMeshVertexIn *verti
     return out;
 }
 
-// The lit, premultiplied colour of a surface point. Lighting = the volume renderer's:
-// ambient + diffuse * cos + specular * cos^power, with the light at the viewer and
-// |cos| so both sides of a surface are lit (STL files often have mixed-up sides).
-// 2026-11-14: split in two (straight colour, then premultiply) so a texture can be applied in
-// between, VTK's order; the result for untextured meshes is unchanged.
-static float4 bk_mesh_shade_straight(BKMeshVaryings in, constant BKMeshUniforms &u)
-{
-    float3 n = in.normal;
-    if (!u.hasNormals || length(n) < 1e-6f) {
-        // No normals in the mesh: use the triangle's own direction (flat facets),
-        // from how the position changes between neighbouring pixels.
-        n = cross(dfdx(in.world), dfdy(in.world));
-    }
-    float len = length(n);
-    float3 toViewer = (u.projection == BKProjPerspective) ? normalize(u.cameraPosition.xyz - in.world)
-                                                          : -u.cameraForward.xyz;
-    float ndl = len > 1e-12f ? fabs(dot(n / len, toViewer)) : 1.0f;
-    float3 base = in.color.rgb * u.color.rgb;
-    // Unlit objects (labels, marker letters): their plain colour, like VTK with lighting off.
-    float3 rgb = u.lit ? base * (u.ambient + u.diffuse * ndl) + u.specular * pow(ndl, u.specularPower) : base;
-    float alpha = clamp(u.color.a * in.color.a, 0.0f, 1.0f);
-    return float4(clamp(rgb, 0.0f, 1.0f), alpha);   // straight (not premultiplied)
-}
-
-static float4 bk_mesh_shade(BKMeshVaryings in, constant BKMeshUniforms &u)
-{
-    float4 c = bk_mesh_shade_straight(in, u);
-    return float4(c.rgb * c.a, c.a);   // premultiplied, like the volume output
-}
+// bk_mesh_shade_straight / bk_mesh_shade: BKMeshShaderBodies.h (shared with Vulkan since 2026-11-26).
+// The lit, premultiplied colour of a surface point; the varyings are passed one by one there.
 
 // 2026-11-14: textured surface point = BKMeshTextureModulate(lit colour, texel) (BKMeshDrawCore.h):
 // the clamped straight colour times the texel, then premultiplied.
 static float4 bk_mesh_shade_textured(BKMeshVaryings in, constant BKMeshUniforms &u,
                                      texture2d<float> tex, sampler smp)
 {
-    float4 c = clamp(bk_mesh_shade_straight(in, u), 0.0f, 1.0f) * tex.sample(smp, in.tcoord);
+    float4 c = clamp(bk_mesh_shade_straight(in.world, in.normal, in.color, u), 0.0f, 1.0f) * tex.sample(smp, in.tcoord);
     return float4(c.rgb * c.a, c.a);
 }
 
-// Distance (mm) along the viewing ray from the camera to this surface point, measured
-// the way the volume ray caster measures its ray parameter t.
-static float bk_mesh_ray_distance(BKMeshVaryings in, constant BKMeshUniforms &u)
-{
-    float3 rel = in.world - u.cameraPosition.xyz;
-    return (u.projection == BKProjPerspective) ? length(rel) : dot(rel, u.cameraForward.xyz);
-}
+// bk_mesh_ray_distance: BKMeshShaderBodies.h (shared with Vulkan since 2026-11-26).
 
 fragment float4 bk_mesh_fragment(BKMeshVaryings in [[stage_in]], constant BKMeshUniforms &u [[buffer(1)]])
 {
-    return bk_mesh_shade(in, u);
+    return bk_mesh_shade(in.world, in.normal, in.color, u);
 }
 
 struct BKMeshFragmentOut {
@@ -176,8 +133,8 @@ struct BKMeshFragmentOut {
 fragment BKMeshFragmentOut bk_mesh_fragment_distance(BKMeshVaryings in [[stage_in]], constant BKMeshUniforms &u [[buffer(1)]])
 {
     BKMeshFragmentOut out;
-    out.color = bk_mesh_shade(in, u);
-    out.distance = bk_mesh_ray_distance(in, u);
+    out.color = bk_mesh_shade(in.world, in.normal, in.color, u);
+    out.distance = bk_mesh_ray_distance(in.world, u);
     return out;
 }
 
@@ -193,7 +150,7 @@ fragment BKMeshFragmentOut bk_mesh_fragment_distance_textured(BKMeshVaryings in 
 {
     BKMeshFragmentOut out;
     out.color = bk_mesh_shade_textured(in, u, tex, smp);
-    out.distance = bk_mesh_ray_distance(in, u);
+    out.distance = bk_mesh_ray_distance(in.world, u);
     return out;
 }
 
@@ -298,7 +255,7 @@ kernel void bk_mesh_uniforms_size(device uint *out [[buffer(0)]])
 }
 )METAL";
 
-        source = [NSString stringWithFormat:@"%s%s%s", prelude, uniforms, functions];
+        source = [NSString stringWithFormat:@"%s%s%s%s", prelude, uniforms, bodies, functions];
     });
     return source;
 }
