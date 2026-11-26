@@ -32,6 +32,8 @@ let package = Package(
         .library(name: "BorosKitDICOM", targets: ["BorosKitDICOM"]),
         // BorosKitVec (2026-11-24): exported so app code (Swift) can use the BKVec types of the plain-C cores
         .library(name: "BorosKitVec", targets: ["BorosKitVec"]),
+        // BorosKitSegmentation (2026-11-26, agent "segmentation"): segmentations as label maps (+ class surfaces)
+        .library(name: "BorosKitSegmentation", targets: ["BorosKitSegmentation"]),
     ],
     targets: [
         // BorosKitVec (2026-11-14): BorosKit's own neutral vector types for the plain-C cores
@@ -203,6 +205,26 @@ let package = Package(
             cSettings: [.unsafeFlags(["-fobjc-arc"])]
         ),
         // --- end BorosKitSurface ---
+        // --- BorosKitSegmentation (2026-11-26, agent "segmentation"): a segmentation as its own data type - a label
+        // map on the scan's voxel grid + class table, the .boroseg file, measurements, slice / plane sampling, overlay
+        // pictures (plain C API, C++ core BKSegmentationCore.cpp, also built by CMake) and the class surface glue
+        // (BKLabelSurface.mm: mask -> BKSurfaceExtractor -> BKMesh in patient mm).
+        .target(
+            name: "BorosKitSegmentation",
+            dependencies: ["BorosKitSurface", "BorosKitRender", "BorosKitMesh", "BorosKitCore", "BorosKitVec"],
+            path: "Sources/BorosKitSegmentation",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
+            linkerSettings: [.linkedFramework("Metal"), .linkedFramework("Foundation")]
+        ),
+        .testTarget(
+            name: "BorosKitSegmentationTests",
+            dependencies: ["BorosKitSegmentation", "BorosKitSurface", "BorosKitMesh", "BorosKitRender", "BorosKitCore"],
+            path: "Tests/BorosKitSegmentationTests",
+            cSettings: [.unsafeFlags(["-fobjc-arc", "-ffp-contract=off"])]
+        ),
+        // --- end BorosKitSegmentation ---
         // --- BorosKitDICOM (2026-11-24, Boros Mobile): an original DICOM reader (no DCMTK / GDCM), plain-C cores
         // (parser, lossless JPEG, RLE, slice sorting) + thin Apple glue (file reading, ImageIO for JPEG / JPEG 2000).
         .target(

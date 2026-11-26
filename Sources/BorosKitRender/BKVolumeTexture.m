@@ -180,6 +180,90 @@ static NSError *BKMakeError(NSInteger code, NSString *message)
     return self;
 }
 
+// 2026-11-26 (agent "segmentation"): already-quantised 16-bit data through a fill callback (see the header).
+// How: the same texture format, chunk size and blit as -uploadFloats:..., but the caller writes the 16-bit steps
+// straight into the shared staging buffer, so no full-size copy of the data is ever made.
+- (instancetype)initWithWidth:(NSUInteger)width height:(NSUInteger)height depth:(NSUInteger)depth
+                   valueScale:(float)valueScale valueOffset:(float)valueOffset
+                 minimumValue:(float)minimumValue maximumValue:(float)maximumValue
+               patientToVoxel:(const double[16])m minPixelSpacing:(double)minPixelSpacing
+             outOfBoundsValue:(float)outOfBoundsValue device:(id<MTLDevice>)device
+                    fillSteps:(BOOL (^)(NSUInteger, NSUInteger, uint16_t *))fill error:(NSError **)error
+{
+    if (!(self = [super init])) return nil;
+    _pixelsWide = width;
+    _pixelsHigh = height;
+    _pixelsDeep = depth;
+    N3AffineTransform t;   // same element order as the float initializer (see there)
+    t.m11 = m[0];  t.m12 = m[1];  t.m13 = m[2];  t.m14 = m[3];
+    t.m21 = m[4];  t.m22 = m[5];  t.m23 = m[6];  t.m24 = m[7];
+    t.m31 = m[8];  t.m32 = m[9];  t.m33 = m[10]; t.m34 = m[11];
+    t.m41 = m[12]; t.m42 = m[13]; t.m43 = m[14]; t.m44 = m[15];
+    _volumeTransform = t;
+    _minPixelSpacing = minPixelSpacing;
+    _outOfBoundsValue = outOfBoundsValue;
+    _valueScale = valueScale;
+    _valueOffset = valueOffset;
+    _minimumValue = minimumValue;
+    _maximumValue = maximumValue;
+    _lossless = YES;   // the caller's steps are stored exactly
+
+    if (!fill || _pixelsWide == 0 || _pixelsHigh == 0 || _pixelsDeep == 0 || !(valueScale > 0)) {
+        if (error) *error = BKMakeError(1, @"The volume is empty.");
+        return nil;
+    }
+    if (_pixelsWide > 2048 || _pixelsHigh > 2048 || _pixelsDeep > 2048) {
+        if (error) *error = BKMakeError(2, @"The volume is larger than 2048 voxels on one side, which the GPU cannot hold as one 3D texture.");
+        return nil;
+    }
+    MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
+    desc.textureType = MTLTextureType3D;
+    desc.pixelFormat = MTLPixelFormatR16Unorm;
+    desc.width = _pixelsWide;
+    desc.height = _pixelsHigh;
+    desc.depth = _pixelsDeep;
+    desc.storageMode = MTLStorageModePrivate;
+    desc.usage = MTLTextureUsageShaderRead;
+    _texture = [device newTextureWithDescriptor:desc];
+    if (!_texture) {
+        if (error) *error = BKMakeError(4, @"Not enough GPU memory for this volume.");
+        return nil;
+    }
+    _texture.label = @"BorosKit 16-bit volume";
+
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    const NSUInteger sliceVoxels = _pixelsWide * _pixelsHigh, bytesPerSlice = sliceVoxels * sizeof(uint16_t);
+    NSUInteger slicesPerChunk = MAX((NSUInteger)1, (NSUInteger)(64 * 1024 * 1024) / bytesPerSlice);
+    slicesPerChunk = MIN(slicesPerChunk, _pixelsDeep);
+    id<MTLBuffer> staging = [device newBufferWithLength:slicesPerChunk * bytesPerSlice options:MTLResourceStorageModeShared];
+    if (!staging) {
+        if (error) *error = BKMakeError(5, @"Not enough memory to prepare the volume for the GPU.");
+        return nil;
+    }
+    for (NSUInteger z0 = 0; z0 < _pixelsDeep; z0 += slicesPerChunk) {
+        NSUInteger n = MIN(slicesPerChunk, _pixelsDeep - z0);
+        if (!fill(z0, n, (uint16_t *)staging.contents)) {
+            if (error) *error = BKMakeError(1, @"The volume data could not be prepared.");
+            return nil;
+        }
+        id<MTLCommandBuffer> cb = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit copyFromBuffer:staging sourceOffset:0
+           sourceBytesPerRow:_pixelsWide * sizeof(uint16_t) sourceBytesPerImage:bytesPerSlice
+                  sourceSize:MTLSizeMake(_pixelsWide, _pixelsHigh, n)
+                   toTexture:_texture destinationSlice:0 destinationLevel:0
+           destinationOrigin:MTLOriginMake(0, 0, z0)];
+        [blit endEncoding];
+        [cb commit];
+        [cb waitUntilCompleted];   // the staging buffer is reused for the next chunk
+        if (cb.status == MTLCommandBufferStatusError) {
+            if (error) *error = cb.error ?: BKMakeError(6, @"The GPU failed to copy the volume.");
+            return nil;
+        }
+    }
+    return self;
+}
+
 // Does the actual work: (1) one pass to find min/max and whether all values are whole
 // numbers, (2) pick scale/offset so whole-number data is stored exactly, (3) convert
 // to 16-bit in chunks of slices and copy each chunk into a GPU-private texture with a

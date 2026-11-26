@@ -68,6 +68,7 @@ set(BOROSKIT_CORE_CXX_SOURCES
     Sources/BorosKitSurface/BKSurfacePass.cpp     # 2026-11-26: surface extraction on the shared GPU interface (7.1 step 3)
     Sources/BorosKitMesh/BKMeshProcessingCore.cpp
     Sources/BorosKitMesh/BKSceneExportCore.cpp
+    Sources/BorosKitSegmentation/BKSegmentationCore.cpp   # 2026-11-26: segmentations as label maps (agent "segmentation")
 )
 
 # Header folders the cores include from (public include/ folders and the folders holding private core
@@ -85,6 +86,7 @@ set(BOROSKIT_CORE_INCLUDE_DIRS
     Sources/BorosKitRender/include
     Sources/BorosKitRender
     Sources/BorosKitSurface/include
+    Sources/BorosKitSegmentation/include
 )
 
 # The Vulkan backend (2026-11-26, vulkan-engine M6): C++ against the installed Vulkan SDK headers; built only

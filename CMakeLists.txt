@@ -103,6 +103,7 @@ add_executable(bk_core_tests
     Tests/BorosKitCoreTestsC/BKAccuracyTests.c
     Tests/BorosKitCoreTestsC/BKMeshAccuracyTests.cpp
     Tests/BorosKitCoreTestsC/BKExportAccuracyTests.cpp
+    Tests/BorosKitCoreTestsC/BKSegmentationTests.c       # 2026-11-26: segmentations as label maps
 )
 target_link_libraries(bk_core_tests PRIVATE boroskit_cores bk_golden_core)
 target_compile_definitions(bk_core_tests PRIVATE
@@ -120,6 +121,7 @@ set(BK_CORE_TEST_NAMES
     golden_phantom golden_cpu_numbers golden_cpu_meshes
     roi_accuracy_length roi_accuracy_angle roi_accuracy_area roi_accuracy_stats roi_accuracy_centre
     mesh_accuracy_box export_accuracy_geometry
+    seg_round_trip seg_damaged_files seg_counts_volumes seg_slices_planes seg_overlay_picture seg_mask_surface
 )
 foreach(name IN LISTS BK_CORE_TEST_NAMES)
     add_test(NAME core.${name} COMMAND bk_core_tests ${name})

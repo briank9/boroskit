@@ -51,6 +51,13 @@ void bk_test_roi_accuracy_stats(void);
 void bk_test_roi_accuracy_centre(void);
 void bk_test_mesh_accuracy_box(void);
 void bk_test_export_accuracy_geometry(void);
+// 2026-11-26 (agent "segmentation"): segmentations as label maps (BKSegmentationTests.c)
+void bk_test_seg_round_trip(void);
+void bk_test_seg_damaged_files(void);
+void bk_test_seg_counts_volumes(void);
+void bk_test_seg_slices_planes(void);
+void bk_test_seg_overlay_picture(void);
+void bk_test_seg_mask_surface(void);
 
 static const struct { const char *name; BKCoreTestFunction run; } kTests[] = {
     { "vec_basics", bk_test_vec_basics },
@@ -79,6 +86,12 @@ static const struct { const char *name; BKCoreTestFunction run; } kTests[] = {
     { "roi_accuracy_centre", bk_test_roi_accuracy_centre },
     { "mesh_accuracy_box", bk_test_mesh_accuracy_box },
     { "export_accuracy_geometry", bk_test_export_accuracy_geometry },
+    { "seg_round_trip", bk_test_seg_round_trip },
+    { "seg_damaged_files", bk_test_seg_damaged_files },
+    { "seg_counts_volumes", bk_test_seg_counts_volumes },
+    { "seg_slices_planes", bk_test_seg_slices_planes },
+    { "seg_overlay_picture", bk_test_seg_overlay_picture },
+    { "seg_mask_surface", bk_test_seg_mask_surface },
 };
 static const int kTestCount = (int)(sizeof kTests / sizeof kTests[0]);
 

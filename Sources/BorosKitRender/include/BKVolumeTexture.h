@@ -81,6 +81,28 @@ extern NSErrorDomain const BKRenderErrorDomain;
                                       device:(id<MTLDevice>)device
                                        error:(NSError * _Nullable * _Nullable)error;
 
+// Already-quantised 16-bit data (2026-11-26, agent "segmentation"): what: the texture is filled slice-chunk by
+// slice-chunk by `fill`, which writes `sliceCount` slices (x fastest, width*height per slice) of 16-bit STEPS starting
+// at slice `firstSlice` into `steps`; real value = steps / 65535 * valueScale + valueOffset. minimumValue /
+// maximumValue are taken as given (no scan of the data). Returns nil + error if fill returns NO.
+// Why: a segmentation class becomes a 0 / 1 mask for the surface builder (steps 0 / 65535, valueScale 1): built
+// straight into the GPU upload buffer (about 64 MB at a time) instead of a full-size float copy (a whole-skull mask
+// box would otherwise need ~0.5 GB of floats). patientToVoxel / minPixelSpacing / outOfBoundsValue as for
+// -initWithFloatVoxels:... . PORTING NOTE: a Vulkan upload fills its staging buffer through the same callback.
+- (nullable instancetype)initWithWidth:(NSUInteger)width
+                                height:(NSUInteger)height
+                                 depth:(NSUInteger)depth
+                            valueScale:(float)valueScale
+                           valueOffset:(float)valueOffset
+                          minimumValue:(float)minimumValue
+                          maximumValue:(float)maximumValue
+                        patientToVoxel:(const double[_Nonnull 16])patientToVoxel
+                       minPixelSpacing:(double)minPixelSpacing
+                      outOfBoundsValue:(float)outOfBoundsValue
+                                device:(id<MTLDevice>)device
+                             fillSteps:(BOOL (^)(NSUInteger firstSlice, NSUInteger sliceCount, uint16_t *steps))fill
+                                 error:(NSError * _Nullable * _Nullable)error;
+
 // YES for a colour scan (see above): the texture is RGBA8 and the renderer reads its three channels.
 @property (nonatomic, readonly, getter=isColor) BOOL color;
 
