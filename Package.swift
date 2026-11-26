@@ -26,6 +26,8 @@ let package = Package(
         .library(name: "BorosKitMeshRender", targets: ["BorosKitMeshRender"]),
         // BorosKitSurface (bone / skin surfaces from a scan, built on the GPU)
         .library(name: "BorosKitSurface", targets: ["BorosKitSurface"]),
+        // BorosKitGPU (2026-11-26, Vulkan plan phase 2): the backend-neutral GPU interface (BKGPU.h) + its Metal device.
+        .library(name: "BorosKitGPU", targets: ["BorosKitGPU"]),
         // BorosKitDICOM (2026-11-24, iOS app): BorosKit's own licence-free DICOM reader
         .library(name: "BorosKitDICOM", targets: ["BorosKitDICOM"]),
         // BorosKitVec (2026-11-24): exported so app code (Swift) can use the BKVec types of the plain-C cores
@@ -149,10 +151,23 @@ let package = Package(
             cxxSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
             linkerSettings: [.linkedFramework("Foundation")]
         ),
+        // --- BorosKitGPU (2026-11-26, Vulkan plan phase 2): BKGPU.h (C++17, backend-neutral GPU interface) and
+        // MetalDevice (BKGPUMetal.mm, Objective-C++). The Vulkan device is NOT here (CMake only), so building Boros 6
+        // never needs the Vulkan SDK. Render: BKMetalDevice (preferred GPU, shader compile options).
+        .target(
+            name: "BorosKitGPU",
+            dependencies: ["BorosKitRender", "BorosKitVec"],
+            path: "Sources/BorosKitGPU",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
+            linkerSettings: [.linkedFramework("Metal"), .linkedFramework("Foundation")]
+        ),
         .target(
             name: "BorosKitMeshRender",
             // Render: BKVolumeCamera / BKRenderResult, so meshes use the volume's camera.
-            dependencies: ["BorosKitMesh", "BorosKitRender", "BorosKitCore", "BorosKitVec"],
+            // GPU (2026-11-26): BKMeshPass draws through the shared GPU interface (BKMeshRenderer is its Metal glue).
+            dependencies: ["BorosKitMesh", "BorosKitRender", "BorosKitCore", "BorosKitVec", "BorosKitGPU"],
             path: "Sources/BorosKitMeshRender",
             publicHeadersPath: "include",
             cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],

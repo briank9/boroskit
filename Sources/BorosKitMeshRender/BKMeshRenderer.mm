@@ -16,8 +16,14 @@
 #import "BKVolumeTexture.h"   // BKRenderErrorDomain
 #import "BKMeshDrawCore.h"    // 2026-11-14: culling / texture / point rules (plain C)
 #import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
+// 2026-11-26 (Vulkan plan phase 2): the drawing itself is BKMeshPass (backend-neutral C++) on the shared GPU interface;
+// this class is the Metal glue (object caches, Metal targets / command buffers wrapped for the pass).
+#import "BKGPUMetal.h"
+#include "BKMeshPass.h"
+#include <memory>
+#include <vector>
 
-NSString *BKMeshShaderSource(void); // BKMeshShaderSource.mm
+extern "C" NSString *BKMeshShaderSource(void); // BKMeshShaderSource.mm
 
 // BKRenderResult's initializer is private to BorosKitRender; declaring it here lets
 // the mesh renderer return the same result type as the volume renderer (same pixel
@@ -58,8 +64,8 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     if (pixels == NULL || width == 0 || height == 0 || components < 1 || components > 4) return nil;
     if (!(self = [super init])) return nil;
     NSMutableData *rgba = [NSMutableData dataWithLength:width * height * 4];
-    if (!rgba || !BKMeshTextureExpandToRGBA8(pixels, (uint32_t)components, width * height, rgba.mutableBytes)) return nil;
-    const uint8_t *p = rgba.bytes;
+    if (!rgba || !BKMeshTextureExpandToRGBA8(pixels, (uint32_t)components, width * height, (uint8_t *)rgba.mutableBytes)) return nil;
+    const uint8_t *p = (const uint8_t *)rgba.bytes;   // explicit cast: this file is Objective-C++ since 2026-11-26
     BOOL opaque = YES;
     for (NSUInteger i = 0; i < width * height && opaque; i++) opaque = (p[4 * i + 3] == 255);
     _width = width;
@@ -413,14 +419,10 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     id<MTLLibrary> _library;
     id<MTLCommandQueue> _queue;
     id<MTLComputePipelineState> _sizePipeline;
-    NSMutableDictionary<NSString *, id<MTLRenderPipelineState>> *_pipelines;  // per target format / pass
-    id<MTLDepthStencilState> _opaqueDepthState;       // test + write depth
-    id<MTLDepthStencilState> _transparentDepthState;  // test only
-    // 2026-11-25: colour pass of a see-through mesh after its depth-only pass: draw only where the
-    // depth equals the nearest surface of that mesh ("less or equal"), no depth write.
-    id<MTLDepthStencilState> _transparentNearestDepthState;
-    id<MTLTexture> _depthTexture;                     // reused while the size stays the same
-    id<MTLSamplerState> _samplers[4];                 // 2026-11-14: [interpolate * 2 + repeat]
+    // 2026-11-26 (phase 2): the shared GPU interface on this Metal device, and the backend-neutral mesh pass that
+    // owns the pipelines, depth buffer and samplers (formerly ivars of this class).
+    std::unique_ptr<boroskit::gpu::Device> _gpu;
+    std::unique_ptr<boroskit::meshpass::MeshPass> _pass;
 }
 
 // Compiles the shader library once per GPU and shares it between renderers (compiling
@@ -453,34 +455,20 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     _sizePipeline = [_device newComputePipelineStateWithFunction:[_library newFunctionWithName:@"bk_mesh_uniforms_size"] error:error];
     if (!_sizePipeline) return nil;
     _queue = [_device newCommandQueue];
-    _pipelines = [NSMutableDictionary dictionary];
-
-    MTLDepthStencilDescriptor *depth = [[MTLDepthStencilDescriptor alloc] init];
-    depth.depthCompareFunction = MTLCompareFunctionLess;
-    depth.depthWriteEnabled = YES;
-    _opaqueDepthState = [_device newDepthStencilStateWithDescriptor:depth];
-    depth.depthWriteEnabled = NO;
-    _transparentDepthState = [_device newDepthStencilStateWithDescriptor:depth];
-    depth.depthCompareFunction = MTLCompareFunctionLessEqual;
-    _transparentNearestDepthState = [_device newDepthStencilStateWithDescriptor:depth];
-
+    // 2026-11-26 (phase 2): MetalDevice + MeshPass. The pass makes the four texture samplers (2026-11-14 rules).
+    if (boroskit::gpu::makeMetalDevice(_device, &_gpu) != boroskit::gpu::Status::Ok ||
+        boroskit::gpu::BKGPUMetalAddLibrary(*_gpu, _library) != boroskit::gpu::Status::Ok) {
+        if (error) *error = BKMeshRenderError(30, @"No Metal GPU is available on this device.");
+        return nil;
+    }
+    _pass.reset(new boroskit::meshpass::MeshPass(*_gpu));
+    if (!_pass->valid()) {
+        if (error) *error = BKMeshRenderError(40, @"The GPU could not create a texture sampler.");
+        return nil;
+    }
     _objects = @[];
     _lineObjects = @[];
     _pointObjects = @[];
-    // 2026-11-14: texture samplers (BKMeshTextureSample's rules): linear or nearest, repeat or
-    // clamp to the edge, no mipmaps.
-    for (int i = 0; i < 4; i++) {
-        MTLSamplerDescriptor *sd = [[MTLSamplerDescriptor alloc] init];
-        sd.minFilter = sd.magFilter = (i & 2) ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
-        sd.mipFilter = MTLSamplerMipFilterNotMipmapped;
-        sd.sAddressMode = sd.tAddressMode = (i & 1) ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
-        sd.normalizedCoordinates = YES;
-        _samplers[i] = [_device newSamplerStateWithDescriptor:sd];
-        if (!_samplers[i]) {
-            if (error) *error = BKMeshRenderError(40, @"The GPU could not create a texture sampler.");
-            return nil;
-        }
-    }
     _viewport = CGRectZero;
     // Defaults: the same as BKVolumeRenderer (front view, head up, 100 mm, its lighting).
     _projection = BKProjectionOrthographic;
@@ -578,110 +566,8 @@ static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
     return YES;
 }
 
-#pragma mark Pipelines
-
-// What: the drawing pipeline for one target colour format, with or without the
-// ray-distance output, for the solid or the see-through pass. Built once and cached.
-- (id<MTLRenderPipelineState>)pipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance
-                                         transparent:(BOOL)transparent error:(NSError **)error
-{
-    return [self pipelineForColorFormat:format withDistance:withDistance transparent:transparent textured:NO error:error];
-}
-
-// What (2026-11-14): the same, optionally for textured meshes (extra texture-coordinate stream,
-// texture lookup in the fragment function).
-- (id<MTLRenderPipelineState>)pipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance
-                                         transparent:(BOOL)transparent textured:(BOOL)textured error:(NSError **)error
-{
-    NSString *key = [NSString stringWithFormat:@"%lu-%d-%d%@", (unsigned long)format, withDistance, transparent, textured ? @"-tex" : @""];
-    id<MTLRenderPipelineState> pipeline = _pipelines[key];
-    if (pipeline) return pipeline;
-    MTLRenderPipelineDescriptor *d = [[MTLRenderPipelineDescriptor alloc] init];
-    d.vertexFunction = [_library newFunctionWithName:textured ? @"bk_mesh_vertex_textured" : @"bk_mesh_vertex"];
-    NSString *fragment = withDistance ? @"bk_mesh_fragment_distance" : @"bk_mesh_fragment";
-    d.fragmentFunction = [_library newFunctionWithName:textured ? [fragment stringByAppendingString:@"_textured"] : fragment];
-    [self configurePipeline:d colorFormat:format withDistance:withDistance transparent:transparent];
-    pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
-    if (pipeline) _pipelines[key] = pipeline;
-    return pipeline;
-}
-
-// What (2026-11-25): the depth-only pipeline for see-through meshes: same vertex function as the
-// colour pipeline (identical depths, see [[invariant]] in the shader), nothing written to colour or
-// ray distance - only the depth buffer.
-// Why: see SEE-THROUGH MESHES in the draw loop.
-- (id<MTLRenderPipelineState>)depthOnlyPipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance error:(NSError **)error
-{
-    NSString *key = [NSString stringWithFormat:@"%lu-%d-depthonly", (unsigned long)format, withDistance];
-    id<MTLRenderPipelineState> pipeline = _pipelines[key];
-    if (pipeline) return pipeline;
-    MTLRenderPipelineDescriptor *d = [[MTLRenderPipelineDescriptor alloc] init];
-    d.vertexFunction = [_library newFunctionWithName:@"bk_mesh_vertex"];
-    d.fragmentFunction = [_library newFunctionWithName:withDistance ? @"bk_mesh_fragment_distance" : @"bk_mesh_fragment"];
-    [self configurePipeline:d colorFormat:format withDistance:withDistance transparent:YES];
-    d.colorAttachments[0].writeMask = MTLColorWriteMaskNone;
-    if (withDistance) d.colorAttachments[1].writeMask = MTLColorWriteMaskNone;
-    pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
-    if (pipeline) _pipelines[key] = pipeline;
-    return pipeline;
-}
-
-// What: the same as above for lines (screen-aligned rectangles, flat colour).
-- (id<MTLRenderPipelineState>)linePipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance
-                                             transparent:(BOOL)transparent error:(NSError **)error
-{
-    return [self linePipelineForColorFormat:format withDistance:withDistance transparent:transparent points:NO error:error];
-}
-
-// What (2026-11-14): the same, optionally for points (squares built by bk_point_vertex, drawn
-// with the line fragment functions).
-- (id<MTLRenderPipelineState>)linePipelineForColorFormat:(MTLPixelFormat)format withDistance:(BOOL)withDistance
-                                             transparent:(BOOL)transparent points:(BOOL)points error:(NSError **)error
-{
-    NSString *key = [NSString stringWithFormat:@"%@-%lu-%d-%d", points ? @"point" : @"line", (unsigned long)format, withDistance, transparent];
-    id<MTLRenderPipelineState> pipeline = _pipelines[key];
-    if (pipeline) return pipeline;
-    MTLRenderPipelineDescriptor *d = [[MTLRenderPipelineDescriptor alloc] init];
-    d.vertexFunction = [_library newFunctionWithName:points ? @"bk_point_vertex" : @"bk_line_vertex"];
-    d.fragmentFunction = [_library newFunctionWithName:withDistance ? @"bk_line_fragment_distance" : @"bk_line_fragment"];
-    [self configurePipeline:d colorFormat:format withDistance:withDistance transparent:transparent];
-    pipeline = [_device newRenderPipelineStateWithDescriptor:d error:error];
-    if (pipeline) _pipelines[key] = pipeline;
-    return pipeline;
-}
-
-// What: the blending/attachment settings shared by the mesh and line pipelines.
-- (void)configurePipeline:(MTLRenderPipelineDescriptor *)d colorFormat:(MTLPixelFormat)format
-             withDistance:(BOOL)withDistance transparent:(BOOL)transparent
-{
-    d.colorAttachments[0].pixelFormat = format;
-    // Premultiplied "over" blending: result = colour + (1 - alpha) * what is behind.
-    // For solid objects (alpha 1) this simply replaces what is behind.
-    d.colorAttachments[0].blendingEnabled = YES;
-    d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
-    d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-    d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-    d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-    if (withDistance) {
-        d.colorAttachments[1].pixelFormat = MTLPixelFormatR32Float;
-        // See-through surfaces must not count as "the surface that stops the ray".
-        d.colorAttachments[1].writeMask = transparent ? MTLColorWriteMaskNone : MTLColorWriteMaskAll;
-    }
-    d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-}
-
-// What: a depth buffer of the given size, kept between frames. Why: the depth test
-// needs one; creating it every frame would waste memory bandwidth.
-- (id<MTLTexture>)depthTextureWithWidth:(NSUInteger)w height:(NSUInteger)h
-{
-    if (_depthTexture && _depthTexture.width == w && _depthTexture.height == h) return _depthTexture;
-    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
-                                                                                 width:w height:h mipmapped:NO];
-    d.usage = MTLTextureUsageRenderTarget;
-    d.storageMode = MTLStorageModePrivate;
-    _depthTexture = [_device newTextureWithDescriptor:d];
-    return _depthTexture;
-}
+// 2026-11-26 (phase 2): pipelines, depth states, the depth buffer and samplers now live in BKMeshPass (shared by
+// the Metal and Vulkan engines); see BKMeshPass.cpp for the same settings as before.
 
 #pragma mark Drawing
 
@@ -711,253 +597,134 @@ static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
     }
     simd_float3 right, up, forward;
     if (![self getCameraRight:&right up:&up forward:&forward error:error]) return NO;
-    simd_float3 camera = BKMeshFloat3(_cameraPosition);
-    BOOL perspective = _projection == BKProjectionPerspective;
 
-    // 1. Visible objects, uploaded, with their depth extent along the view direction.
-    NSMutableArray<BKMeshDrawItem *> *opaque = [NSMutableArray array], *transparent = [NSMutableArray array];
-    float nearest = INFINITY, farthest = -INFINITY;
-    BKVec3f cameraF = BKV3f(camera.x, camera.y, camera.z), forwardF = BKV3f(forward.x, forward.y, forward.z);
+    // 2026-11-26 (Vulkan plan phase 2): this method is now Metal glue around BKMeshPass (backend-neutral C++, the same
+    // code a Vulkan engine runs). Here: pick the visible, uploaded objects (as before) and describe them to the pass,
+    // wrapping the Metal buffers / textures each object already caches - nothing is copied.
+    using namespace boroskit;
+    std::vector<meshpass::Item> items;
+    std::vector<std::unique_ptr<gpu::Buffer>> buffers;     // wrappers, alive until the pass is recorded
+    std::vector<std::unique_ptr<gpu::Texture>> textures;
+    auto wrap = [&](id<MTLBuffer> b) -> gpu::Buffer * {
+        if (!b) return nullptr;
+        buffers.push_back(gpu::BKGPUMetalWrapBuffer(*_gpu, b));
+        return buffers.back().get();
+    };
+    auto bounds = [](meshpass::Item &it, simd_float3 lo, simd_float3 hi) {
+        it.boundsMin = BKV3f(lo.x, lo.y, lo.z);
+        it.boundsMax = BKV3f(hi.x, hi.y, hi.z);
+    };
     for (BKMeshObject *object in _objects) {
         if (!object.visible || !(object.opacity > 0)) continue;
         if (![object prepareBuffersOnDevice:_device]) continue;
+        BKMesh *mesh = object.mesh;
+        meshpass::Item it;
+        it.kind = meshpass::ItemKind::Mesh;
         simd_float3 lo, hi;
         [object getPatientBoundsMin:&lo max:&hi];
-        // 2026-11-26 (vulkan-engine M9): the depth extent + sort distance rule lives in BKMeshDrawCore.
-        float sortDistance = BKMeshBoxDepthExtent(BKV3f(lo.x, lo.y, lo.z), BKV3f(hi.x, hi.y, hi.z), cameraF, forwardF,
-                                                  &nearest, &farthest);
-        BKMeshDrawItem *item = [[BKMeshDrawItem alloc] init];
-        item.object = object;
-        item.sortDistance = sortDistance;
+        bounds(it, lo, hi);
+        it.vertices = wrap([object vertexBuffer]);
+        it.indices = wrap([object indexBuffer]);
+        it.indexCount = (uint32_t)(mesh.triangleCount * 3);
+        if (object.textured) {   // 2026-11-14: texture + coordinates, when both are on the GPU
+            BKMeshTexture *texture = object.texture;
+            id<MTLTexture> gpuTexture = [texture textureOnDevice:_device];
+            id<MTLBuffer> tcBuffer = [object textureCoordinateBufferOnDevice:_device];
+            if (gpuTexture && tcBuffer) {
+                textures.push_back(gpu::BKGPUMetalWrapTexture(*_gpu, gpuTexture));
+                it.texture = textures.back().get();
+                it.textureCoordinates = it.texture ? wrap(tcBuffer) : nullptr;
+                it.samplerIndex = (texture.interpolate ? 2 : 0) + (texture.repeat ? 1 : 0);
+            }
+        }
+        simd_float4x4 placement = object.transform;
+        memcpy(it.model, &placement, sizeof it.model);
+        it.color[0] = object.color.x; it.color[1] = object.color.y; it.color[2] = object.color.z;
+        it.opacity = object.opacity;
+        it.useVertexColors = (object.useVertexColors && mesh.colors) ? 1 : 0;
+        it.hasNormals = mesh.normals ? 1 : 0;
+        it.lit = object.lit ? 1 : 0;
+        it.ownMaterial = object.usesOwnMaterial ? 1 : 0;
+        it.material = (BKMeshLighting){ object.ambient, object.diffuse, object.specular, object.specularPower };
+        it.cull = object.faceCulling == BKMeshFaceCullingBack ? gpu::CullMode::Back
+                : object.faceCulling == BKMeshFaceCullingFront ? gpu::CullMode::Front : gpu::CullMode::None;
+        it.wireframe = object.wireframe ? 1 : 0;
         // 2026-11-14: a texture with see-through texels makes the object see-through (as in VTK).
-        BOOL solid = object.opacity >= 1 && !(object.textured && !object.texture.opaque);
-        [(solid ? opaque : transparent) addObject:item];
+        it.solid = (object.opacity >= 1 && !(object.textured && !object.texture.opaque)) ? 1 : 0;
+        items.push_back(it);
     }
-    // Lines: same depth extent bookkeeping; solid ones go with the solid pass.
-    NSMutableArray<BKMeshDrawItem *> *opaqueLines = [NSMutableArray array];
     for (BKLineObject *lines in _lineObjects) {
         if (!lines.visible || !(lines.opacity > 0) || !(lines.lineWidth > 0)) continue;
         if (![lines prepareBufferOnDevice:_device]) continue;
+        meshpass::Item it;
+        it.kind = meshpass::ItemKind::Lines;
         simd_float3 lo, hi;
         [lines getPatientBoundsMin:&lo max:&hi];
-        // 2026-11-26 (vulkan-engine M9): the depth extent + sort distance rule lives in BKMeshDrawCore.
-        float sortDistance = BKMeshBoxDepthExtent(BKV3f(lo.x, lo.y, lo.z), BKV3f(hi.x, hi.y, hi.z), cameraF, forwardF,
-                                                  &nearest, &farthest);
-        BKMeshDrawItem *item = [[BKMeshDrawItem alloc] init];
-        item.lineObject = lines;
-        item.sortDistance = sortDistance;
-        [(lines.opacity >= 1 ? opaqueLines : transparent) addObject:item];
+        bounds(it, lo, hi);
+        it.vertices = wrap([lines pointBuffer]);
+        it.vertexCount = (uint32_t)(lines.segmentCount * 6);
+        simd_float4x4 placement = lines.transform;
+        memcpy(it.model, &placement, sizeof it.model);
+        it.color[0] = lines.color.x; it.color[1] = lines.color.y; it.color[2] = lines.color.z;
+        it.opacity = lines.opacity;
+        it.lineHalfWidth = (float)(0.5 * lines.lineWidth);
+        it.solid = lines.opacity >= 1 ? 1 : 0;
+        items.push_back(it);
     }
-    // Points (2026-11-14): same bookkeeping as lines; solid ones are drawn with the solid lines.
-    for (BKPointObject *points in _pointObjects) {
+    for (BKPointObject *points in _pointObjects) {   // 2026-11-14
         if (!points.visible || !(points.opacity > 0) || !(points.pointSize > 0)) continue;
         if (![points prepareBufferOnDevice:_device]) continue;
+        meshpass::Item it;
+        it.kind = meshpass::ItemKind::Points;
         simd_float3 lo, hi;
         [points getPatientBoundsMin:&lo max:&hi];
-        // 2026-11-26 (vulkan-engine M9): the depth extent + sort distance rule lives in BKMeshDrawCore.
-        float sortDistance = BKMeshBoxDepthExtent(BKV3f(lo.x, lo.y, lo.z), BKV3f(hi.x, hi.y, hi.z), cameraF, forwardF,
-                                                  &nearest, &farthest);
-        BKMeshDrawItem *item = [[BKMeshDrawItem alloc] init];
-        item.pointObject = points;
-        item.sortDistance = sortDistance;
-        [(points.opacity >= 1 ? opaqueLines : transparent) addObject:item];
-    }
-    // See-through objects: farthest first, so nearer ones are blended over farther ones.
-    [transparent sortUsingComparator:^NSComparisonResult(BKMeshDrawItem *a, BKMeshDrawItem *b) {
-        return a.sortDistance > b.sortDistance ? NSOrderedAscending : (a.sortDistance < b.sortDistance ? NSOrderedDescending : NSOrderedSame);
-    }];
-
-    // 2. Depth range: just enclose the scene (a tight range keeps the depth test precise).
-    // Perspective cannot see behind the eye, so the near distance stays positive.
-    // 2026-11-25 (M3): the rule lives in BKMeshDrawCore (shared with a Vulkan mesh pass).
-    float nearDistance, farDistance;
-    BKMeshDepthRange(nearest, farthest, perspective ? 1 : 0, &nearDistance, &farDistance);
-    BOOL anything = (opaque.count + opaqueLines.count + transparent.count) > 0 && isfinite(nearDistance) && isfinite(farDistance) && farDistance > nearDistance;
-
-    // 3. The render pass: colour (+ ray distance) + depth.
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = colorTexture;
-    pass.colorAttachments[0].loadAction = clear ? MTLLoadActionClear : MTLLoadActionLoad;
-    pass.colorAttachments[0].clearColor = MTLClearColorMake(clearColor.x, clearColor.y, clearColor.z, clearColor.w);
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    if (distanceTexture) {
-        pass.colorAttachments[1].texture = distanceTexture;
-        pass.colorAttachments[1].loadAction = MTLLoadActionClear;
-        pass.colorAttachments[1].clearColor = MTLClearColorMake(INFINITY, 0, 0, 0);
-        pass.colorAttachments[1].storeAction = MTLStoreActionStore;
-    }
-    pass.depthAttachment.texture = [self depthTextureWithWidth:width height:height];
-    pass.depthAttachment.loadAction = MTLLoadActionClear;
-    pass.depthAttachment.clearDepth = 1.0;
-    pass.depthAttachment.storeAction = MTLStoreActionDontCare;
-
-    id<MTLRenderPipelineState> opaquePipeline = [self pipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO error:error];
-    id<MTLRenderPipelineState> transparentPipeline = [self pipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES error:error];
-    id<MTLRenderPipelineState> opaqueLinePipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO error:error];
-    id<MTLRenderPipelineState> transparentLinePipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES error:error];
-    id<MTLRenderPipelineState> depthOnlyPipeline = [self depthOnlyPipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil error:error];
-    if (!opaquePipeline || !transparentPipeline || !opaqueLinePipeline || !transparentLinePipeline || !depthOnlyPipeline) return NO;
-    // 2026-11-14: textured-mesh and point pipelines, made only when the scene has such objects.
-    BOOL anyTextured = NO, anyPoints = NO;
-    for (BKMeshObject *object in _objects) if (object.visible && object.textured) { anyTextured = YES; break; }
-    for (BKPointObject *points in _pointObjects) if (points.visible && points.pointCount) { anyPoints = YES; break; }
-    id<MTLRenderPipelineState> opaqueTexturedPipeline = nil, transparentTexturedPipeline = nil;
-    id<MTLRenderPipelineState> opaquePointPipeline = nil, transparentPointPipeline = nil;
-    if (anyTextured) {
-        opaqueTexturedPipeline = [self pipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO textured:YES error:error];
-        transparentTexturedPipeline = [self pipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES textured:YES error:error];
-        if (!opaqueTexturedPipeline || !transparentTexturedPipeline) return NO;
-    }
-    if (anyPoints) {
-        opaquePointPipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:NO points:YES error:error];
-        transparentPointPipeline = [self linePipelineForColorFormat:colorTexture.pixelFormat withDistance:distanceTexture != nil transparent:YES points:YES error:error];
-        if (!opaquePointPipeline || !transparentPointPipeline) return NO;
+        bounds(it, lo, hi);
+        it.vertices = wrap([points pointBuffer]);
+        it.vertexCount = (uint32_t)(points.pointCount * 6);
+        simd_float4x4 placement = points.transform;
+        memcpy(it.model, &placement, sizeof it.model);
+        it.color[0] = points.color.x; it.color[1] = points.color.y; it.color[2] = points.color.z;
+        it.opacity = points.opacity;
+        it.lineHalfWidth = (float)(0.5 * points.pointSize);
+        it.solid = points.opacity >= 1 ? 1 : 0;
+        items.push_back(it);
     }
 
-    id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:pass];
-    if (!enc) {
-        if (error) *error = BKMeshRenderError(35, @"The GPU could not start drawing the meshes.");
+    std::unique_ptr<gpu::Texture> color = gpu::BKGPUMetalWrapTexture(*_gpu, colorTexture);
+    std::unique_ptr<gpu::Texture> distance = distanceTexture ? gpu::BKGPUMetalWrapTexture(*_gpu, distanceTexture) : nullptr;
+    if (!color || (distanceTexture && !distance)) {
+        if (error) *error = BKMeshRenderError(43, @"The output texture format is not supported (use RGBA8 or BGRA8, and R32Float for the ray distance).");
         return NO;
     }
-    enc.label = @"BKMeshRenderer";
-    // Both sides of every triangle are drawn: mesh files often have mixed-up sides (unless an
-    // object asks for culling, 2026-11-14: set per object below).
-    [enc setCullMode:MTLCullModeNone];
-    // Front side = anticlockwise on screen with y up (BKMeshTriangleIsFrontFacing). Metal judges
-    // the winding in its normalised device coordinates, whose y axis points UP like ours, so
-    // "anticlockwise = front" is exactly our rule (checked by BKMeshDrawCoreTests against the
-    // plain-C reference; Metal's default would be clockwise).
-    [enc setFrontFacingWinding:MTLWindingCounterClockwise];
-    // Only the drawing area (whole image unless a viewport was set).
-    [enc setViewport:(MTLViewport){area.origin.x, area.origin.y, area.size.width, area.size.height, 0.0, 1.0}];
-    [enc setScissorRect:(MTLScissorRect){(NSUInteger)area.origin.x, (NSUInteger)area.origin.y,
-                                         (NSUInteger)area.size.width, (NSUInteger)area.size.height}];
-
-    if (anything) {
-        // Shared camera part of the uniforms: camera frame, half view sizes, depth range, lighting.
-        // 2026-11-25 (M3): filled by the plain-C BKMeshUniformsFill (BKMeshDrawCore) - the same function
-        // a Vulkan mesh pass calls, so both engines send identical settings blocks.
-        BKMeshUniforms base;
-        BKMeshCamera meshCamera = [self meshCamera];
-        BKMeshLighting lighting = { _ambient, _diffuse, _specular, _specularPower };
-        int32_t status = BKMeshUniformsFill(&base, &meshCamera, (float)area.size.width, (float)area.size.height,
-                                            nearDistance, farDistance, lighting);
-        if (status != BKMeshCameraOK) {
-            [enc endEncoding];
-            BKMeshCameraStatusOK(status, error);
+    meshpass::Frame frame;
+    frame.camera = [self meshCamera];
+    frame.lighting = (BKMeshLighting){ _ambient, _diffuse, _specular, _specularPower };
+    frame.color = color.get();
+    frame.distance = distance.get();
+    frame.clear = clear ? 1 : 0;
+    frame.clearColor[0] = clearColor.x; frame.clearColor[1] = clearColor.y; frame.clearColor[2] = clearColor.z; frame.clearColor[3] = clearColor.w;
+    frame.area[0] = (int32_t)area.origin.x; frame.area[1] = (int32_t)area.origin.y;
+    frame.area[2] = (int32_t)area.size.width; frame.area[3] = (int32_t)area.size.height;
+    int32_t result;
+    {
+        std::unique_ptr<gpu::CommandList> list = gpu::BKGPUMetalCommandList(*_gpu, commandBuffer);
+        result = list ? _pass->encode(*list, frame, items.data(), items.size()) : (int32_t)meshpass::NoEncoder;
+    }   // the list ends its encoder here; the caller commits the command buffer
+    switch (result) {
+        case meshpass::Ok: return YES;
+        case meshpass::ZeroDirection: return BKMeshCameraStatusOK(BKMeshCameraZeroDirection, error);
+        case meshpass::UpParallel: return BKMeshCameraStatusOK(BKMeshCameraUpParallel, error);
+        case meshpass::ZeroFieldOfView: return BKMeshCameraStatusOK(BKMeshCameraZeroFieldOfView, error);
+        case meshpass::NoEncoder:
+            if (error) *error = BKMeshRenderError(35, @"The GPU could not start drawing the meshes.");
             return NO;
-        }
-
-        // Pass 0: solid meshes; pass 1: solid lines; pass 2: everything see-through,
-        // farthest first (meshes and lines mixed, so they blend in the right order).
-        NSArray *passes = @[opaque, opaqueLines, transparent];
-        for (NSUInteger p = 0; p < 3; p++) {
-            BOOL see = (p == 2);
-            [enc setDepthStencilState:see ? _transparentDepthState : _opaqueDepthState];
-            for (BKMeshDrawItem *item in passes[p]) {
-                if (item.pointObject) {
-                    // 2026-11-14: points, squares of pointSize pixels (flat colour, never culled).
-                    BKPointObject *pts = item.pointObject;
-                    BKMeshUniforms u = base;
-                    simd_float4x4 placement = pts.transform;
-                    BKMeshUniformsSetModel(&u, (const float *)&placement, 0);   // identity normal matrix
-                    BKMeshUniformsSetColor(&u, pts.color.x, pts.color.y, pts.color.z, pts.opacity);
-                    u.lit = 0;
-                    u.lineHalfWidth = (float)(0.5 * pts.pointSize);
-                    [enc setCullMode:MTLCullModeNone];
-                    [enc setTriangleFillMode:MTLTriangleFillModeFill];   // 2026-11-21: point squares are filled triangles
-                    [enc setRenderPipelineState:see ? transparentPointPipeline : opaquePointPipeline];
-                    [enc setVertexBuffer:[pts pointBuffer] offset:0 atIndex:0];
-                    [enc setVertexBytes:&u length:sizeof u atIndex:1];
-                    [enc setFragmentBytes:&u length:sizeof u atIndex:1];
-                    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:pts.pointCount * 6];
-                    continue;
-                }
-                if (item.lineObject) {
-                    BKLineObject *l = item.lineObject;
-                    BKMeshUniforms u = base;
-                    simd_float4x4 placement = l.transform;
-                    BKMeshUniformsSetModel(&u, (const float *)&placement, 0);   // identity normal matrix
-                    BKMeshUniformsSetColor(&u, l.color.x, l.color.y, l.color.z, l.opacity);
-                    u.lit = 0;
-                    u.lineHalfWidth = (float)(0.5 * l.lineWidth);
-                    [enc setCullMode:MTLCullModeNone];   // 2026-11-14: lines are never culled (as in OpenGL)
-                    [enc setTriangleFillMode:MTLTriangleFillModeFill];   // 2026-11-21: wide lines are filled triangles
-                    [enc setRenderPipelineState:see ? transparentLinePipeline : opaqueLinePipeline];
-                    [enc setVertexBuffer:[l pointBuffer] offset:0 atIndex:0];
-                    [enc setVertexBytes:&u length:sizeof u atIndex:1];
-                    [enc setFragmentBytes:&u length:sizeof u atIndex:1];
-                    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:l.segmentCount * 6];
-                    continue;
-                }
-                BKMeshObject *o = item.object;
-                BKMesh *mesh = o.mesh;
-                // 2026-11-14: per-object face culling and texture.
-                switch (o.faceCulling) {
-                    case BKMeshFaceCullingBack: [enc setCullMode:MTLCullModeBack]; break;
-                    case BKMeshFaceCullingFront: [enc setCullMode:MTLCullModeFront]; break;
-                    default: [enc setCullMode:MTLCullModeNone]; break;
-                }
-                // 2026-11-21: wireframe = the triangles' edges only (culling above still applies).
-                [enc setTriangleFillMode:o.wireframe ? MTLTriangleFillModeLines : MTLTriangleFillModeFill];
-                BOOL textured = NO;
-                if (o.textured) {
-                    BKMeshTexture *texture = o.texture;
-                    id<MTLTexture> gpuTexture = [texture textureOnDevice:_device];
-                    id<MTLBuffer> tcBuffer = [o textureCoordinateBufferOnDevice:_device];
-                    if (gpuTexture && tcBuffer) {
-                        textured = YES;
-                        [enc setVertexBuffer:tcBuffer offset:0 atIndex:2];
-                        [enc setFragmentTexture:gpuTexture atIndex:0];
-                        [enc setFragmentSamplerState:_samplers[(texture.interpolate ? 2 : 0) + (texture.repeat ? 1 : 0)] atIndex:0];
-                    }
-                }
-                BKMeshUniforms u = base;
-                // 2026-11-25 (M3): placement + normal matrix (inverse-transpose) + colour in plain C.
-                simd_float4x4 placement = o.transform;
-                BKMeshUniformsSetModel(&u, (const float *)&placement, 1);
-                BKMeshUniformsSetColor(&u, o.color.x, o.color.y, o.color.z, o.opacity);
-                u.useVertexColors = (o.useVertexColors && mesh.colors) ? 1 : 0;
-                u.hasNormals = mesh.normals ? 1 : 0;
-                u.lit = o.lit ? 1 : 0;
-                if (o.usesOwnMaterial) {
-                    u.ambient = o.ambient;
-                    u.diffuse = o.diffuse;
-                    u.specular = o.specular;
-                    u.specularPower = o.specularPower;
-                }
-                [enc setVertexBuffer:[o vertexBuffer] offset:0 atIndex:0];
-                [enc setVertexBytes:&u length:sizeof u atIndex:1];
-                [enc setFragmentBytes:&u length:sizeof u atIndex:1];
-                // SEE-THROUGH MESHES (2026-11-25): first a depth-only pass that keeps this mesh's
-                // NEAREST surface in each pixel, then the colour pass drawn only there.
-                // Why: without it the mesh's own triangles blend in the order they are stored. A
-                // surface from scan slices is stored slice by slice, so where far triangles come
-                // after near ones they were blended ON TOP: inner/back surfaces showed through in
-                // sharp-edged zones bounded by a slice plane that moved as the object turned (user
-                // report: AI dental skull at 45% opacity, "linear loss of detail" when rotating).
-                // Now each see-through mesh shows one clean layer, the same from every angle, over
-                // whatever is behind it (solid objects and farther see-through objects, drawn first).
-                // Textured meshes keep the old single pass: transparent texels must not hide what
-                // is behind them in the depth buffer.
-                BOOL twoPass = see && !textured;
-                if (twoPass) {
-                    [enc setRenderPipelineState:depthOnlyPipeline];
-                    [enc setDepthStencilState:_opaqueDepthState];   // test + write
-                    [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:mesh.triangleCount * 3
-                                     indexType:MTLIndexTypeUInt32 indexBuffer:[o indexBuffer] indexBufferOffset:0];
-                    [enc setDepthStencilState:_transparentNearestDepthState];
-                }
-                if (textured) [enc setRenderPipelineState:see ? transparentTexturedPipeline : opaqueTexturedPipeline];
-                else [enc setRenderPipelineState:see ? transparentPipeline : opaquePipeline];
-                [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:mesh.triangleCount * 3
-                                 indexType:MTLIndexTypeUInt32 indexBuffer:[o indexBuffer] indexBufferOffset:0];
-                if (twoPass) [enc setDepthStencilState:_transparentDepthState];   // back to the pass's own state
-            }
-        }
+        case meshpass::NoDepthTarget:
+            if (error) *error = BKMeshRenderError(42, @"Not enough GPU memory for the depth buffer.");
+            return NO;
+        default:
+            if (error) *error = BKMeshRenderError(41, @"The GPU could not prepare the mesh drawing programs.");
+            return NO;
     }
-    [enc endEncoding];
-    return YES;
 }
 
 - (BKRenderResult *)renderWithWidth:(NSUInteger)width height:(NSUInteger)height error:(NSError **)error

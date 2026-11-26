@@ -2,8 +2,10 @@
 //
 // Original BorosKit code written for this project; contains no third-party code.
 // Written 2026-11-25 by agent "vulkan-engine" (Vulkan engine kickoff, step M5; design:
-// VULKAN-ENGINE-KICKOFF.md section 2.2, refining VULKAN-PORT-PLAN.md section 6). INTERFACE ONLY: nothing
-// implements it yet. Next: VulkanDevice (step M6, CMake only), then MetalDevice (phase 2).
+// VULKAN-ENGINE-KICKOFF.md section 2.2, refining VULKAN-PORT-PLAN.md section 6).
+// Implemented by: VulkanDevice (Sources/BorosKitGPUVulkan, CMake only, milestone 1, 2026-11-26) and MetalDevice
+// (BKGPUMetal.mm in this target, SwiftPM, phase 2, 2026-11-26). First module on it: the mesh renderer
+// (BorosKitMeshRender/include/BKMeshPass.h). Compute pipelines are declared but not implemented yet (phase 4).
 //
 // PORTING NOTES (read first):
 //   - Plain C++17 + <cstdint> / <memory>. No Apple, Metal, Objective-C or Vulkan types or headers, so the
@@ -47,6 +49,9 @@
 
 #ifndef BK_GPU_H
 #define BK_GPU_H
+
+// C++ only. The guard keeps this header harmless inside the SwiftPM module, which C / Objective-C files may see.
+#ifdef __cplusplus
 
 #include <cstdint>
 #include <memory>
@@ -194,7 +199,7 @@ struct RenderDesc {
     Format depthFormat = Format::Depth32Float;
     DepthCompare depthCompare = DepthCompare::Less;
     bool depthWrite = true;
-    CullMode cull = CullMode::None;    // front face: counter-clockwise with y up
+    CullMode cull = CullMode::None;    // front face: counter-clockwise with y up (Metal: set per draw from the pipeline)
     bool wireframe = false;            // needs Limits::wireframe
     bool invariantPosition = false;    // vertex position bit-identical across pipelines (two-pass see-through)
     const SlotLayout *slots = nullptr;
@@ -298,4 +303,5 @@ Status makeVulkanDevice(const char *preferredName, std::unique_ptr<Device> *out)
 }  // namespace gpu
 }  // namespace boroskit
 
+#endif  // __cplusplus
 #endif  // BK_GPU_H

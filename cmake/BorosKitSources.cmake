@@ -64,6 +64,7 @@ set(BOROSKIT_CORE_C_SOURCES
 )
 
 set(BOROSKIT_CORE_CXX_SOURCES
+    Sources/BorosKitMeshRender/BKMeshPass.cpp     # 2026-11-26: mesh drawing on the shared GPU interface (phase 2)
     Sources/BorosKitMesh/BKMeshProcessingCore.cpp
     Sources/BorosKitMesh/BKSceneExportCore.cpp
 )
@@ -71,6 +72,7 @@ set(BOROSKIT_CORE_CXX_SOURCES
 # Header folders the cores include from (public include/ folders and the folders holding private core
 # headers such as BKMeshProcessingCore.h and BKShaderTypes.h).
 set(BOROSKIT_CORE_INCLUDE_DIRS
+    Sources/BorosKitGPU/include
     Sources/BorosKitVec/include
     Sources/BorosKitCore/include
     Sources/BorosKitDICOM/include
