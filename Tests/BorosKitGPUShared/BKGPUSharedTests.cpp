@@ -7,9 +7,12 @@
 #include "BKMeshDrawCore.h"
 #include "BKMeshPass.h"
 #include "BKMeshShaderTypes.h"
+#include "BKSurfacePass.h"     // 2026-11-26: surface extraction on the shared interface
+#include "BKRenderCore.h"      // the 16-bit storage of the scan (same as BKVolumeTexture)
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <memory>
 
 namespace bkshared {
@@ -478,6 +481,122 @@ int TestGoldenFeatures(Device &device, const char *referencesDir, const char *ou
         bk_golden_image_free(&ref);
         bk_golden_image_free(&refD);
     }
+    return failures;
+}
+
+// ---- Surface extraction (2026-11-26, phase 3/4 step 3) --------------------------------------------------------------
+
+namespace {
+struct SurfaceSink { BKGoldenMesh mesh; };
+BKSurfaceStatus CopySurface(void *context, uint32_t, const boroskit::surface::MeshView &view)
+{
+    BKGoldenMesh &m = static_cast<SurfaceSink *>(context)->mesh;
+    m.vertexCount = view.vertexCount;
+    m.triangleCount = view.triangleCount;
+    m.positions = (float *)std::malloc(12 * view.vertexCount + 4);
+    m.normals = (float *)std::malloc(12 * view.vertexCount + 4);
+    m.indices = (uint32_t *)std::malloc(12 * view.triangleCount + 4);
+    if (!m.positions || !m.normals || !m.indices) return BKSurfaceStatusOutOfMemory;
+    for (uint64_t v = 0; v < view.vertexCount; v++)
+        for (int a = 0; a < 3; a++) {
+            m.positions[3 * v + a] = view.positions[4 * v + a];
+            m.normals[3 * v + a] = view.normals[4 * v + a];
+        }
+    if (view.triangleCount) std::memcpy(m.indices, view.indices, 12 * view.triangleCount);
+    return BKSurfaceStatusOK;
+}
+}  // namespace
+
+int TestSurfacePass(Device &device, const char *referencesDir, const char *label, bool strict)
+{
+    BKGoldenVolume vol;
+    std::memset(&vol, 0, sizeof vol);
+    if (bk_golden_make_head_phantom(&vol) != 0) { std::printf("FAIL surface: phantom\n"); return 1; }
+    const size_t n = (size_t)vol.width * vol.height * vol.depth;
+    float lo = INFINITY, hi = -INFINITY;
+    for (size_t i = 0; i < n; i++) { lo = std::fmin(lo, vol.voxels[i]); hi = std::fmax(hi, vol.voxels[i]); }
+    BKRenderQuantization q = BKRenderQuantizationForRange(lo, hi, BKRenderAllIntegral(vol.voxels, n));
+    std::vector<uint16_t> steps(n);
+    BKRenderQuantizeToSteps(vol.voxels, n, q, steps.data());
+    std::vector<float> stepValues(steps.begin(), steps.end());   // for the CPU reference
+
+    int failures = 0;
+    TextureDesc td;
+    td.type = TextureType::Texture3D;
+    td.format = Format::R16Unorm;
+    td.width = vol.width; td.height = vol.height; td.depth = vol.depth;
+    td.usage = UsageSampled | UsageCopyDestination;
+    td.label = "surface test scan";
+    std::unique_ptr<Texture> scan = device.makeTexture(td, nullptr);
+    Status s = Status::Ok;
+    std::unique_ptr<CommandList> list = scan ? device.begin(&s) : nullptr;
+    if (!list || list->upload(*scan, steps.data(), vol.width * 2, vol.width * vol.height * 2, 0, vol.depth) != Status::Ok ||
+        device.submit(*list, true) != Status::Ok) {
+        std::printf("FAIL surface (%s): scan upload\n", label);
+        bk_golden_volume_free(&vol);
+        return 1;
+    }
+    boroskit::surface::SurfacePass pass(device);
+    BKSurfaceStatus st = pass.prepare();
+    if (st != BKSurfaceStatusOK) { std::printf("FAIL surface (%s): prepare (%d)\n", label, (int)st); bk_golden_volume_free(&vol); return 1; }
+
+    const std::string refs = referencesDir;
+    for (uint32_t i = 0; i < kBKGoldenSurfaceCaseCount; i++) {
+        const BKGoldenSurfaceCase &c = kBKGoldenSurfaceCases[i];
+        BKSurfacePlanRequest rq;
+        std::memset(&rq, 0, sizeof rq);
+        rq.volumeWidth = vol.width; rq.volumeHeight = vol.height; rq.volumeDepth = vol.depth;
+        rq.resolution = c.resolution;
+        rq.smoothingSigma = c.smoothing;
+        rq.sampling = c.manualSampling ? BK_SURFACE_SAMPLING_MANUAL : BK_SURFACE_SAMPLING_HARDWARE;
+        std::memcpy(rq.voxelToOutput, vol.voxelToPatient, sizeof rq.voxelToOutput);
+        float threshold = BKSurfaceThresholdToSteps(c.threshold, q.valueScale, q.valueOffset);
+        SurfaceSink sink;
+        std::memset(&sink, 0, sizeof sink);
+        boroskit::surface::Stats stats;
+        st = pass.extract(*scan, rq, &threshold, 1, CopySurface, &sink, &stats);
+        if (st != BKSurfaceStatusOK) { std::printf("SURFACE | %s | %s: FAIL extract (%d)\n", c.name, label, (int)st); failures++; bk_golden_mesh_free(&sink.mesh); continue; }
+        const BKGoldenMeshTolerance tol = { { vol.spacing[0], vol.spacing[1], vol.spacing[2] }, strict ? 0.0 : 1e-4, strict ? 0.0 : 1e-3 };
+        char text[256];
+        BKGoldenMesh ref;
+        std::memset(&ref, 0, sizeof ref);
+        if (bk_golden_read_mesh((refs + "/" + c.name + ".bkmesh").c_str(), &ref) != 0) {
+            std::printf("SURFACE | %s | FAIL: reference missing\n", c.name);
+            failures++;
+        } else {
+            BKGoldenMeshReport r = bk_golden_compare_meshes(&ref, &sink.mesh, tol);
+            bk_golden_describe_mesh_report(&r, text, sizeof text);
+            std::printf("SURFACE | %s | %s (SurfacePass, %llu vertices, %llu triangles) vs Metal reference: %s\n", c.name, label,
+                        (unsigned long long)sink.mesh.vertexCount, (unsigned long long)sink.mesh.triangleCount, text);
+            if (!r.pass) failures++;
+        }
+        bk_golden_mesh_free(&ref);
+        // CPU reference (double precision, one thread) where it applies: the voxel grid itself, no smoothing.
+        if (c.resolution == 1.0f && c.smoothing == 0.0f) {
+            BKSurfaceMeshData cpu;
+            std::memset(&cpu, 0, sizeof cpu);
+            if (BKSurfaceReferenceExtract(stepValues.data(), vol.width, vol.height, vol.depth, threshold, vol.voxelToPatient, &cpu) != BKSurfaceStatusOK) {
+                std::printf("SURFACE | %s | FAIL: CPU reference\n", c.name);
+                failures++;
+            } else {
+                SurfaceSink cs;
+                std::memset(&cs, 0, sizeof cs);
+                boroskit::surface::MeshView v;
+                v.positions = cpu.positions; v.normals = cpu.normals; v.indices = cpu.indices;
+                v.vertexCount = cpu.vertexCount; v.triangleCount = cpu.triangleCount;
+                CopySurface(&cs, 0, v);
+                const BKGoldenMeshTolerance cpuTol = { { vol.spacing[0], vol.spacing[1], vol.spacing[2] }, 1e-4, 1e-3 };
+                BKGoldenMeshReport r = bk_golden_compare_meshes(&cs.mesh, &sink.mesh, cpuTol);
+                bk_golden_describe_mesh_report(&r, text, sizeof text);
+                std::printf("SURFACE | %s | CPU reference vs %s: %s\n", c.name, label, text);
+                if (!r.pass) failures++;
+                bk_golden_mesh_free(&cs.mesh);
+            }
+            BKSurfaceMeshDataFree(&cpu);
+        }
+        bk_golden_mesh_free(&sink.mesh);
+    }
+    bk_golden_volume_free(&vol);
     return failures;
 }
 

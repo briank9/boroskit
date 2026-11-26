@@ -23,7 +23,7 @@
 #ifndef BK_SURFACE_SHADER_TYPES_H
 #define BK_SURFACE_SHADER_TYPES_H
 
-#ifndef __METAL_VERSION__
+#if !defined(__METAL_VERSION__) && !defined(BK_GLSL)   // C only (2026-11-26: GLSL includes this header too)
 #include <stdint.h>
 #include "BKGPUTypes.h"   // layout check macros (2026-11-25, vulkan-engine M2)
 typedef uint32_t bk_u32;
@@ -73,7 +73,7 @@ typedef uint32_t bk_u32;
     bk_u32 reserved0; \
     bk_u32 reserved1;
 
-#ifndef __METAL_VERSION__
+#if !defined(__METAL_VERSION__) && !defined(BK_GLSL)   // C only (2026-11-26: GLSL includes this header too)
 typedef struct BKSurfaceParams {
     BK_SURFACE_PARAM_FIELDS
 } BKSurfaceParams;
@@ -94,7 +94,9 @@ BK_GPU_ASSERT_OFFSET(BKSurfaceParams, reserved1, 332);
 
 // Turns the field list into a string literal for the shader source (two levels so the
 // macros inside, e.g. BK_SURFACE_MAX_BLUR_WEIGHTS, are expanded first).
+#ifndef BK_GLSL   // (GLSL has no variadic macros; it never needs the string)
 #define BK_SURFACE_STRINGIFY_(...) #__VA_ARGS__
 #define BK_SURFACE_STRINGIFY(...) BK_SURFACE_STRINGIFY_(__VA_ARGS__)
+#endif
 
 #endif

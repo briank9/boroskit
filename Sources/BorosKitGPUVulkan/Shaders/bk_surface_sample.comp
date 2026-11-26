@@ -1,0 +1,47 @@
+// BorosKitGPUVulkan: surface kernel 1 - scan -> 16-bit field at the grid points (twin of bk_surface_sample in
+// BKSurfaceShaderSource.mm). One thread per PAIR of grid points along x (each writes one 32-bit word).
+// Original BorosKit code written for this project; contains no third-party code. 2026-11-26, agent "vulkan-engine".
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "bk_surface_common.glsl"
+layout(std430, set = 0, binding = 1) writeonly buffer BKFieldOut { uint w[]; } bkFieldOut;
+
+// Value (in steps) at a voxel position. Manual path: 8 exact reads + interpolation in 32-bit float (the same
+// numbers on every GPU). Hardware path: the linear filter (needs SAMPLED_IMAGE_FILTER_LINEAR for R16_UNORM 3D).
+float bk_sample_steps(vec3 voxel)
+{
+    if (P.sampling == BK_SURFACE_SAMPLING_MANUAL) {
+        uvec3 last = uvec3(P.volumeSize[0], P.volumeSize[1], P.volumeSize[2]) - 1u;
+        voxel = clamp(voxel, vec3(0.0), vec3(last));
+        vec3 base = floor(voxel);
+        vec3 f = voxel - base;
+        uvec3 a = uvec3(base);
+        uvec3 b = min(a + 1u, last);
+        float c000 = bk_volume_read(uvec3(a.x, a.y, a.z)), c100 = bk_volume_read(uvec3(b.x, a.y, a.z));
+        float c010 = bk_volume_read(uvec3(a.x, b.y, a.z)), c110 = bk_volume_read(uvec3(b.x, b.y, a.z));
+        float c001 = bk_volume_read(uvec3(a.x, a.y, b.z)), c101 = bk_volume_read(uvec3(b.x, a.y, b.z));
+        float c011 = bk_volume_read(uvec3(a.x, b.y, b.z)), c111 = bk_volume_read(uvec3(b.x, b.y, b.z));
+        float c00 = mix(c000, c100, f.x), c10 = mix(c010, c110, f.x);
+        float c01 = mix(c001, c101, f.x), c11 = mix(c011, c111, f.x);
+        float c0 = mix(c00, c10, f.y), c1 = mix(c01, c11, f.y);
+        return mix(c0, c1, f.z) * 65535.0;
+    }
+    vec3 coord = (voxel + 0.5) * vec3(P.volumeSizeInv[0], P.volumeSizeInv[1], P.volumeSizeInv[2]);
+    return texture(sampler3D(bkVolume, bkSampler), coord).r * 65535.0;
+}
+
+void main()
+{
+    uvec3 gid = gl_GlobalInvocationID;
+    uint pairs = P.gridSize[3] / 2u;
+    if (gid.x >= pairs || gid.y >= P.gridSize[1] || gid.z >= P.gridSize[2]) return;
+    vec3 scale = vec3(P.gridToVoxel[0], P.gridToVoxel[1], P.gridToVoxel[2]);
+    uint word = 0u;
+    for (uint k = 0u; k < 2u; k++) {
+        uint x = 2u * gid.x + k;
+        if (x >= P.gridSize[0]) break;   // padding value of an odd-width row stays 0
+        float v = bk_sample_steps(vec3(x, gid.y, gid.z) * scale);
+        word |= uint(clamp(roundEven(v), 0.0, 65535.0)) << (16u * k);
+    }
+    bkFieldOut.w[(gid.z * P.gridSize[1] + gid.y) * pairs + gid.x] = word;
+}

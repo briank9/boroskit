@@ -111,4 +111,9 @@ set(BOROSKIT_GPU_VULKAN_SHADERS
     Sources/BorosKitGPUVulkan/Shaders/bk_test_scan_blocks.comp
     Sources/BorosKitGPUVulkan/Shaders/bk_test_scan_sums.comp
     Sources/BorosKitGPUVulkan/Shaders/bk_test_scan_add.comp
+    # 2026-11-26 (7.1 step 3): surface extraction (GLSL twins of BKSurfaceShaderSource.mm; BKSurfacePass)
+    Sources/BorosKitGPUVulkan/Shaders/bk_surface_sample.comp
+    Sources/BorosKitGPUVulkan/Shaders/bk_surface_blur.comp
+    Sources/BorosKitGPUVulkan/Shaders/bk_surface_classify.comp
+    Sources/BorosKitGPUVulkan/Shaders/bk_surface_emit.comp
 )

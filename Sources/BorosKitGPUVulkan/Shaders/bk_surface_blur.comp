@@ -1,0 +1,30 @@
+// BorosKitGPUVulkan: surface kernel 2 - one direction of the separable Gaussian, src -> dst, edges repeated
+// (twin of bk_surface_blur in BKSurfaceShaderSource.mm). One thread per pair of grid points.
+// Original BorosKit code written for this project; contains no third-party code. 2026-11-26, agent "vulkan-engine".
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "bk_surface_common.glsl"
+layout(std430, set = 0, binding = 1) readonly buffer BKSrc { uint w[]; } bkSrc;
+layout(std430, set = 0, binding = 2) writeonly buffer BKDst { uint w[]; } bkDst;
+void main()
+{
+    uvec3 gid = gl_GlobalInvocationID;
+    uint pairs = P.gridSize[3] / 2u;
+    if (gid.x >= pairs || gid.y >= P.gridSize[1] || gid.z >= P.gridSize[2]) return;
+    uint axis = P.blurAxis;
+    int last = int(P.gridSize[axis]) - 1;
+    uint word = 0u;
+    for (uint k = 0u; k < 2u; k++) {
+        uvec3 p = uvec3(2u * gid.x + k, gid.y, gid.z);
+        if (p.x >= P.gridSize[0]) break;
+        float acc = P.blurWeights[0] * float(BK_READ16(bkSrc.w, bk_index(p)));
+        for (uint o = 1u; o <= P.blurRadius; o++) {
+            uvec3 lo = p, hi = p;
+            lo[axis] = uint(max(int(p[axis]) - int(o), 0));
+            hi[axis] = uint(min(int(p[axis]) + int(o), last));
+            acc += P.blurWeights[o] * (float(BK_READ16(bkSrc.w, bk_index(lo))) + float(BK_READ16(bkSrc.w, bk_index(hi))));
+        }
+        word |= uint(clamp(roundEven(acc), 0.0, 65535.0)) << (16u * k);
+    }
+    bkDst.w[(gid.z * P.gridSize[1] + gid.y) * pairs + gid.x] = word;
+}

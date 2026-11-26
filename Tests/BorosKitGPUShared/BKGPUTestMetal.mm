@@ -5,6 +5,7 @@
 #import "BKMetalDevice.h"
 
 extern "C" NSString *BKMeshShaderSource(void);   // BorosKitMeshRender/BKMeshShaderSource.mm
+extern "C" NSString *BKSurfaceShaderSource(void); // BorosKitSurface/BKSurfaceShaderSource.mm
 
 namespace bkshared {
 
@@ -49,7 +50,9 @@ std::unique_ptr<boroskit::gpu::Device> MakeTestMetalDevice()
         "    uint3 l [[thread_position_in_threadgroup]], uint3 gs [[threads_per_threadgroup]]) {\n"
         "    uint idx = g.x * gs.x + l.x; if (idx < P.count) outValues[idx] += blockStarts[g.x]; }\n";
     id<MTLLibrary> scan = [mtl newLibraryWithSource:scanSource options:[BKMetalDevice shaderCompileOptions] error:&error];
-    if (!mesh || !triangle || !scan) { NSLog(@"BorosKit GPU tests: Metal library failed: %@", error); return nullptr; }
+    id<MTLLibrary> surface = [mtl newLibraryWithSource:BKSurfaceShaderSource() options:[BKMetalDevice shaderCompileOptions] error:&error];
+    if (!mesh || !triangle || !scan || !surface) { NSLog(@"BorosKit GPU tests: Metal library failed: %@", error); return nullptr; }
+    BKGPUMetalAddLibrary(*device, surface);   // 2026-11-26: bk_surface_* (BKSurfacePass)
     BKGPUMetalAddLibrary(*device, mesh);
     BKGPUMetalAddLibrary(*device, triangle);
     BKGPUMetalAddLibrary(*device, scan);

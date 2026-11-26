@@ -56,6 +56,12 @@ extern const FeatureGoldenCase kFeatureGoldenCases[kFeatureGoldenCaseCount];
 int TestGoldenFeatures(boroskit::gpu::Device &device, const char *referencesDir, const char *outDir, const char *label,
                        bool strict, bool record);
 
+// What (2026-11-26, phase 3/4 step 3): BKSurfacePass on this device - the three golden surface cases of the head
+// phantom (bone 300 HU, skin -500 HU, bone at half resolution + smoothing with manual sampling) compared with the
+// recorded Metal references (*.bkmesh; strict = zero tolerance, else 1e-4 voxel / 1e-3 normal) and, for the full-
+// resolution cases, with the double-precision CPU reference BKSurfaceReferenceExtract. Prints exact differences.
+int TestSurfacePass(boroskit::gpu::Device &device, const char *referencesDir, const char *label, bool strict);
+
 }  // namespace bkshared
 
 #endif

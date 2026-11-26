@@ -65,6 +65,15 @@
                                                 isStrict, record), 0);
 }
 
+// 2026-11-26: BKSurfacePass straight on the MetalDevice (the same code the Vulkan program runs).
+- (void)testSurfacePass
+{
+    if (![self haveDevice]) return;
+    const char *strict = getenv("BK_GOLDEN_STRICT");
+    XCTAssertEqual(bkshared::TestSurfacePass(*_device, [self referencesFolder].fileSystemRepresentation, "metal",
+                                             strict && strict[0] == '1'), 0);
+}
+
 - (void)testFeatureSceneRenders
 {
     if (![self haveDevice]) return;
