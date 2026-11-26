@@ -13,8 +13,12 @@
 #import "BKImageLayerRenderer.h"
 #import "BKDisplayShaderTypes.h"
 #import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
+#include "BKDisplayPass.h"   // 2026-11-26: the draw on the shared GPU interface (Vulkan plan 7.1 #6)
+#include "BKGPUMetal.h"
 
-extern NSString *BKDisplayShaderSource(void);
+extern "C" NSString *BKDisplayShaderSource(void);
+
+namespace bkgpu = boroskit::gpu;
 
 static NSString * const BKDisplayErrorDomain = @"BorosKitDisplay";
 
@@ -84,10 +88,12 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
 
 #pragma mark - BKImageLayerRenderer
 
+// 2026-11-26 (agent "vulkan-engine"): the draw itself is the backend-neutral DisplayPass (shared with the Vulkan
+// engine); this class keeps its API, its CPU-written textures and draws into the caller's encoder through the glue.
 @implementation BKImageLayerRenderer {
     id<MTLLibrary> _library;
-    NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *_pipelines; // per pixel format
-    NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *_blendPipelines; // same, alpha-blended (overlay)
+    std::unique_ptr<bkgpu::Device> _gpu;                          // MetalDevice over _device + _commandQueue
+    std::unique_ptr<boroskit::display::DisplayPass> _pass;
     id<MTLTexture> _imageTexture;
     id<MTLTexture> _lutTexture;      // 256 x 1 RGBA8, always valid (identity gray if no table)
 }
@@ -123,8 +129,16 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
         if (!_library)
             return nil;
         _commandQueue = [_device newCommandQueue];
-        _pipelines = [NSMutableDictionary dictionary];
-        _blendPipelines = [NSMutableDictionary dictionary];
+        if (!_commandQueue || bkgpu::makeMetalDevice(_device, _commandQueue, &_gpu) != bkgpu::Status::Ok ||
+            bkgpu::BKGPUMetalAddLibrary(*_gpu, _library) != bkgpu::Status::Ok) {
+            if (error) *error = BKDisplayError(1, @"The GPU interface could not be created");
+            return nil;
+        }
+        _pass.reset(new boroskit::display::DisplayPass(*_gpu));
+        if (_pass->prepare() != bkgpu::Status::Ok) {
+            if (error) *error = BKDisplayError(1, @"The display GPU programs could not be prepared");
+            return nil;
+        }
         _windowCenter = 40;
         _windowWidth = 400;
         _interpolation = BKImageInterpolationNearest;
@@ -142,35 +156,6 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
 // in the target with the fragment's alpha (colour = src * a + dst * (1 - a), the same as
 // OpenGL's GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA that Horos uses for fusion) and leaves the
 // target's alpha unchanged, so the finished picture stays opaque.
-- (nullable id<MTLRenderPipelineState>)pipelineForPixelFormat:(MTLPixelFormat)format blended:(BOOL)blended error:(NSError **)error
-{
-    NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *cache = blended ? _blendPipelines : _pipelines;
-    id<MTLRenderPipelineState> pipeline = cache[@(format)];
-    if (pipeline)
-        return pipeline;
-    MTLRenderPipelineDescriptor *desc = [[MTLRenderPipelineDescriptor alloc] init];
-    desc.vertexFunction = [_library newFunctionWithName:@"bk_display_vertex"];
-    desc.fragmentFunction = [_library newFunctionWithName:@"bk_display_fragment"];
-    desc.colorAttachments[0].pixelFormat = format;
-    if (blended) {
-        MTLRenderPipelineColorAttachmentDescriptor *c = desc.colorAttachments[0];
-        c.blendingEnabled = YES;
-        c.rgbBlendOperation = MTLBlendOperationAdd;
-        c.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-        c.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-        c.alphaBlendOperation = MTLBlendOperationAdd;
-        c.sourceAlphaBlendFactor = MTLBlendFactorZero;
-        c.destinationAlphaBlendFactor = MTLBlendFactorOne;
-    }
-    pipeline = [_device newRenderPipelineStateWithDescriptor:desc error:error];
-    if (pipeline)
-        cache[@(format)] = pipeline;
-    return pipeline;
-}
-
-// What: stores the image and uploads it as a 32-bit float texture; keeps the transform's
-// image size in sync. Why: full float precision on the GPU means window/level acts on
-// real CT values, like Horos' float pipeline, with no 8/16-bit pre-quantising.
 - (void)setImage:(nullable BKImage *)image
 {
     _image = image;
@@ -223,7 +208,7 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
 - (void)updateLUTTexture
 {
     uint8_t rgba[256 * 4];
-    const uint8_t *rgb = _colorTable.bytes;
+    const uint8_t *rgb = (const uint8_t *)_colorTable.bytes;
     for (int i = 0; i < 256; i++) {
         rgba[i * 4 + 0] = rgb ? rgb[i * 3 + 0] : (uint8_t)i;
         rgba[i * 4 + 1] = rgb ? rgb[i * 3 + 1] : (uint8_t)i;
@@ -310,24 +295,26 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
 {
     if (!_imageTexture)
         return YES;
-    id<MTLRenderPipelineState> pipeline = [self pipelineForPixelFormat:format blended:blended error:error];
-    if (!pipeline)
-        return NO;
     BKDisplayParams params = [self paramsWithScale:scale];
     if (blended) {
         params.bgR = params.bgG = params.bgB = params.bgA = 0; // outside the overlay: no change
     }
-    [encoder setRenderPipelineState:pipeline];
-    [encoder setFragmentTexture:_imageTexture atIndex:0];
-    [encoder setFragmentTexture:_lutTexture atIndex:1];
-    [encoder setFragmentBytes:&params length:sizeof(params) atIndex:0];
-    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    bkgpu::Format target;
+    if (!bkgpu::BKGPUMetalFormat(format, &target)) {
+        if (error) *error = BKDisplayError(4, @"Unsupported target pixel format");
+        return NO;
+    }
+    // Recorded through the shared interface into the caller's encoder (never ended here).
+    std::unique_ptr<bkgpu::CommandList> list = bkgpu::BKGPUMetalCommandListForEncoder(*_gpu, encoder);
+    std::unique_ptr<bkgpu::Texture> image = bkgpu::BKGPUMetalWrapTexture(*_gpu, _imageTexture);
+    std::unique_ptr<bkgpu::Texture> lut = bkgpu::BKGPUMetalWrapTexture(*_gpu, _lutTexture);
+    if (!list || !image || !lut || _pass->encode(*list, params, *image, *lut, target, blended) != bkgpu::Status::Ok) {
+        if (error) *error = BKDisplayError(2, @"Could not draw the image");
+        return NO;
+    }
     return YES;
 }
 
-// What: renders into a private texture, copies it to a CPU-visible buffer and waits.
-// Why: tests and exports need the pixels back; going through a buffer works on every
-// GPU type (unified or discrete) without platform-specific synchronisation.
 - (nullable NSData *)renderRGBA8WithWidth:(NSUInteger)width height:(NSUInteger)height
                                     scale:(CGFloat)scale error:(NSError **)error
 {

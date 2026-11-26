@@ -906,6 +906,13 @@ std::unique_ptr<RenderPipeline> VulkanDevice::makeRender(const RenderDesc &desc,
             b.srcColorBlendFactor = b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             b.dstColorBlendFactor = b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
             b.colorBlendOp = b.alphaBlendOp = VK_BLEND_OP_ADD;
+        } else if (t.straightOverKeepAlpha) {   // 2026-11-26: colour straight-alpha over, destination alpha kept
+            b.blendEnable = VK_TRUE;
+            b.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            b.colorBlendOp = b.alphaBlendOp = VK_BLEND_OP_ADD;
         }
     }
     VkPipelineColorBlendStateCreateInfo blend = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };

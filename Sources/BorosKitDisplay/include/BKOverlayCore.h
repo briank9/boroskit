@@ -26,6 +26,7 @@
 #ifndef BK_OVERLAY_CORE_H
 #define BK_OVERLAY_CORE_H
 
+#ifndef BK_GLSL   // 2026-11-26: GLSL (bk_overlay_*.vert/.frag) includes this header for BK_OVERLAY_PARAMS_FIELDS only
 #include "BKVec.h"
 #include "BKGPUTypes.h"   // bk_float2 + layout checks for the GPU blocks below (2026-11-25, vulkan-engine M2)
 #include <stdint.h>
@@ -48,6 +49,8 @@ BK_GPU_STATIC_ASSERT(sizeof(BKOverlayVertex) == 32, "BKOverlayVertex must stay 3
 BK_GPU_ASSERT_OFFSET(BKOverlayVertex, u, 8);
 BK_GPU_ASSERT_OFFSET(BKOverlayVertex, r, 16);
 
+#endif   // !BK_GLSL
+
 // The per-command GPU constants of the two overlay shaders (24 bytes; Vulkan: push constants).
 // Written ONCE as a field list (2026-11-25, vulkan-engine M2; it used to be typed twice by hand, in the
 // Metal source and in C): BKOverlayRenderer.mm pastes the same text into the Metal shader, and a GLSL
@@ -58,6 +61,7 @@ BK_GPU_ASSERT_OFFSET(BKOverlayVertex, r, 16);
     bk_float2 imageSize;  /* the command's image in pixels (texture coordinates are image pixels); 1, 1 if none */ \
     int32_t mode;         /* BKOverlayMode...: 0 solid, 1 image x colour, 2 mask x colour */ \
     int32_t opaque;       /* 1: alpha forced to 1 (BKOverlayCommand.ignoreAlpha) */
+#ifndef BK_GLSL
 typedef struct BKOverlayParams { BK_OVERLAY_PARAMS_FIELDS } BKOverlayParams;
 BK_GPU_STATIC_ASSERT(sizeof(BKOverlayParams) == 24, "BKOverlayParams must stay 24 bytes");
 BK_GPU_ASSERT_OFFSET(BKOverlayParams, imageSize, 8);
@@ -167,4 +171,5 @@ void BKOverlayRasterize(const BKOverlayList *list, float *rgba, uint32_t width, 
 }
 #endif
 
+#endif   // !BK_GLSL
 #endif

@@ -53,6 +53,7 @@ int main(int argc, char **argv)
         failures += bkshared::TestSurfacePass(*device, refs.c_str(), "vulkan", false);   // 2026-11-26: SurfacePass
         failures += bkshared::TestRaycastPass(*device, refs.c_str(), outDir.c_str(), "vulkan");   // 2026-11-26: RaycastPass
         failures += bkshared::TestReformatPass(*device, refs.c_str(), "vulkan", false);          // 2026-11-26: ReformatPass
+        failures += bkshared::Test2D(*device, refs.c_str(), "vulkan", false);                    // 2026-11-26: Display/OverlayPass
     }
     for (uint32_t i = 0; i < kBKGoldenMeshRenderCaseCount; i++) {
         std::string name = kBKGoldenMeshRenderCases[i].name;

@@ -104,7 +104,8 @@ let package = Package(
             // Render: BKVolumeScene/BKVolumeRenderer for the interactive 3D view (BKVolumeView),
             // so all on-screen views live in one UI module and Render stays UI-free.
             // Vec (2026-11-14): BKTextLayoutCore (plain-C label placement) uses BKVec2f.
-            dependencies: ["BorosKitCore", "BorosKitRender", "BorosKitVec"],
+            // GPU (2026-11-26, Vulkan plan 7.1 #6): DisplayPass / OverlayPass run on the shared GPU interface.
+            dependencies: ["BorosKitCore", "BorosKitRender", "BorosKitVec", "BorosKitGPU"],
             path: "Sources/BorosKitDisplay",
             publicHeadersPath: "include",
             cSettings: [

@@ -93,6 +93,14 @@
     XCTAssertEqual(bkshared::TestReformatPass(*_device, [self referencesFolder].fileSystemRepresentation, "metal", strict && strict[0] == '1'), 0);
 }
 
+// 2026-11-26 (7.1 #6): DisplayPass + OverlayPass straight on the MetalDevice (strict with BK_GOLDEN_STRICT=1).
+- (void)test2DPasses
+{
+    if (![self haveDevice]) return;
+    const char *strict = getenv("BK_GOLDEN_STRICT");
+    XCTAssertEqual(bkshared::Test2D(*_device, [self referencesFolder].fileSystemRepresentation, "metal", strict && strict[0] == '1'), 0);
+}
+
 - (void)testFeatureSceneRenders
 {
     if (![self haveDevice]) return;

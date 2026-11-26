@@ -168,6 +168,8 @@ if(BK_VULKAN_INCLUDE_DIR AND BK_GLSLC AND BK_SPIRV_VAL)
                     -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitRender"
                     -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitRender/include"
                     -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitVec/include"
+                    -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitDisplay"
+                    -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitDisplay/include"
                     -MD -MF "${spv}.d" -o "${spv}" "${CMAKE_CURRENT_SOURCE_DIR}/${shader}"
             COMMAND ${BK_SPIRV_VAL} --target-env vulkan1.2 "${spv}"
             DEPENDS "${shader}" DEPFILE "${spv}.d"
@@ -231,7 +233,9 @@ if(BK_VULKAN_INCLUDE_DIR AND BK_GLSLC AND BK_SPIRV_VAL)
             Sources/BorosKitMeshRender/BKMeshShaderSource.mm
             Sources/BorosKitSurface/BKSurfaceShaderSource.mm    # 2026-11-26: surface MSL (SurfacePass on Metal)
             Sources/BorosKitRender/BKShaderSource.mm            # 2026-11-26: volume MSL (RaycastPass on Metal)
-            Sources/BorosKitRender/BKReformatShaderSource.mm)   # 2026-11-26: reformat MSL (ReformatPass on Metal)
+            Sources/BorosKitRender/BKReformatShaderSource.mm    # 2026-11-26: reformat MSL (ReformatPass on Metal)
+            Sources/BorosKitDisplay/BKDisplayShaderSource.mm    # 2026-11-26: 2D display MSL (DisplayPass on Metal)
+            Sources/BorosKitDisplay/BKOverlayShaderSource.mm)   # 2026-11-26: 2D overlay MSL (OverlayPass on Metal)
         target_include_directories(boroskit_gpu_metal PUBLIC Sources/BorosKitGPU/include)
         target_compile_options(boroskit_gpu_metal PRIVATE -fobjc-arc)
         target_link_libraries(boroskit_gpu_metal PUBLIC boroskit_gpu boroskit_cores "-framework Metal" "-framework Foundation")

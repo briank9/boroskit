@@ -8,6 +8,8 @@ extern "C" NSString *BKMeshShaderSource(void);   // BorosKitMeshRender/BKMeshSha
 extern "C" NSString *BKSurfaceShaderSource(void); // BorosKitSurface/BKSurfaceShaderSource.mm
 extern "C" NSString *BKVolumeShaderSource(void);  // BorosKitRender/BKShaderSource.mm (2026-11-26: ray caster)
 extern "C" NSString *BKReformatShaderSource(void); // BorosKitRender/BKReformatShaderSource.mm (2026-11-26: reformat)
+extern "C" NSString *BKDisplayShaderSource(void);  // BorosKitDisplay/BKDisplayShaderSource.mm (2026-11-26: 2D display)
+extern "C" NSString *BKOverlayShaderSource(void);  // BorosKitDisplay/BKOverlayShaderSource.mm (2026-11-26: 2D overlay)
 
 namespace bkshared {
 
@@ -61,6 +63,11 @@ std::unique_ptr<boroskit::gpu::Device> MakeTestMetalDevice()
     id<MTLLibrary> reformat = [mtl newLibraryWithSource:BKReformatShaderSource() options:[BKMetalDevice shaderCompileOptions] error:&error];
     if (!reformat) { NSLog(@"BorosKit GPU tests: reformat library failed: %@", error); return nullptr; }
     BKGPUMetalAddLibrary(*device, reformat);  // 2026-11-26: bk_curved_reformat (BKReformatPass)
+    for (NSString *src in @[ BKDisplayShaderSource(), BKOverlayShaderSource() ]) {   // 2026-11-26: DisplayPass / OverlayPass
+        id<MTLLibrary> lib = [mtl newLibraryWithSource:src options:[BKMetalDevice shaderCompileOptions] error:&error];
+        if (!lib) { NSLog(@"BorosKit GPU tests: 2D library failed: %@", error); return nullptr; }
+        BKGPUMetalAddLibrary(*device, lib);
+    }
     BKGPUMetalAddLibrary(*device, mesh);
     BKGPUMetalAddLibrary(*device, triangle);
     BKGPUMetalAddLibrary(*device, scan);

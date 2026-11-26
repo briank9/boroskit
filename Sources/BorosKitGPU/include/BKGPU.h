@@ -196,6 +196,9 @@ struct ColorTarget {
     Format format = Format::RGBA8Unorm;
     bool writeEnabled = true;          // false = depth-only pass (see-through meshes, 2026-11-25)
     bool premultipliedOver = false;    // blend: one, one-minus-source-alpha (premultiplied "over")
+    // 2026-11-26 (2D display layers): colour = src * srcAlpha + dst * (1 - srcAlpha) (straight alpha "over"),
+    // alpha = dst alpha (kept). Used by DisplayPass for see-through image layers. Ignored with premultipliedOver.
+    bool straightOverKeepAlpha = false;
 };
 
 struct RenderDesc {

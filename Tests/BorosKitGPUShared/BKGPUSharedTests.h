@@ -89,6 +89,20 @@ struct ReformatCaseOutput {
     uint32_t width = 0, height = 0;
     std::vector<float> values, cpu;
 };
+// What (2026-11-26, Vulkan plan 7.1 #6): the 2D passes. RenderDisplayCases: DisplayPass pictures 96 x 80 -
+// display_overlay_layer (linear grey + see-through label layer, = the BKGoldenTests reference) and display_lut_invert
+// (nearest, colour table, inverted; live comparison only). RenderOverlayScene: OverlayPass draws the golden overlay
+// scene (BKDisplayGoldenScene.h, incl. the segmentation label picture) over black; also vs the CPU rasteriser.
+// Test2D: both vs the recorded Metal references (strict = zero tolerance).
+struct RenderedPicture {
+    std::string name;
+    uint32_t width = 0, height = 0;
+    std::vector<uint8_t> rgba;
+};
+bool RenderDisplayCases(boroskit::gpu::Device &device, std::vector<RenderedPicture> *out);
+bool RenderOverlayScene(boroskit::gpu::Device &device, RenderedPicture *out, uint32_t *cpuDiffering, float *cpuWorst);
+int Test2D(boroskit::gpu::Device &device, const char *referencesDir, const char *label, bool strict);
+
 bool RenderReformatCases(boroskit::gpu::Device &device, std::vector<ReformatCaseOutput> *out);
 int TestReformatPass(boroskit::gpu::Device &device, const char *referencesDir, const char *label, bool strict);
 

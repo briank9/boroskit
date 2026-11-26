@@ -13,6 +13,9 @@
 #include "../../Sources/BorosKitRender/BKRaycastPass.h"
 #include "../../Sources/BorosKitRender/BKRenderParamsCore.h"
 #include "../../Sources/BorosKitRender/BKReformatPass.h"   // 2026-11-26 (7.1 #5)
+#include "../../Sources/BorosKitDisplay/BKDisplayPass.h"   // 2026-11-26 (7.1 #6)
+#include "../../Sources/BorosKitDisplay/BKOverlayPass.h"
+#include "BKDisplayGoldenScene.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -891,6 +894,175 @@ int TestReformatPass(Device &device, const char *referencesDir, const char *labe
         std::printf("REFORMAT | %s | %s (ReformatPass) vs Metal reference: %s; CPU reference vs %s: max %.4g HU\n", o.name.c_str(), label,
                     text, label, worst);
         if (!r.pass || !(worst < 0.5)) failures++;
+        bk_golden_image_free(&ref);
+    }
+    return failures;
+}
+
+// ---- 2D display + overlay (2026-11-26, Vulkan plan 7.1 #6) ----------------------------------------------------------
+
+namespace {
+std::unique_ptr<Texture> Texture2D(Device &device, Format format, uint32_t w, uint32_t h, const void *data, uint32_t bytesPerTexel,
+                                   uint32_t usage = UsageSampled | UsageCopyDestination)
+{
+    TextureDesc td;
+    td.format = format;
+    td.width = w;
+    td.height = h;
+    td.usage = usage;
+    std::unique_ptr<Texture> t = device.makeTexture(td, nullptr);
+    if (!t || !data) return t;
+    std::unique_ptr<CommandList> list = device.begin(nullptr);
+    if (!list || list->upload(*t, data, w * bytesPerTexel, w * h * bytesPerTexel, 0, 1) != Status::Ok || device.submit(*list, true) != Status::Ok)
+        return nullptr;
+    return t;
+}
+
+bool ReadTarget(Device &device, Texture &target, uint32_t w, uint32_t h, std::vector<uint8_t> *rgba)
+{
+    std::unique_ptr<Buffer> rb = device.makeBuffer((uint64_t)w * h * 4, Memory::Readback, UsageStorage, nullptr);
+    std::unique_ptr<CommandList> list = rb ? device.begin(nullptr) : nullptr;
+    if (!list || list->readback(target, *rb) != Status::Ok || device.submit(*list, true) != Status::Ok) return false;
+    const uint8_t *p = (const uint8_t *)rb->map();
+    rgba->assign(p, p + (size_t)w * h * 4);
+    rb->unmap();
+    return true;
+}
+
+BKDisplayParams FitParams()
+{
+    // BKViewTransformMakeFit(64, 48, 96, 80) at scale 1: zoom 1.5, the image centred vertically (4 px bands).
+    BKDisplayParams p;
+    std::memset(&p, 0, sizeof p);
+    p.m_a = (float)(1.0 / 1.5); p.m_d = (float)(1.0 / 1.5); p.m_ty = (float)(-4.0 / 1.5);
+    p.scale = 1;
+    p.imageWidth = BKGoldenDisplayW; p.imageHeight = BKGoldenDisplayH;
+    p.bgA = 1;
+    return p;
+}
+}  // namespace
+
+bool RenderDisplayCases(Device &device, std::vector<RenderedPicture> *out)
+{
+    out->clear();
+    boroskit::display::DisplayPass pass(device);
+    if (pass.prepare() != Status::Ok) return false;
+    std::vector<float> grey(BKGoldenDisplayW * BKGoldenDisplayH);
+    BKGoldenDisplayGrey(grey.data());
+    std::vector<uint8_t> labels(BKGoldenDisplayW * BKGoldenDisplayH * 4);
+    BKGoldenLabelPicture(labels.data(), BKGoldenDisplayW, BKGoldenDisplayH);
+    uint8_t identity[256 * 4], table[256 * 4], rgb[768];
+    bk_golden_color_table(rgb);
+    for (int i = 0; i < 256; i++) {
+        identity[4 * i] = identity[4 * i + 1] = identity[4 * i + 2] = (uint8_t)i; identity[4 * i + 3] = 255;
+        table[4 * i] = rgb[3 * i]; table[4 * i + 1] = rgb[3 * i + 1]; table[4 * i + 2] = rgb[3 * i + 2]; table[4 * i + 3] = 255;
+    }
+    std::unique_ptr<Texture> greyTex = Texture2D(device, Format::R32Float, BKGoldenDisplayW, BKGoldenDisplayH, grey.data(), 4);
+    std::unique_ptr<Texture> labelTex = Texture2D(device, Format::RGBA8Unorm, BKGoldenDisplayW, BKGoldenDisplayH, labels.data(), 4);
+    std::unique_ptr<Texture> lutId = Texture2D(device, Format::RGBA8Unorm, 256, 1, identity, 4);
+    std::unique_ptr<Texture> lutTable = Texture2D(device, Format::RGBA8Unorm, 256, 1, table, 4);
+    if (!greyTex || !labelTex || !lutId || !lutTable) return false;
+    for (int c = 0; c < 2; c++) {
+        std::unique_ptr<Texture> target = Texture2D(device, Format::RGBA8Unorm, 96, 80, nullptr, 4, UsageRenderTarget | UsageCopySource);
+        std::unique_ptr<CommandList> list = target ? device.begin(nullptr) : nullptr;
+        if (!list) return false;
+        PassTargets pt;
+        pt.color[0] = target.get();
+        pt.clearValue[0][3] = 1;   // opaque black background (as BKImageLayerRenderer clears)
+        if (list->beginPass(pt) != Status::Ok) return false;
+        BKDisplayParams base = FitParams();
+        if (c == 0) {   // display_overlay_layer: linear grey + see-through colour layer (BKGoldenTests reference)
+            base.windowLower = -800; base.windowWidth = 1600; base.interpolation = 1;
+            BKDisplayParams layer = FitParams();
+            layer.windowLower = -160; layer.windowWidth = 400;
+            layer.colorImage = 1; layer.useImageAlpha = 1;
+            layer.bgA = 0;
+            if (pass.encode(*list, base, *greyTex, *lutId, Format::RGBA8Unorm, false) != Status::Ok ||
+                pass.encode(*list, layer, *labelTex, *lutId, Format::RGBA8Unorm, true) != Status::Ok) return false;
+        } else {         // display_lut_invert: nearest, colour table, inverted (live comparison only)
+            base.windowLower = -500; base.windowWidth = 1200; base.useColorTable = 1; base.invert = 1;
+            if (pass.encode(*list, base, *greyTex, *lutTable, Format::RGBA8Unorm, false) != Status::Ok) return false;
+        }
+        list->endPass();
+        if (device.submit(*list, true) != Status::Ok) return false;
+        RenderedPicture o;
+        o.name = c == 0 ? "display_overlay_layer" : "display_lut_invert";
+        o.width = 96; o.height = 80;
+        if (!ReadTarget(device, *target, 96, 80, &o.rgba)) return false;
+        out->push_back(std::move(o));
+    }
+    return true;
+}
+
+bool RenderOverlayScene(Device &device, RenderedPicture *out, uint32_t *cpuDiffering, float *cpuWorst)
+{
+    const uint32_t W = BKGoldenOverlayWidth, H = BKGoldenOverlayHeight;
+    BKOverlayList *l = BKOverlayListCreate();
+    BKGoldenOverlayScene(l);
+    bool ok = false;
+    do {
+        boroskit::display::OverlayPass pass(device);
+        if (pass.prepare() != Status::Ok) break;
+        std::unique_ptr<Texture> target = Texture2D(device, Format::RGBA8Unorm, W, H, nullptr, 4, UsageRenderTarget | UsageCopySource);
+        std::unique_ptr<Buffer> vertices = pass.makeVertices(l, nullptr);
+        std::vector<std::unique_ptr<Texture>> images;
+        std::unique_ptr<CommandList> up = device.begin(nullptr);
+        if (!target || !vertices || !up || pass.makeImages(l, *up, &images) != Status::Ok || device.submit(*up, true) != Status::Ok) break;
+        std::vector<Texture *> raw;
+        for (auto &t : images) raw.push_back(t.get());
+        std::unique_ptr<CommandList> list = device.begin(nullptr);
+        PassTargets pt;
+        pt.color[0] = target.get();
+        pt.clearValue[0][3] = 1;   // opaque black, as the golden test's texture
+        if (!list || list->beginPass(pt) != Status::Ok ||
+            pass.encode(*list, l, *vertices, raw.data(), (uint32_t)raw.size(), Format::RGBA8Unorm, W, H) != Status::Ok) break;
+        list->endPass();
+        if (device.submit(*list, true) != Status::Ok) break;
+        out->name = "overlay_scene";
+        out->width = W; out->height = H;
+        if (!ReadTarget(device, *target, W, H, &out->rgba)) break;
+        // The CPU reference rasteriser (black, opaque background).
+        std::vector<float> cpu((size_t)W * H * 4, 0.0f);
+        for (uint32_t i = 0; i < W * H; i++) cpu[i * 4 + 3] = 1;
+        BKOverlayRasterize(l, cpu.data(), W, H);
+        uint32_t off = 0;
+        float worst = 0;
+        for (size_t i = 0; i < cpu.size(); i++) {
+            float d = std::fabs(out->rgba[i] / 255.0f - std::fmin(std::fmax(cpu[i], 0.0f), 1.0f));
+            if (d > 2.5f / 255.0f) off++;
+            worst = std::fmax(worst, d);
+        }
+        *cpuDiffering = off;
+        *cpuWorst = worst;
+        ok = true;
+    } while (false);
+    BKOverlayListFree(l);
+    return ok;
+}
+
+int Test2D(Device &device, const char *referencesDir, const char *label, bool strict)
+{
+    int failures = 0;
+    const std::string refs = referencesDir;
+    std::vector<RenderedPicture> pics;
+    if (!RenderDisplayCases(device, &pics)) { std::printf("DISPLAY | %s | FAIL: could not render\n", label); return 1; }
+    RenderedPicture ov;
+    uint32_t off = 0;
+    float worst = 0;
+    if (!RenderOverlayScene(device, &ov, &off, &worst)) { std::printf("OVERLAY | %s | FAIL: could not render\n", label); return failures + 1; }
+    std::printf("OVERLAY | overlay_scene | %s vs CPU rasteriser: %u of %u channel values beyond 2.5/255 (worst %.3f)\n", label, off,
+                ov.width * ov.height * 4, worst);
+    pics.push_back(ov);
+    for (const RenderedPicture &p : pics) {
+        BKGoldenImage ref;
+        std::memset(&ref, 0, sizeof ref);
+        if (bk_golden_read_pam((refs + "/" + p.name + ".rgba.pam").c_str(), &ref) != 0) continue;   // live-only case
+        BKGoldenImage mine = { p.width, p.height, 4, BKGoldenFormatU8, (void *)p.rgba.data() };
+        BKGoldenImageReport r = bk_golden_compare_images(&ref, &mine, strict ? BKGoldenImageTolerance{ 0, 0 } : bk_golden_tolerance_u8());
+        char text[256];
+        bk_golden_describe_image_report(&r, text, sizeof text);
+        std::printf("2D | %s | %s vs Metal reference: %s\n", p.name.c_str(), label, text);
+        if (!r.pass) failures++;
         bk_golden_image_free(&ref);
     }
     return failures;

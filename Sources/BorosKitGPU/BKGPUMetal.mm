@@ -108,6 +108,9 @@ struct MetalShared {
 class MetalCommandList final : public CommandList {
 public:
     MetalCommandList(MetalShared *shared, id<MTLCommandBuffer> cb, bool external) : shared_(shared), cb_(cb), external_(external) {}
+    // 2026-11-26: a list INSIDE a caller's render pass (its encoder); draws only, the encoder is never ended here.
+    MetalCommandList(MetalShared *shared, id<MTLRenderCommandEncoder> encoder)
+        : shared_(shared), cb_(nil), external_(true), externalEncoder_(true), render_(encoder) {}
     ~MetalCommandList() override { endBlit(); endCompute(); endPass(); }
 
     id<MTLCommandBuffer> commandBuffer() const { return cb_; }
@@ -207,7 +210,7 @@ public:
     // clearDepth and not stored, viewport = scissor = the drawing area, no culling, counter-clockwise front faces.
     Status beginPass(const PassTargets &targets) override
     {
-        if (render_ || targets.colorCount > 2 || (targets.colorCount == 0 && !targets.depth)) return Status::InvalidArgument;
+        if (render_ || externalEncoder_ || targets.colorCount > 2 || (targets.colorCount == 0 && !targets.depth)) return Status::InvalidArgument;
         endBlit();
         endCompute();
         MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -304,7 +307,8 @@ public:
 
     void endPass() override
     {
-        if (render_) { [render_ endEncoding]; render_ = nil; }
+        if (render_ && !externalEncoder_) [render_ endEncoding];   // a caller's encoder is ended by the caller
+        render_ = nil;
     }
 
     void timestamp(uint32_t) override {}
@@ -330,6 +334,7 @@ private:
     MetalShared *shared_;
     id<MTLCommandBuffer> cb_;
     bool external_;
+    bool externalEncoder_ = false;
     id<MTLRenderCommandEncoder> render_;
     id<MTLBlitCommandEncoder> blit_;
     id<MTLComputeCommandEncoder> compute_;
@@ -460,6 +465,14 @@ public:
                 d.colorAttachments[i].sourceAlphaBlendFactor = MTLBlendFactorOne;
                 d.colorAttachments[i].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
                 d.colorAttachments[i].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+            } else if (t.straightOverKeepAlpha) {   // 2026-11-26: BKImageLayerRenderer's overlay-layer blend
+                d.colorAttachments[i].blendingEnabled = YES;
+                d.colorAttachments[i].rgbBlendOperation = MTLBlendOperationAdd;
+                d.colorAttachments[i].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+                d.colorAttachments[i].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                d.colorAttachments[i].alphaBlendOperation = MTLBlendOperationAdd;
+                d.colorAttachments[i].sourceAlphaBlendFactor = MTLBlendFactorZero;
+                d.colorAttachments[i].destinationAlphaBlendFactor = MTLBlendFactorOne;
             }
             if (!t.writeEnabled) d.colorAttachments[i].writeMask = MTLColorWriteMaskNone;
         }
@@ -526,7 +539,7 @@ private:
         std::string key = std::string(desc.vertex.name) + "|" + desc.fragment.name + "|" + std::to_string(desc.colorCount);
         for (uint32_t i = 0; i < desc.colorCount; i++)
             key += "|" + std::to_string((int)desc.color[i].format) + std::to_string(desc.color[i].premultipliedOver) +
-                   std::to_string(desc.color[i].writeEnabled);
+                   std::to_string(desc.color[i].straightOverKeepAlpha) + std::to_string(desc.color[i].writeEnabled);
         key += "|" + std::to_string(desc.hasDepth ? (int)desc.depthFormat : -1);
         auto found = states_.find(key);
         if (found != states_.end()) return found->second;
@@ -601,6 +614,13 @@ std::unique_ptr<Buffer> BKGPUMetalWrapBuffer(Device &device, id<MTLBuffer> buffe
     return std::unique_ptr<Buffer>(new MetalBuffer(buffer));
 }
 
+std::unique_ptr<CommandList> BKGPUMetalCommandListForEncoder(Device &device, id<MTLRenderCommandEncoder> encoder)
+{
+    MetalDevice *m = dynamic_cast<MetalDevice *>(&device);
+    if (!m || !encoder) return nullptr;
+    return std::unique_ptr<CommandList>(new MetalCommandList(m->shared(), encoder));
+}
+
 std::unique_ptr<CommandList> BKGPUMetalCommandList(Device &device, id<MTLCommandBuffer> commandBuffer)
 {
     MetalDevice *m = dynamic_cast<MetalDevice *>(&device);
@@ -626,5 +646,14 @@ id<MTLDevice> BKGPUMetalDevice(Device &device)
     return m ? m->mtlDevice() : nil;
 }
 
+}  // namespace gpu
+}  // namespace boroskit
+
+namespace boroskit {
+namespace gpu {
+bool BKGPUMetalFormat(MTLPixelFormat format, Format *out)
+{
+    return out && FromMetal(format, out);
+}
 }  // namespace gpu
 }  // namespace boroskit

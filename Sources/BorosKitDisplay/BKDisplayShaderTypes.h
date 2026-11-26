@@ -25,7 +25,7 @@
 #ifndef BK_DISPLAY_SHADER_TYPES_H
 #define BK_DISPLAY_SHADER_TYPES_H
 
-#ifndef __METAL_VERSION__
+#if !defined(__METAL_VERSION__) && !defined(BK_GLSL)   // (2026-11-26: GLSL reads the field list too)
 #include <stdint.h>
 #include "BKGPUTypes.h"   // layout check macros (2026-11-25, vulkan-engine M2)
 typedef int32_t bk_i32;   // the shader declares bk_i32 as int (also 32 bits)
@@ -42,7 +42,7 @@ typedef int32_t bk_i32;   // the shader declares bk_i32 as int (also 32 bits)
     bk_i32 useImageAlpha;            /* 1 = keep a colour picture's own alpha (see-through overlay layer) */ \
     float bgR; float bgG; float bgB; float bgA;
 
-#ifndef __METAL_VERSION__
+#if !defined(__METAL_VERSION__) && !defined(BK_GLSL)   // (2026-11-26: GLSL reads the field list too)
 typedef struct BKDisplayParams { BK_DISPLAY_PARAMS_FIELDS } BKDisplayParams;
 // The layout promise above, checked by the compiler.
 BK_GPU_STATIC_ASSERT(sizeof(BKDisplayParams) == 80, "BKDisplayParams must stay 80 bytes (see PORTING NOTES)");
@@ -55,7 +55,9 @@ BK_GPU_ASSERT_OFFSET(BKDisplayParams, bgR, 64);
 BK_GPU_ASSERT_OFFSET(BKDisplayParams, bgA, 76);
 #endif
 
+#ifndef BK_GLSL
 #define BKD_STRINGIFY_(...) #__VA_ARGS__
 #define BKD_STRINGIFY(...) BKD_STRINGIFY_(__VA_ARGS__)
+#endif
 
 #endif

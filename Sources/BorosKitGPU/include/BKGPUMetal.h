@@ -47,9 +47,14 @@ std::unique_ptr<Texture> BKGPUMetalWrapTexture(Device &device, id<MTLTexture> te
 std::unique_ptr<Buffer> BKGPUMetalWrapBuffer(Device &device, id<MTLBuffer> buffer);
 // What: a CommandList that records into `commandBuffer`; the caller commits it (Device::submit is not used).
 std::unique_ptr<CommandList> BKGPUMetalCommandList(Device &device, id<MTLCommandBuffer> commandBuffer);
+// What (2026-11-26): a CommandList that draws into a caller's render pass (already begun, its viewport / targets
+// set). Only setScissor / draw are valid; endPass and the list's destruction never end the caller's encoder.
+std::unique_ptr<CommandList> BKGPUMetalCommandListForEncoder(Device &device, id<MTLRenderCommandEncoder> encoder);
 
 // What: the Metal object behind an interface object made by a MetalDevice (nil for others).
 id<MTLTexture> BKGPUMetalTexture(Texture &texture);
+// What (2026-11-26): the BKGPU.h format of a Metal pixel format (false = not one BKGPU.h names).
+bool BKGPUMetalFormat(MTLPixelFormat format, Format *out);
 id<MTLBuffer> BKGPUMetalBuffer(Buffer &buffer);
 id<MTLDevice> BKGPUMetalDevice(Device &device);
 

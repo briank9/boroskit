@@ -66,6 +66,8 @@ set(BOROSKIT_CORE_C_SOURCES
 
 set(BOROSKIT_CORE_CXX_SOURCES
     Sources/BorosKitMeshRender/BKMeshPass.cpp     # 2026-11-26: mesh drawing on the shared GPU interface (phase 2)
+    Sources/BorosKitDisplay/BKDisplayPass.cpp     # 2026-11-26: 2D image display on the shared GPU interface (7.1 #6)
+    Sources/BorosKitDisplay/BKOverlayPass.cpp     # 2026-11-26: 2D overlay engine on the shared GPU interface (7.1 #6)
     Sources/BorosKitRender/BKReformatPass.cpp     # 2026-11-26: curved reformat on the shared GPU interface (7.1 #5)
     Sources/BorosKitRender/BKRaycastPass.cpp      # 2026-11-26: volume ray caster on the shared GPU interface (7.1 #4b)
     Sources/BorosKitSurface/BKSurfacePass.cpp     # 2026-11-26: surface extraction on the shared GPU interface (7.1 step 3)
@@ -127,4 +129,9 @@ set(BOROSKIT_GPU_VULKAN_SHADERS
     Sources/BorosKitGPUVulkan/Shaders/bk_classify_bricks.comp
     # 2026-11-26 (7.1 #5): curved reformat (shared body BKReformatShaderBodies.h; BKReformatPass)
     Sources/BorosKitGPUVulkan/Shaders/bk_curved_reformat.comp
+    # 2026-11-26 (7.1 #6): 2D display + overlay (shared bodies BKDisplayShaderBodies.h / BKOverlayShaderBodies.h)
+    Sources/BorosKitGPUVulkan/Shaders/bk_display_vertex.vert
+    Sources/BorosKitGPUVulkan/Shaders/bk_display_fragment.frag
+    Sources/BorosKitGPUVulkan/Shaders/bk_overlay_vertex.vert
+    Sources/BorosKitGPUVulkan/Shaders/bk_overlay_fragment.frag
 )

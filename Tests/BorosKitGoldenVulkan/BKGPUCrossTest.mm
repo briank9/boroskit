@@ -70,6 +70,61 @@ static int CompareRaycasts(const std::vector<bkshared::RaycastCaseOutput> m[2], 
     return failures;
 }
 
+// What (2026-11-26, 7.1 #5 / #6): Vulkan vs Metal, live: the 2D pictures (u8 tolerance) and the curved reformats
+// (1 HU / 0.5 %); one side-by-side PNG of the 2D pictures (Metal | Vulkan | difference x 40).
+static int Compare2DAndReformat(const std::vector<bkshared::RenderedPicture> &m, const std::vector<bkshared::RenderedPicture> &v,
+                                const std::vector<bkshared::ReformatCaseOutput> &mr, const std::vector<bkshared::ReformatCaseOutput> &vr,
+                                const std::string &outDir)
+{
+    int failures = 0;
+    if (m.size() != v.size() || mr.size() != vr.size()) { std::printf("FAIL: 2D / reformat case lists differ\n"); return 1; }
+    for (size_t i = 0; i < m.size(); i++) {
+        BKGoldenImage a = { m[i].width, m[i].height, 4, BKGoldenFormatU8, (void *)m[i].rgba.data() };
+        BKGoldenImage b = { v[i].width, v[i].height, 4, BKGoldenFormatU8, (void *)v[i].rgba.data() };
+        BKGoldenImageReport r = bk_golden_compare_images(&a, &b, bk_golden_tolerance_u8());
+        char text[256];
+        bk_golden_describe_image_report(&r, text, sizeof text);
+        std::printf("CROSS | %s | Vulkan vs Metal: %s\n", m[i].name.c_str(), text);
+        if (!r.pass) failures++;
+    }
+    for (size_t i = 0; i < mr.size(); i++) {
+        BKGoldenImage a = { mr[i].width, mr[i].height, 1, BKGoldenFormatF32, (void *)mr[i].values.data() };
+        BKGoldenImage b = { vr[i].width, vr[i].height, 1, BKGoldenFormatF32, (void *)vr[i].values.data() };
+        BKGoldenImageReport r = bk_golden_compare_images(&a, &b, BKGoldenImageTolerance{ 1.0, 0.005 });
+        char text[256];
+        bk_golden_describe_image_report(&r, text, sizeof text);
+        std::printf("CROSS | %s | Vulkan vs Metal: %s\n", mr[i].name.c_str(), text);
+        if (!r.pass) failures++;
+    }
+    const uint32_t s = 3, gap = 6;
+    uint32_t W = 0, H = 0;
+    for (const bkshared::RenderedPicture &a : m) { W = std::max(W, a.width); H += a.height * s + gap; }
+    const uint32_t OW = 3 * W * s + 2 * gap;
+    std::vector<uint8_t> img((size_t)OW * H * 4, 255);
+    uint32_t y0 = 0;
+    for (size_t i = 0; i < m.size(); i++) {
+        const bkshared::RenderedPicture &a = m[i], &b = v[i];
+        for (uint32_t panel = 0; panel < 3; panel++)
+            for (uint32_t y = 0; y < a.height; y++)
+                for (uint32_t x = 0; x < a.width; x++) {
+                    const uint8_t *p = &a.rgba[(y * a.width + x) * 4], *q = &b.rgba[(y * a.width + x) * 4];
+                    for (uint32_t sy = 0; sy < s; sy++)
+                        for (uint32_t sx = 0; sx < s; sx++) {
+                            uint8_t *o = &img[((size_t)(y0 + y * s + sy) * OW + panel * (W * s + gap) + x * s + sx) * 4];
+                            for (int k = 0; k < 3; k++) {
+                                if (panel == 2) { int d = std::abs((int)p[k] - (int)q[k]) * 40; o[k] = (uint8_t)(d > 255 ? 255 : d); }
+                                else o[k] = (panel ? q : p)[k];
+                            }
+                            o[3] = 255;
+                        }
+                }
+        y0 += a.height * s + gap;
+    }
+    std::string png = outDir + "/display_overlay_metal_vs_vulkan.png";
+    if (bk_png_write_rgba8(png.c_str(), img.data(), OW, H) == 0) std::printf("picture: %s\n", png.c_str());
+    return failures;
+}
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
@@ -90,6 +145,15 @@ int main(int argc, char **argv)
         for (int m = 0; m < 2; m++)
             if (!bkshared::RenderRaycastCases(*metal, m != 0, &mRay[m])) { std::printf("FAIL: ray casting on Metal\n"); failures++; }
         failures += bkshared::TestReformatPass(*metal, refs, "metal", true);   // 2026-11-26: Metal strict
+        failures += bkshared::Test2D(*metal, refs, "metal", true);             // 2026-11-26: Metal strict
+        std::vector<bkshared::RenderedPicture> m2D, v2D;
+        std::vector<bkshared::ReformatCaseOutput> mRef, vRef;
+        {
+            bkshared::RenderedPicture o; uint32_t off; float worst;
+            if (!bkshared::RenderDisplayCases(*metal, &m2D) || !bkshared::RenderOverlayScene(*metal, &o, &off, &worst) ||
+                !bkshared::RenderReformatCases(*metal, &mRef)) { std::printf("FAIL: 2D / reformat on Metal\n"); failures++; }
+            m2D.push_back(o);
+        }
         std::vector<uint8_t> mRGBA, vRGBA;
         std::vector<float> mDist, vDist;
         if (!bkshared::RenderFeatureScene(*metal, &mRGBA, &mDist)) { std::printf("FAIL: feature scene on Metal\n"); failures++; }
@@ -106,6 +170,10 @@ int main(int argc, char **argv)
             failures += bkshared::TestSurfacePass(*vulkan, refs, "vulkan", false);
             for (int m = 0; m < 2; m++)
                 if (!bkshared::RenderRaycastCases(*vulkan, m != 0, &vRay[m])) { std::printf("FAIL: ray casting on Vulkan\n"); failures++; }
+            bkshared::RenderedPicture o; uint32_t off; float worst;
+            if (!bkshared::RenderDisplayCases(*vulkan, &v2D) || !bkshared::RenderOverlayScene(*vulkan, &o, &off, &worst) ||
+                !bkshared::RenderReformatCases(*vulkan, &vRef)) { std::printf("FAIL: 2D / reformat on Vulkan\n"); failures++; }
+            v2D.push_back(o);
             if (!bkshared::RenderFeatureScene(*vulkan, &vRGBA, &vDist)) { std::printf("FAIL: feature scene on Vulkan\n"); failures++; }
         }
         if (mRGBA.size() == vRGBA.size() && !mRGBA.empty()) {
@@ -145,6 +213,7 @@ int main(int argc, char **argv)
             failures++;
         }
         failures += CompareRaycasts(mRay, vRay, outDir);
+        failures += Compare2DAndReformat(m2D, v2D, mRef, vRef, outDir);
         std::printf("validation messages: %d errors, %d warnings\n", messages.errors, messages.warnings);
         if (messages.errors || messages.warnings) failures++;
         std::printf("%s Metal + Vulkan cross test\n", failures ? "FAILED" : "PASSED");
