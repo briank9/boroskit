@@ -13,6 +13,7 @@
 
 #import "BKMeshRenderer.h"
 #import "BKMeshShaderTypes.h"
+#import "BKVecSimd.h"         // 2026-11-25: simd_float4x4 -> bk_float4x4 (GPU block matrices, BKGPUTypes.h)
 #import "BKVolumeTexture.h"   // BKRenderErrorDomain
 #import "BKMeshDrawCore.h"    // 2026-11-14: culling / texture / point rules (plain C)
 #import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
@@ -864,8 +865,8 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                     // 2026-11-14: points, squares of pointSize pixels (flat colour, never culled).
                     BKPointObject *pts = item.pointObject;
                     BKMeshUniforms u = base;
-                    u.model = pts.transform;
-                    u.normalMatrix = matrix_identity_float4x4;
+                    u.model = BKFloat4x4FromSimd(pts.transform);
+                    u.normalMatrix = BKFloat4x4FromSimd(matrix_identity_float4x4);
                     u.color = simd_make_float4(pts.color, MIN(MAX(pts.opacity, 0.0f), 1.0f));
                     u.lit = 0;
                     u.lineHalfWidth = (float)(0.5 * pts.pointSize);
@@ -881,8 +882,8 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                 if (item.lineObject) {
                     BKLineObject *l = item.lineObject;
                     BKMeshUniforms u = base;
-                    u.model = l.transform;
-                    u.normalMatrix = matrix_identity_float4x4;
+                    u.model = BKFloat4x4FromSimd(l.transform);
+                    u.normalMatrix = BKFloat4x4FromSimd(matrix_identity_float4x4);
                     u.color = simd_make_float4(l.color, MIN(MAX(l.opacity, 0.0f), 1.0f));
                     u.lit = 0;
                     u.lineHalfWidth = (float)(0.5 * l.lineWidth);
@@ -918,11 +919,11 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                     }
                 }
                 BKMeshUniforms u = base;
-                u.model = o.transform;
+                u.model = BKFloat4x4FromSimd(o.transform);
                 simd_float3x3 linear = simd_matrix(o.transform.columns[0].xyz, o.transform.columns[1].xyz, o.transform.columns[2].xyz);
                 simd_float3x3 nm = simd_determinant(linear) != 0 ? simd_transpose(simd_inverse(linear)) : linear;
-                u.normalMatrix = simd_matrix(simd_make_float4(nm.columns[0], 0), simd_make_float4(nm.columns[1], 0),
-                                             simd_make_float4(nm.columns[2], 0), simd_make_float4(0, 0, 0, 1));
+                u.normalMatrix = BKFloat4x4FromSimd(simd_matrix(simd_make_float4(nm.columns[0], 0), simd_make_float4(nm.columns[1], 0),
+                                             simd_make_float4(nm.columns[2], 0), simd_make_float4(0, 0, 0, 1)));
                 u.color = simd_make_float4(o.color, MIN(MAX(o.opacity, 0.0f), 1.0f));
                 u.useVertexColors = (o.useVertexColors && mesh.colors) ? 1 : 0;
                 u.hasNormals = mesh.normals ? 1 : 0;

@@ -14,9 +14,10 @@
 #define BK_CLIP_PLANES_H
 
 #import "N3Geometry.h"
-
-// A box needs 6 planes; VTK's volume mappers also accept at most 6.
-#define BK_MAX_CLIP_PLANES 6
+// BK_MAX_CLIP_PLANES (6: a box needs 6 planes; VTK's volume mappers also accept at most 6) moved
+// 2026-11-25 (vulkan-engine M2) into BorosKitVec's plain-C BKGPUTypes.h, because it sizes an array in
+// the GPU parameter block and that header must not pull in this Objective-C / N3 header.
+#include "BKGPUTypes.h"
 
 #ifdef __cplusplus
 extern "C" {

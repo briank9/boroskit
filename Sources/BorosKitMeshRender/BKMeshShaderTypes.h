@@ -42,11 +42,15 @@
 #ifndef BK_MESH_SHADER_TYPES_H
 #define BK_MESH_SHADER_TYPES_H
 
-#include <simd/simd.h>
+// 2026-11-25 (vulkan-engine M2): plain C now - the types come from BorosKitVec's BKGPUTypes.h instead of
+// Apple <simd/simd.h>. bk_mesh_float4 is the same type as simd_float4 with clang; bk_mesh_float4x4 is
+// BorosKit's own column-major struct (same bytes as simd_float4x4): Objective-C glue converts it with
+// BKFloat4x4FromSimd (BKVecSimd.h). The Metal shader source defines the same two names as float4 / float4x4.
 #include <stdint.h>
+#include "BKGPUTypes.h"
 
-typedef simd_float4   bk_mesh_float4;
-typedef simd_float4x4 bk_mesh_float4x4;
+typedef bk_float4   bk_mesh_float4;
+typedef bk_float4x4 bk_mesh_float4x4;
 
 #define BK_MESH_UNIFORM_FIELDS \
     bk_mesh_float4x4 model;        /* object -> patient mm (the object's placement) */ \
@@ -84,6 +88,27 @@ typedef struct BKMeshGPUVertex {
     float normal[3];     // zero if the mesh has no normals
     float color[4];      // per-vertex RGBA 0..1 (white if the mesh has no colours)
 } BKMeshGPUVertex;
+
+// The layout promises above, checked by the compiler (2026-11-25, vulkan-engine M2).
+BK_GPU_STATIC_ASSERT(sizeof(BKMeshUniforms) == 272, "BKMeshUniforms must stay 272 bytes (see PORTING NOTES)");
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, model, 0);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, normalMatrix, 64);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, cameraPosition, 128);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, cameraRight, 144);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, cameraUp, 160);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, cameraForward, 176);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, color, 192);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, halfWidth, 208);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, nearDistance, 216);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, ambient, 224);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, projection, 240);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, lit, 252);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, viewportWidth, 256);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, lineHalfWidth, 264);
+BK_GPU_ASSERT_OFFSET(BKMeshUniforms, paddingForAlignment, 268);
+BK_GPU_STATIC_ASSERT(sizeof(BKMeshGPUVertex) == 40, "BKMeshGPUVertex must stay 40 bytes (10 floats)");
+BK_GPU_ASSERT_OFFSET(BKMeshGPUVertex, normal, 12);
+BK_GPU_ASSERT_OFFSET(BKMeshGPUVertex, color, 24);
 
 #define BK_MESH_STRINGIFY_(...) #__VA_ARGS__
 #define BK_MESH_STRINGIFY(...) BK_MESH_STRINGIFY_(__VA_ARGS__)

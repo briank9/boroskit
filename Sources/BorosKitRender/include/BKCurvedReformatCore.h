@@ -46,6 +46,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "BKHeightBandCore.h"   // BKHeightBandInside (the cut-off test, 2026-11-25)
+#include "BKGPUTypes.h"         // layout check macros (2026-11-25, vulkan-engine M2)
 
 #ifdef __cplusplus
 extern "C" {
@@ -94,6 +95,13 @@ typedef enum {
 typedef struct BKReformatParams {
     BK_REFORMAT_PARAMS_FIELDS
 } BKReformatParams;
+// Layout pins (2026-11-25, vulkan-engine M2): 20 four-byte scalars, field n at 4 * n.
+BK_GPU_STATIC_ASSERT(sizeof(BKReformatParams) == 80, "BKReformatParams must stay 80 bytes");
+BK_GPU_ASSERT_OFFSET(BKReformatParams, outOfBoundsValue, 20);
+BK_GPU_ASSERT_OFFSET(BKReformatParams, volumeWide, 36);
+BK_GPU_ASSERT_OFFSET(BKReformatParams, rowCentre, 48);
+BK_GPU_ASSERT_OFFSET(BKReformatParams, bandEnabled, 64);
+BK_GPU_ASSERT_OFFSET(BKReformatParams, bandOutsideValue, 76);
 
 // What: one column's frame, 3 x float4 in memory: the voxel position of the column's middle
 // (row rowCentre, slab slabCentre), and the voxel step for one row down and one slab sample.
@@ -105,6 +113,10 @@ typedef struct {
     float row[4];
     float slab[4];
 } BKReformatFrame;
+// 3 x 16 bytes; the shader reads it as float4 columns (2026-11-25, vulkan-engine M2).
+BK_GPU_STATIC_ASSERT(sizeof(BKReformatFrame) == 48, "BKReformatFrame must stay 48 bytes");
+BK_GPU_ASSERT_OFFSET(BKReformatFrame, row, 16);
+BK_GPU_ASSERT_OFFSET(BKReformatFrame, slab, 32);
 
 // What: radiographK for a slab sampled every `slabStepMm` mm (strength 0.75 = Boros' default
 // CPRRadiographStrength; <= 0 means 0.75).

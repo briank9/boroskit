@@ -25,6 +25,7 @@
 
 #ifndef __METAL_VERSION__
 #include <stdint.h>
+#include "BKGPUTypes.h"   // layout check macros (2026-11-25, vulkan-engine M2)
 typedef uint32_t bk_u32;
 #endif
 
@@ -76,6 +77,19 @@ typedef uint32_t bk_u32;
 typedef struct BKSurfaceParams {
     BK_SURFACE_PARAM_FIELDS
 } BKSurfaceParams;
+// Layout pins (2026-11-25, vulkan-engine M2). std430 storage buffer only: in std140 the scalar arrays
+// would get a 16-byte stride and every offset below would move.
+BK_GPU_STATIC_ASSERT(sizeof(BKSurfaceParams) == 336, "BKSurfaceParams must stay 336 bytes");
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, normalMatrix, 64);
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, gridToVoxel, 112);
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, volumeSizeInv, 128);
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, blurWeights, 144);
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, gridSize, 272);
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, volumeSize, 288);
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, thresholdSteps, 304);
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, source, 308);
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, blurRadius, 324);
+BK_GPU_ASSERT_OFFSET(BKSurfaceParams, reserved1, 332);
 #endif
 
 // Turns the field list into a string literal for the shader source (two levels so the

@@ -27,6 +27,7 @@
 #define BK_OVERLAY_CORE_H
 
 #include "BKVec.h"
+#include "BKGPUTypes.h"   // bk_float2 + layout checks for the GPU blocks below (2026-11-25, vulkan-engine M2)
 #include <stdint.h>
 #include <stddef.h>
 
@@ -43,6 +44,25 @@ typedef struct {
     float u, v;
     float r, g, b, a;
 } BKOverlayVertex;
+BK_GPU_STATIC_ASSERT(sizeof(BKOverlayVertex) == 32, "BKOverlayVertex must stay 32 bytes (8 floats)");
+BK_GPU_ASSERT_OFFSET(BKOverlayVertex, u, 8);
+BK_GPU_ASSERT_OFFSET(BKOverlayVertex, r, 16);
+
+// The per-command GPU constants of the two overlay shaders (24 bytes; Vulkan: push constants).
+// Written ONCE as a field list (2026-11-25, vulkan-engine M2; it used to be typed twice by hand, in the
+// Metal source and in C): BKOverlayRenderer.mm pastes the same text into the Metal shader, and a GLSL
+// shader pastes it into a push-constant block. bk_float2 is 8-byte aligned in C, MSL and std430, so
+// the offsets 0 / 8 / 16 / 20 are the same in all three.
+#define BK_OVERLAY_PARAMS_FIELDS \
+    bk_float2 viewSize;   /* drawing area in pixels (vertex positions are view pixels, y down) */ \
+    bk_float2 imageSize;  /* the command's image in pixels (texture coordinates are image pixels); 1, 1 if none */ \
+    int32_t mode;         /* BKOverlayMode...: 0 solid, 1 image x colour, 2 mask x colour */ \
+    int32_t opaque;       /* 1: alpha forced to 1 (BKOverlayCommand.ignoreAlpha) */
+typedef struct BKOverlayParams { BK_OVERLAY_PARAMS_FIELDS } BKOverlayParams;
+BK_GPU_STATIC_ASSERT(sizeof(BKOverlayParams) == 24, "BKOverlayParams must stay 24 bytes");
+BK_GPU_ASSERT_OFFSET(BKOverlayParams, imageSize, 8);
+BK_GPU_ASSERT_OFFSET(BKOverlayParams, mode, 16);
+BK_GPU_ASSERT_OFFSET(BKOverlayParams, opaque, 20);
 
 // How a command's triangles are coloured.
 enum {

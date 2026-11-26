@@ -9,7 +9,7 @@
 //
 // ---- PORTING NOTES (future Vulkan backend) -------------------------------------------
 // Layout rules (std430-compatible, so GLSL can declare the identical struct):
-//  - only 16-byte vectors (bk_float4 = simd_float4 / float4 / vec4) first, then 4-byte
+//  - only 16-byte vectors (bk_float4 = BKGPUTypes.h in C / float4 / vec4) first, then 4-byte
 //    scalars (float, uint32_t, int32_t). No float3 (12 bytes in std430 but 16 in C/Metal),
 //    no float3x3 (a matrix is stored as an array of float4 columns), no bool.
 //  - 3D quantities use .xyz of a float4; the 4th component is unused and set to 0.
@@ -27,11 +27,11 @@
 #ifndef BK_SHADER_TYPES_H
 #define BK_SHADER_TYPES_H
 
-#include <simd/simd.h>
+// 2026-11-25 (vulkan-engine M2): plain C now. bk_float4 and BK_MAX_CLIP_PLANES come from BorosKitVec's
+// BKGPUTypes.h instead of Apple <simd/simd.h> + BKClipPlanes.h (which pulled in the LGPL N3Geometry.h).
+// With clang bk_float4 is the same type as simd_float4, so the Objective-C glue is unchanged.
 #include <stdint.h>
-#include "BKClipPlanes.h"   // BK_MAX_CLIP_PLANES (shared with the plain-C plane math)
-
-typedef simd_float4   bk_float4;   // 16 bytes / 16-byte alignment in C, Metal and std430
+#include "BKGPUTypes.h"   // bk_float4 (16 bytes / 16-byte alignment in C, Metal and std430), BK_MAX_CLIP_PLANES
 
 // Field list (order matters: 16-byte vectors first, then 4-byte scalars, so there is
 // no hidden padding that one compiler might lay out differently from the other).
@@ -115,11 +115,37 @@ typedef struct BKRenderParams {
 
 // Boros 6 (2026-11-24, vr-colour-fusion): the size is pinned so a field added without its padding is caught at
 // compile time (std430 needs the explicit layout; CPU == Metal alone proves nothing about Vulkan).
-#ifdef __cplusplus
-static_assert(sizeof(BKRenderParams) == 592, "BKRenderParams must stay 592 bytes (std430 layout, see PORTING NOTES)");
-#else
-_Static_assert(sizeof(BKRenderParams) == 592, "BKRenderParams must stay 592 bytes (std430 layout, see PORTING NOTES)");
-#endif
+// 2026-11-25 (vulkan-engine M2): every 16-byte vector boundary and the start of each scalar group is pinned
+// too, so a GLSL std430 copy of the field list can be checked against these numbers.
+BK_GPU_STATIC_ASSERT(sizeof(BKRenderParams) == 592, "BKRenderParams must stay 592 bytes (std430 layout, see PORTING NOTES)");
+BK_GPU_ASSERT_OFFSET(BKRenderParams, patientToVoxelColumns, 0);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, patientToVoxelTranslation, 48);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, volumeSize, 64);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, boxMin, 80);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, boxMax, 96);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, cameraPosition, 112);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, cameraRight, 128);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, cameraUp, 144);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, cameraForward, 160);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, slabPoint, 176);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, slabNormal, 192);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, clipPoint, 208);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, clipNormal, 224);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, brickGrid, 240);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, clipPlanes, 256);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, blendPatientToVoxelColumns, 352);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, blendPatientToVoxelTranslation, 400);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, blendVolumeSize, 416);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, viewWidth, 432);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, specularPower, 492);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, width, 496);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, mode, 504);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, clipPlaneCount, 528);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, valuesOnly, 540);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, blendValueScale, 544);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, useBlend, 564);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, colorUsesTable, 580);
+BK_GPU_ASSERT_OFFSET(BKRenderParams, reserved1, 588);
 
 // Turns the field list above into a string literal for the shader source.
 // Two levels are needed so the macro is expanded before it is stringified.

@@ -15,9 +15,13 @@
 //   fragment: vec4 c = color; if (mode == 1) c *= texture(image, uv / textureSize(image, 0));
 //             if (mode == 2) c.a *= texture(image, uv / textureSize(image, 0)).r;
 //             if (opaque != 0) c.a = 1; out = vec4(c.rgb * c.a, c.a);
+// 2026-11-25 (vulkan-engine M2): BKOverlayParams is no longer typed here by hand - its field list
+// BK_OVERLAY_PARAMS_FIELDS (BKOverlayCore.h) is pasted in, the same text the C side uses.
+#define BKO_STR_(...) #__VA_ARGS__
+#define BKO_STR(...) BKO_STR_(__VA_ARGS__)
 static NSString *BKOverlayShaderSource(void)
 {
-    return @R"METAL(
+    const char *head = R"METAL(
 #include <metal_stdlib>
 using namespace metal;
 
@@ -26,13 +30,12 @@ struct BKOverlayVertexIn {          // = BKOverlayVertex (32 bytes)
     float2 uv;
     float4 color;
 };
-
-struct BKOverlayParams {            // per command
-    float2 viewSize;
-    float2 imageSize;
-    int mode;                       // 0 solid, 1 image x colour, 2 mask x colour
-    int opaque;                     // 1: alpha forced to 1
-};
+)METAL";
+    // The names the shared field list uses, in Metal (C: BKGPUTypes.h / <stdint.h>).
+    const char *params = "typedef float2 bk_float2;\n"
+                         "typedef int int32_t;\n"
+                         "struct BKOverlayParams { " BKO_STR(BK_OVERLAY_PARAMS_FIELDS) " };\n";
+    const char *body = R"METAL(
 
 struct BKOverlayVaryings {
     float4 position [[position]];
@@ -67,14 +70,8 @@ fragment float4 bk_overlay_fragment(BKOverlayVaryings in [[stage_in]],
     return float4(c.rgb * c.a, c.a);
 }
 )METAL";
+    return [NSString stringWithFormat:@"%s%s%s", head, params, body];
 }
-
-typedef struct {
-    float viewSize[2];
-    float imageSize[2];
-    int32_t mode;
-    int32_t opaque;
-} BKOverlayParamsCPU;
 
 @implementation BKOverlayRenderer {
     id<MTLLibrary> _library;
@@ -157,11 +154,15 @@ typedef struct {
             sc = (MTLScissorRect){ (NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0) };
         }
         [encoder setScissorRect:sc];
-        BKOverlayParamsCPU p = { { (float)width, (float)height }, { 1, 1 }, cmd->mode, cmd->ignoreAlpha };
+        BKOverlayParams p;   // the shared GPU block (BKOverlayCore.h)
+        p.viewSize = bk_make_float2((float)width, (float)height);
+        p.imageSize = bk_make_float2(1, 1);
+        p.mode = cmd->mode;
+        p.opaque = cmd->ignoreAlpha;
         id<MTLTexture> tex = _white;
         if (cmd->mode != BKOverlayModeSolid && cmd->image >= 0 && (uint32_t)cmd->image < ni) {
             tex = textures[cmd->image];
-            p.imageSize[0] = (float)im[cmd->image].width; p.imageSize[1] = (float)im[cmd->image].height;
+            p.imageSize = bk_make_float2((float)im[cmd->image].width, (float)im[cmd->image].height);
         } else {
             p.mode = BKOverlayModeSolid;
         }

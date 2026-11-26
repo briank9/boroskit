@@ -27,6 +27,7 @@
 
 #ifndef __METAL_VERSION__
 #include <stdint.h>
+#include "BKGPUTypes.h"   // layout check macros (2026-11-25, vulkan-engine M2)
 typedef int32_t bk_i32;   // the shader declares bk_i32 as int (also 32 bits)
 #endif
 
@@ -44,7 +45,14 @@ typedef int32_t bk_i32;   // the shader declares bk_i32 as int (also 32 bits)
 #ifndef __METAL_VERSION__
 typedef struct BKDisplayParams { BK_DISPLAY_PARAMS_FIELDS } BKDisplayParams;
 // The layout promise above, checked by the compiler.
-_Static_assert(sizeof(BKDisplayParams) == 80, "BKDisplayParams must stay 80 bytes (see PORTING NOTES)");
+BK_GPU_STATIC_ASSERT(sizeof(BKDisplayParams) == 80, "BKDisplayParams must stay 80 bytes (see PORTING NOTES)");
+// Offsets too (2026-11-25, vulkan-engine M2): all 4-byte scalars, so field n is at 4 * n.
+BK_GPU_ASSERT_OFFSET(BKDisplayParams, scale, 24);
+BK_GPU_ASSERT_OFFSET(BKDisplayParams, windowLower, 36);
+BK_GPU_ASSERT_OFFSET(BKDisplayParams, interpolation, 44);
+BK_GPU_ASSERT_OFFSET(BKDisplayParams, useImageAlpha, 60);
+BK_GPU_ASSERT_OFFSET(BKDisplayParams, bgR, 64);
+BK_GPU_ASSERT_OFFSET(BKDisplayParams, bgA, 76);
 #endif
 
 #define BKD_STRINGIFY_(...) #__VA_ARGS__

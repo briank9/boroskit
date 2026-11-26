@@ -17,6 +17,13 @@ fail=0
 for f in $(find Sources -name '*.c' | sort); do
   out=$(clang -std=c99 -pedantic -Werror -fno-modules -fsyntax-only -H $INC "$f" 2>&1)
   st=$?
+  # 2026-11-25 (vulkan-engine M2): again with the plain-struct GPU types (BKGPUTypes.h), i.e. what GCC /
+  # plain MSVC see: proves no core uses clang-only vector arithmetic on bk_float2 / bk_float4.
+  if [ $st -eq 0 ]; then
+    out2=$(clang -std=c99 -pedantic -Werror -fno-modules -fsyntax-only -DBK_GPU_TYPES_PORTABLE_STRUCTS=1 $INC "$f" 2>&1)
+    st=$?; [ $st -ne 0 ] && out="$out
+$out2"
+  fi
   apple=$(printf '%s\n' "$out" | grep -E '^\.+ ' | grep -E "$BAD" | sed 's/^\.* //' | sort -u | tr '\n' ' ')
   errs=$(printf '%s\n' "$out" | grep -E 'error:' | head -3)
   if [ $st -ne 0 ] || [ -n "$apple" ]; then fail=1; echo "PROBLEM  $f"; [ -n "$apple" ] && echo "   non-portable headers: $apple"; [ -n "$errs" ] && echo "$errs" | sed 's/^/   /'
