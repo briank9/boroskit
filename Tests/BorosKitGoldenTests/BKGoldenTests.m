@@ -35,6 +35,8 @@
 #import "BorosKitRender.h"
 #import "BorosKitMesh.h"
 #import "BorosKitSurface.h"
+#import "BorosKitDisplay.h"
+#include "../BorosKitGPUShared/BKDisplayGoldenScene.h"   // 2026-11-26: 2D golden scenes (shared with Vulkan)
 
 #pragma mark - Mode and paths
 
@@ -397,6 +399,67 @@ static BKGoldenMetalProducer *gProducer;
         [self checkImage:&rgba file:[@(c->name) stringByAppendingString:@".rgba.pam"] tolerance:bk_golden_tolerance_u8()];
         bk_golden_image_free(&rgba);
     }
+}
+
+#pragma mark - 2D overlay and display layers (2026-11-26, Vulkan plan 7.1 #6)
+
+// The overlay engine's draw list (incl. the segmentation label-map picture) through BKOverlayRenderer, over opaque
+// black: golden picture, and the CPU rasteriser as the reference (within 8-bit rounding except edge pixels).
+- (void)testOverlayScene
+{
+    if (![self requireGPU]) return;
+    NSError *error = nil;
+    id<MTLDevice> device = gProducer.device;
+    BKOverlayRenderer *r = [[BKOverlayRenderer alloc] initWithDevice:device error:&error];
+    XCTAssertNotNil(r, @"%@", error);
+    const uint32_t W = BKGoldenOverlayWidth, H = BKGoldenOverlayHeight;
+    BKOverlayList *l = BKOverlayListCreate();
+    BKGoldenOverlayScene(l);
+    XCTAssertEqual(BKOverlayListError(l), 0);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:W height:H mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModeShared;
+    id<MTLTexture> tex = [device newTextureWithDescriptor:td];
+    NSMutableData *pixels = [NSMutableData dataWithLength:W * H * 4];
+    for (uint32_t i = 0; i < W * H; i++) ((uint8_t *)pixels.mutableBytes)[i * 4 + 3] = 255;
+    [tex replaceRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0 withBytes:pixels.bytes bytesPerRow:W * 4];
+    id<MTLCommandBuffer> cb = [[device newCommandQueue] commandBuffer];
+    XCTAssertTrue([r renderList:l intoTexture:tex commandBuffer:cb error:&error], @"%@", error);
+    [cb commit];
+    [cb waitUntilCompleted];
+    [tex getBytes:pixels.mutableBytes bytesPerRow:W * 4 fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
+    BKGoldenImage img = {W, H, 4, BKGoldenFormatU8, pixels.mutableBytes};
+    [self checkImage:&img file:@"overlay_scene.rgba.pam" tolerance:bk_golden_tolerance_u8()];
+    BKOverlayListFree(l);
+}
+
+// A grey image with a see-through colour layer on top (the fusion / label-picture path of BKImageLayerRenderer:
+// colorImage + usesImageAlpha, blended), linear, window 0 / 1600, through renderRGBA8.
+- (void)testDisplayOverlayLayer
+{
+    if (![self requireGPU]) return;
+    NSError *error = nil;
+    BKImageLayerRenderer *base = [[BKImageLayerRenderer alloc] initWithDevice:gProducer.device error:&error];
+    BKImageLayerRenderer *layer = [[BKImageLayerRenderer alloc] initWithDevice:gProducer.device error:&error];
+    XCTAssertNotNil(base, @"%@", error);
+    float grey[BKGoldenDisplayW * BKGoldenDisplayH];
+    BKGoldenDisplayGrey(grey);
+    base.image = [[BKImage alloc] initWithFloatPixels:grey width:BKGoldenDisplayW height:BKGoldenDisplayH pixelSpacingX:1 pixelSpacingY:1];
+    base.windowCenter = 0; base.windowWidth = 1600;
+    base.interpolation = BKImageInterpolationLinear;
+    uint8_t labels[BKGoldenDisplayW * BKGoldenDisplayH * 4];
+    BKGoldenLabelPicture(labels, BKGoldenDisplayW, BKGoldenDisplayH);
+    layer.image = [[BKImage alloc] initWithRGBA8Data:[NSData dataWithBytes:labels length:sizeof labels] width:BKGoldenDisplayW
+                                              height:BKGoldenDisplayH pixelSpacingX:1 pixelSpacingY:1];
+    layer.usesImageAlpha = YES;
+    BKViewTransform t = BKViewTransformMakeFit(BKGoldenDisplayW, BKGoldenDisplayH, 96, 80);
+    base.viewTransform = t;
+    layer.viewTransform = t;
+    base.overlay = layer;
+    NSData *rgba = [base renderRGBA8WithWidth:96 height:80 scale:1.0 error:&error];
+    XCTAssertNotNil(rgba, @"%@", error);
+    BKGoldenImage img = {96, 80, 4, BKGoldenFormatU8, (void *)rgba.bytes};
+    [self checkImage:&img file:@"display_overlay_layer.rgba.pam" tolerance:bk_golden_tolerance_u8()];
 }
 
 #pragma mark - Curved reformat (2026-11-26, Vulkan plan 7.1 #5)

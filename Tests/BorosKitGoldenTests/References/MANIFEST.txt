@@ -2,6 +2,7 @@
 # file  bytes  hash (bk_golden_hash, hex)
 avg_coronal_slab20.rgba.pam  36931  df99e96d3b7d261e
 avg_coronal_slab20.values.pfm  36878  22a505841b97c363
+display_overlay_layer.rgba.pam  30787  24d5ac6ee37c1ac1
 feature_lines.distance.pfm  30734  266def4fcfd14cdc
 feature_lines.rgba.pam  30787  9bdc593ee6d7fea3
 feature_points.distance.pfm  30734  60fffff8a226a41e
@@ -26,6 +27,7 @@ mpr_thin_oblique.rgba.pam  36931  779974a769aae5a2
 mpr_thin_oblique.values.pfm  36878  c42d49dff1dd289c
 numbers_core.txt  1476  29b6a5f9ead6ef43
 numbers_phantom.txt  167  b9478b73ef4ace35
+overlay_scene.rgba.pam  76869  820991ae503b6549
 reformat_pano_cubic_first_both.values.pfm  24590  9b5380f20ee0b5fd
 reformat_pano_cubic_mean.values.pfm  24590  84f263ff3096a7e0
 reformat_pano_linear_minip_both.values.pfm  24590  a31ad9a97356bab5
@@ -48,4 +50,4 @@ vr_ortho_left_clipped_unlit.rgba.pam  36931  b71f0253cc53926b
 vr_ortho_left_clipped_unlit.values.pfm  36878  1bce5c496c86fade
 vr_persp_oblique.rgba.pam  30787  e052c678b3c5ec94
 vr_persp_oblique.values.pfm  30734  61ca72393c0a90d4
-# total 2313121 bytes
+# total 2420777 bytes
