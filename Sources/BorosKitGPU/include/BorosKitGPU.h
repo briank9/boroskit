@@ -4,3 +4,7 @@
 
 #include "BKGPU.h"
 #include "BKGPUMetal.h"
+#include "BKGPUEngineBridge.h"   // 2026-11-26: Vulkan test-engine glue (ObjC++ only, guarded)
+#ifdef __OBJC__
+#import "BKGPUEngine.h"          // 2026-11-26: Metal (default) / Vulkan test engine choice
+#endif

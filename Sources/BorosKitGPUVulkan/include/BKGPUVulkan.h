@@ -18,6 +18,7 @@
 #ifndef BK_GPU_VULKAN_H
 #define BK_GPU_VULKAN_H
 
+#ifdef __cplusplus   // 2026-11-26: C++ only (the module is also imported from Objective-C)
 #include "BKGPU.h"
 
 namespace boroskit {
@@ -50,4 +51,5 @@ int vulkanBackendBuilt();
 }  // namespace gpu
 }  // namespace boroskit
 
+#endif  // __cplusplus
 #endif  // BK_GPU_VULKAN_H
