@@ -228,13 +228,15 @@ let package = Package(
         // The reference files are read from the source folder (not bundled as resources).
         .testTarget(
             name: "BorosKitGoldenTests",
+            // GPU (2026-11-26, phase 2): BKGPUSharedTests.mm runs the backend-shared GPU tests on a MetalDevice.
             dependencies: ["BorosKitSurface", "BorosKitMeshRender", "BorosKitMesh", "BorosKitDisplay",
-                           "BorosKitRender", "BorosKitCore"],
+                           "BorosKitRender", "BorosKitCore", "BorosKitGPU"],
             path: "Tests/BorosKitGoldenTests",
             exclude: ["References"],
             // -ffp-contract=off: the phantom generator must give bit-identical scans on every
             // platform (no fused multiply-add rounding), see BKGoldenCore.h.
-            cSettings: [.unsafeFlags(["-fobjc-arc", "-ffp-contract=off"])]
+            cSettings: [.unsafeFlags(["-fobjc-arc", "-ffp-contract=off"])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc", "-ffp-contract=off"])]
         ),
     ]
     // C++17 for the plain C++ cores (std::to_chars in BKSceneExportCore).

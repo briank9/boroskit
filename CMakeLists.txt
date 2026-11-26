@@ -192,20 +192,49 @@ if(BK_VULKAN_INCLUDE_DIR AND BK_GLSLC AND BK_SPIRV_VAL)
             list(APPEND BK_VULKAN_TEST_ENV "VK_ADD_LAYER_PATH=$ENV{VULKAN_SDK}/share/vulkan/explicit_layer.d")
         endif()
     endif()
+    # Tests shared by every backend (2026-11-26, phase 2): triangle, golden meshes through BKMeshPass, winding,
+    # feature scene. Linked into the Vulkan programs below and the Apple-only Metal + Vulkan cross program.
+    add_library(bk_gpu_shared_tests STATIC Tests/BorosKitGPUShared/BKGPUSharedTests.cpp)
+    target_include_directories(bk_gpu_shared_tests PUBLIC Tests/BorosKitGPUShared)
+    target_link_libraries(bk_gpu_shared_tests PUBLIC boroskit_gpu boroskit_cores bk_golden_core)
+
     add_executable(bk_vulkan_triangle_test Tests/BorosKitGoldenVulkan/BKVulkanTriangleTest.cpp)
     target_include_directories(bk_vulkan_triangle_test PRIVATE Tests/BorosKitGoldenVulkan)
-    target_link_libraries(bk_vulkan_triangle_test PRIVATE boroskit_gpu_vulkan)
+    target_link_libraries(bk_vulkan_triangle_test PRIVATE boroskit_gpu_vulkan bk_gpu_shared_tests)
     add_test(NAME vulkan.triangle COMMAND bk_vulkan_triangle_test)
 
     add_executable(bk_golden_vulkan Tests/BorosKitGoldenVulkan/BKGoldenVulkan.cpp Tests/BorosKitGoldenVulkan/BKPNGWrite.c)
     target_include_directories(bk_golden_vulkan PRIVATE Tests/BorosKitGoldenVulkan)
-    target_link_libraries(bk_golden_vulkan PRIVATE boroskit_gpu_vulkan bk_golden_core)
+    target_link_libraries(bk_golden_vulkan PRIVATE boroskit_gpu_vulkan bk_gpu_shared_tests bk_golden_core)
     target_compile_definitions(bk_golden_vulkan PRIVATE
         BK_GOLDEN_REFERENCES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Tests/BorosKitGoldenTests/References")
     set(BK_MILESTONE_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/milestone1" CACHE PATH "where bk_golden_vulkan writes its pictures")
     file(MAKE_DIRECTORY "${BK_MILESTONE_OUTPUT}")
     add_test(NAME vulkan.golden_mesh COMMAND bk_golden_vulkan "${BK_MILESTONE_OUTPUT}")
-    set_tests_properties(vulkan.triangle vulkan.golden_mesh PROPERTIES ENVIRONMENT "${BK_VULKAN_TEST_ENV}")
+    set(BK_VULKAN_TESTS vulkan.triangle vulkan.golden_mesh)
+
+    # Apple only: the Metal device built by CMake too (BKGPUMetal.mm + BKMetalDevice.m + the mesh MSL source), so one
+    # program can run the shared tests on Metal AND Vulkan and compare them live (kickoff plan section 6, point 3).
+    if(APPLE)
+        enable_language(OBJC OBJCXX)
+        add_library(boroskit_gpu_metal STATIC
+            Sources/BorosKitGPU/BKGPUMetal.mm
+            Sources/BorosKitRender/BKMetalDevice.m
+            Sources/BorosKitMeshRender/BKMeshShaderSource.mm)
+        target_include_directories(boroskit_gpu_metal PUBLIC Sources/BorosKitGPU/include)
+        target_compile_options(boroskit_gpu_metal PRIVATE -fobjc-arc)
+        target_link_libraries(boroskit_gpu_metal PUBLIC boroskit_gpu boroskit_cores "-framework Metal" "-framework Foundation")
+        add_executable(bk_gpu_cross Tests/BorosKitGoldenVulkan/BKGPUCrossTest.mm Tests/BorosKitGPUShared/BKGPUTestMetal.mm
+                       Tests/BorosKitGoldenVulkan/BKPNGWrite.c)
+        target_include_directories(bk_gpu_cross PRIVATE Tests/BorosKitGoldenVulkan)
+        target_compile_options(bk_gpu_cross PRIVATE -fobjc-arc)
+        target_link_libraries(bk_gpu_cross PRIVATE boroskit_gpu_vulkan boroskit_gpu_metal bk_gpu_shared_tests bk_golden_core)
+        target_compile_definitions(bk_gpu_cross PRIVATE
+            BK_GOLDEN_REFERENCES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Tests/BorosKitGoldenTests/References")
+        add_test(NAME gpu.metal_vs_vulkan COMMAND bk_gpu_cross "${BK_MILESTONE_OUTPUT}")
+        list(APPEND BK_VULKAN_TESTS gpu.metal_vs_vulkan)
+    endif()
+    set_tests_properties(${BK_VULKAN_TESTS} PROPERTIES ENVIRONMENT "${BK_VULKAN_TEST_ENV}")
 else()
     message(STATUS "BorosKit Vulkan engine: SKIPPED (Vulkan SDK headers / glslc / spirv-val not found; set VULKAN_SDK)")
 endif()

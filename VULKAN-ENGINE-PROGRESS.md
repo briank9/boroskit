@@ -233,3 +233,50 @@ Full audit, requirements, boundary and app list: **PRECISION-AUDIT.md**. Summary
   difference 0; ctest 30/30 (incl. Vulkan milestone tests); check-portable-cores clean.
 - Open for the user: BKMesh float32 storage (PRECISION-AUDIT.md 5); app float measurements (6); own correctly
   rounded sin/cos/atan2 if bit-identical angles across operating systems are required (3).
+
+## 2026-11-26 - PHASE 2: shared GPU interface + MetalDevice + first module (mesh renderer) on it (branch agent/gpu-interface from main 68f62d3)
+
+### In plain words
+The mesh drawing (3D surfaces, lines, points, textured meshes, see-through objects) is now written ONCE, in
+BorosKit's shared GPU language, and runs on both engines. On the Mac it runs on the Metal engine and draws exactly
+the same pixels as before (strict golden: 0 differences; all 89 mesh tests pass). The same code on the Vulkan
+engine draws the golden bone surfaces bit for bit like Metal, and a mixed test scene (lines, points, textures,
+see-through, wireframe, culling) matches Metal except one pixel on a wireframe edge (inside the agreed tolerance).
+Pictures: milestone1-pictures/feature_scene_metal_vs_vulkan.png (Metal | Vulkan | difference x 40).
+
+### What was built
+- `BorosKitGPU` SwiftPM target + product: `BKGPU.h` (now C++-guarded), `BKGPUMetal.h/.mm` = MetalDevice + glue
+  (wrap an existing MTLTexture / MTLBuffer / MTLCommandBuffer; add a Metal library). Compute = Unsupported (phase 4).
+- `BKMeshPass.h/.cpp` (BorosKitMeshRender, backend-neutral C++): all of BKMeshRenderer's drawing logic.
+- `BKMeshRenderer.m` -> `.mm`: Metal glue only (object caches, wrapping, error messages). Public API unchanged.
+- GLSL for the rest of MeshPass on Vulkan: bk_mesh_fragment, textured vertex / fragments, line / point vertex,
+  line fragments (entry points over BKMeshShaderBodies.h; spirv-val clean).
+- Shared tests `Tests/BorosKitGPUShared` (triangle, golden meshes via MeshPass, winding, feature scene), run by:
+  Vulkan programs (ctest vulkan.*), the Mac XCTest suite on MetalDevice (BKGPUSharedTests.mm, strict), and
+  `bk_gpu_cross` (CMake, Apple only: Metal AND Vulkan in one program, live cross-check).
+- Winding (milestone-1 open item) answered: with the negative-height viewport + VK_FRONT_FACE_COUNTER_CLOCKWISE,
+  Vulkan culls exactly like Metal and like BKMeshTriangleIsCulled (none / back / front) - test on both backends.
+- Umbrella headers `BorosKitVec/include/BorosKitVec.h`, `BorosKitGPU/include/BorosKitGPU.h` (fix for the stale
+  precompiled module; rule: list every new header there).
+
+### Results
+- swift test -c release with BK_GOLDEN_STRICT=1: 460 tests, 0 failures; golden strict 0 failures (both mesh-render
+  references max difference 0 through BKMeshRenderer -> MeshPass -> MetalDevice).
+- ctest 31/31 (incl. vulkan.triangle, vulkan.golden_mesh, gpu.metal_vs_vulkan); 0 Vulkan validation messages
+  (with synchronisation validation). Feature scene Vulkan vs Metal: rgba 1 channel beyond +-1 (0.003 %, wireframe
+  edge pixel), distance 1 value (0.013 %) - within the agreed 0.5 % edge allowance.
+
+### For Boros 6 when this is merged (lead)
+- No app code changes: BKMeshRenderer's Objective-C API is unchanged (new error codes only: 41 pipeline, 42 depth
+  buffer, 43 target format other than RGBA8/BGRA8 + R32Float - Boros 6 uses BGRA8 drawables, fine).
+- BorosKitMeshRender now depends on the new target BorosKitGPU (SwiftPM links it with the product automatically)
+  and contains C++ (.mm / .cpp): Boros 6 already links libc++.
+- Module cache: the umbrella headers change the generated module map of BorosKitVec, so a normal build should rebuild
+  it; because the shared bench currently holds a STALE BorosKitVec module, clear the bench's
+  build/Build/Intermediates.noindex/ExplicitPrecompiledModules/BorosKit* once (or do a clean build) before building.
+- Configure CMake with VULKAN_SDK=$HOME/VulkanSDK/1.4.363.1/macOS for the Vulkan parts (not needed for Boros 6).
+
+### Where to resume
+1. Phase 3 / 4 per plan: surface extraction (compute pipelines in BKGPU.h: Metal + Vulkan), then the volume renderer.
+2. A recorded golden case for lines / points / textured meshes (today only the live Metal-vs-Vulkan cross check).
+3. Other Objective-C modules onto the interface one at a time (BKOverlayRenderer is small - a good next one).

@@ -97,4 +97,13 @@ set(BOROSKIT_GPU_VULKAN_SHADERS
     Sources/BorosKitGPUVulkan/Shaders/bk_triangle_fragment.frag
     Sources/BorosKitGPUVulkan/Shaders/bk_mesh_vertex.vert
     Sources/BorosKitGPUVulkan/Shaders/bk_mesh_fragment_distance.frag
+    # 2026-11-26 (phase 2/3): the rest of BKMeshPass's programs (entry points over BKMeshShaderBodies.h)
+    Sources/BorosKitGPUVulkan/Shaders/bk_mesh_fragment.frag
+    Sources/BorosKitGPUVulkan/Shaders/bk_mesh_vertex_textured.vert
+    Sources/BorosKitGPUVulkan/Shaders/bk_mesh_fragment_textured.frag
+    Sources/BorosKitGPUVulkan/Shaders/bk_mesh_fragment_distance_textured.frag
+    Sources/BorosKitGPUVulkan/Shaders/bk_line_vertex.vert
+    Sources/BorosKitGPUVulkan/Shaders/bk_point_vertex.vert
+    Sources/BorosKitGPUVulkan/Shaders/bk_line_fragment.frag
+    Sources/BorosKitGPUVulkan/Shaders/bk_line_fragment_distance.frag
 )
