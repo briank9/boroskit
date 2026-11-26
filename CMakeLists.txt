@@ -78,6 +78,11 @@ if(NOT APPLE)
     target_compile_definitions(boroskit_cores PRIVATE BK_PARALLEL_USE_STD_THREAD=1)
 endif()
 
+# boroskit_gpu: the backend-neutral GPU interface (BKGPU.h, C++17, header only so far; step M5).
+add_library(boroskit_gpu INTERFACE)
+target_include_directories(boroskit_gpu INTERFACE Sources/BorosKitGPU/include)
+target_compile_features(boroskit_gpu INTERFACE cxx_std_17)
+
 # bk_golden_core: the golden harness's plain-C half (phantoms, file formats, comparers), shared with the
 # Mac XCTest runner and, later, the Vulkan golden runner.
 add_library(bk_golden_core STATIC Tests/BorosKitGoldenTests/BKGoldenCore.c)
@@ -121,3 +126,11 @@ add_executable(bk_layout_portable_test
 target_link_libraries(bk_layout_portable_test PRIVATE boroskit_cores)
 target_compile_definitions(bk_layout_portable_test PRIVATE BK_GPU_TYPES_PORTABLE_STRUCTS=1)
 add_test(NAME core.gpu_types_layout_portable_structs COMMAND bk_layout_portable_test)
+
+# BKGPU.h compiles alone (no Apple / Vulkan headers) and can be implemented (a CPU-only stand-in device).
+add_executable(bk_gpu_interface_test Tests/BorosKitCoreTestsC/BKGPUInterfaceTest.cpp)
+target_link_libraries(bk_gpu_interface_test PRIVATE boroskit_gpu boroskit_flags)
+if(NOT MSVC)
+    target_compile_options(bk_gpu_interface_test PRIVATE -Wextra -pedantic -Werror)
+endif()
+add_test(NAME gpu.interface COMMAND bk_gpu_interface_test)
