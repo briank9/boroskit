@@ -340,10 +340,10 @@ private:
 
 class MetalDevice final : public Device {
 public:
-    explicit MetalDevice(id<MTLDevice> device)
+    explicit MetalDevice(id<MTLDevice> device, id<MTLCommandQueue> queue = nil)
     {
         shared_.device = device;
-        shared_.queue = [device newCommandQueue];
+        shared_.queue = queue ?: [device newCommandQueue];   // a caller's queue (2026-11-26: BKSurfaceExtractor)
         name_ = device.name.UTF8String ?: "";
         limits_.maxBufferBytes = device.maxBufferLength;
         limits_.maxStorageBufferRange = device.maxBufferLength;
@@ -555,6 +555,13 @@ Status makeMetalDevice(id<MTLDevice> device, std::unique_ptr<Device> *out)
     id<MTLDevice> d = device ?: [BKMetalDevice preferredDevice];
     if (!d) return Status::NotFound;
     out->reset(new MetalDevice(d));
+    return Status::Ok;
+}
+
+Status makeMetalDevice(id<MTLDevice> device, id<MTLCommandQueue> queue, std::unique_ptr<Device> *out)
+{
+    if (!out || !device || (queue && queue.device != device)) return Status::InvalidArgument;
+    out->reset(new MetalDevice(device, queue));
     return Status::Ok;
 }
 

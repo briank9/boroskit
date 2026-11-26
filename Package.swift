@@ -188,7 +188,8 @@ let package = Package(
             // Render: BKVolumeTexture (the scan on the GPU). Mesh: BKMesh (the result).
             // The plain-C core (BKSurfaceCore) uses none of them, so a Vulkan backend can reuse it.
             // Vec (2026-11-25, vulkan-engine M1): BKOnce.h (portable run-once for the case tables).
-            dependencies: ["BorosKitCore", "BorosKitRender", "BorosKitMesh", "BorosKitVec"],
+            // GPU (2026-11-26, Vulkan plan 7.1 step 3): BKSurfacePass runs on the shared GPU interface.
+            dependencies: ["BorosKitCore", "BorosKitRender", "BorosKitMesh", "BorosKitVec", "BorosKitGPU"],
             path: "Sources/BorosKitSurface",
             publicHeadersPath: "include",
             cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],

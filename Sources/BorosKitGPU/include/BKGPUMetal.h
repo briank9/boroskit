@@ -34,6 +34,8 @@ namespace gpu {
 
 // What: a Device for an existing id<MTLDevice> (nil = BKMetalDevice's preferred GPU). Status::NotFound if none.
 Status makeMetalDevice(id<MTLDevice> device, std::unique_ptr<Device> *out);
+// What (2026-11-26): the same, submitting to an existing queue of `device` (nil = a new one).
+Status makeMetalDevice(id<MTLDevice> device, id<MTLCommandQueue> queue, std::unique_ptr<Device> *out);
 
 // What: makes the functions of `library` available to ShaderRef names on `device` (a MetalDevice).
 Status BKGPUMetalAddLibrary(Device &device, id<MTLLibrary> library);
