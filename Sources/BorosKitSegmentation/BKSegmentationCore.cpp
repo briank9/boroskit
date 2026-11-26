@@ -414,7 +414,9 @@ std::string BuildHeader(const BKLabelVolume *v, uint64_t payloadBytes, uint64_t 
 {
     std::string s;
     s.reserve(4096 + v->classes.size() * 160);
-    char b[64];
+    // Room for the longest formatted piece (the payload line with two 20-digit numbers and the checksum); found with
+    // the real 512 x 512 x 727 AI result, whose numbers cut a 64-byte buffer short (2026-11-26).
+    char b[256];
     s += "{\"format\":\"boroseg\",\"version\":";
     snprintf(b, sizeof b, "%d", (int)BKSegFormatVersion);
     s += b;
