@@ -48,6 +48,7 @@ set(BOROSKIT_CORE_C_SOURCES
     Sources/BorosKitRender/BKMPRGeometryCore.c
     Sources/BorosKitRender/BKOrientationCubeCore.c
     Sources/BorosKitRender/BKRenderCore.c
+    Sources/BorosKitRender/BKRenderParamsCore.c   # 2026-11-26: ray-cast parameter block + CLUT rules (7.1 #4a)
     Sources/BorosKitRender/BKScanGeometryCore.c
     Sources/BorosKitRender/BKSlabBrickCore.c
     Sources/BorosKitRender/BKSlabCameraCore.c

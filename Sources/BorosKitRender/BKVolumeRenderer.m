@@ -16,6 +16,7 @@
 #import "BKTransferFunction.h"
 #import "BKShaderTypes.h"
 #import "BKRenderCore.h"
+#import "BKRenderParamsCore.h"   // the parameter block in plain C (2026-11-26)
 #import "BKVolumeFusionCore.h"   // colour scans + fusion rules (plain C, 2026-11-24)
 #import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
 #import "CPRVolumeData.h"
@@ -30,12 +31,6 @@ static const NSUInteger kTransferFunctionEntries = BK_TRANSFER_FUNCTION_ENTRIES;
 static NSError *BKRendererError(NSInteger code, NSString *message)
 {
     return [NSError errorWithDomain:BKRenderErrorDomain code:code userInfo:@{NSLocalizedDescriptionKey: message}];
-}
-
-// Converts an N3Vector (CGFloat, patient mm) to a GPU float3.
-static simd_float3 BKFloat3(N3Vector v)
-{
-    return simd_make_float3((float)v.x, (float)v.y, (float)v.z);
 }
 
 // What: a float3 widened to the float4 the parameter block stores (w = 0).
@@ -423,122 +418,113 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     [enc setTexture:table ?: _tfTexture atIndex:6];
 }
 
-// What: the fusion / colour part of the parameter block (fields documented in BKShaderTypes.h).
-- (void)fillBlendParams:(BKRenderParams *)p
+// What: Apple's simd_normalize, handed to the plain-C params builder so the Mac keeps its exact numbers.
+// Why (2026-11-26, agent "vulkan-engine"): simd_normalize uses the CPU's hardware 1/sqrt estimate, which no portable
+// formula reproduces bit for bit (see BKRenderParamsCore.h); other platforms use BKRenderNormalize3fPortable.
+static void BKSimdNormalize3f(float v[3])
 {
-    p->colorVolume = _volumeTexture.color ? 1 : 0;
-    p->colorUsesTable = _colorChannelsUseTableColors ? 1 : 0;
-    p->blendOpacityUnitDistance = _blendOpacityUnitDistance > 0 ? _blendOpacityUnitDistance : 1.0f;
-    p->blendProjection = BKFusionBlendProjection(_mode);   // plain-C core (classic rule)
-    if (![self hasBlend] || ![self bakedBlendTable]) { p->useBlend = 0; return; }
-    BKVolumeTexture *bt = _blendVolumeTexture;
-    BKTransferFunction *tf = _blendTransferFunction;
-    N3AffineTransform m = bt.volumeTransform;   // same row-vector reading as the first scan's (see -fillParams:)
-    p->blendPatientToVoxelColumns[0] = BKFloat4(simd_make_float3(m.m11, m.m12, m.m13));
-    p->blendPatientToVoxelColumns[1] = BKFloat4(simd_make_float3(m.m21, m.m22, m.m23));
-    p->blendPatientToVoxelColumns[2] = BKFloat4(simd_make_float3(m.m31, m.m32, m.m33));
-    p->blendPatientToVoxelTranslation = BKFloat4(simd_make_float3(m.m41, m.m42, m.m43));
-    p->blendVolumeSize = BKFloat4(simd_make_float3(bt.pixelsWide, bt.pixelsHigh, bt.pixelsDeep));
-    p->blendValueScale = bt.valueScale;
-    p->blendValueOffset = bt.valueOffset;
-    p->blendTfMin = tf.minimumValue;
-    p->blendTfMax = tf.maximumValue;
-    p->blendColorVolume = bt.color ? 1 : 0;
-    p->useBlend = 1;
+    simd_float3 n = simd_normalize(simd_make_float3(v[0], v[1], v[2]));
+    v[0] = n.x; v[1] = n.y; v[2] = n.z;
 }
 
-// Fills the GPU parameter block from the current settings. Builds an orthonormal
-// camera frame (right, up, forward) from direction + up so callers may pass any
-// non-parallel vectors.
+// What: an N3AffineTransform (row-vector convention, voxel.x = p.x*m11 + p.y*m21 + p.z*m31 + m41) as the column-major
+// matrix of the plain-C core: column c = row c of the N3 matrix.
+static void BKColumnMajor(N3AffineTransform m, double out[16])
+{
+    const double rows[4][4] = { { m.m11, m.m12, m.m13, m.m14 }, { m.m21, m.m22, m.m23, m.m24 },
+                                { m.m31, m.m32, m.m33, m.m34 }, { m.m41, m.m42, m.m43, m.m44 } };
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++) out[c * 4 + r] = rows[c][r];
+}
+
+static void BKVector3(N3Vector v, double out[3])
+{
+    out[0] = v.x; out[1] = v.y; out[2] = v.z;
+}
+
+// Fills the GPU parameter block from the current settings. Since 2026-11-26 (Vulkan plan 7.1 #4a) the arithmetic is
+// the plain-C core BKRenderParamsFill (shared with the Vulkan engine); this method only gathers the settings.
 - (BOOL)fillParams:(BKRenderParams *)p width:(NSUInteger)width height:(NSUInteger)height
                 tf:(BKTransferFunction *)tf error:(NSError **)error
 {
-    memset(p, 0, sizeof(*p));
     BKVolumeTexture *vt = _volumeTexture;
-    N3AffineTransform m = vt.volumeTransform;
+    BKRenderSettings s;
+    memset(&s, 0, sizeof s);
+    s.volumeSize[0] = (uint32_t)vt.pixelsWide;
+    s.volumeSize[1] = (uint32_t)vt.pixelsHigh;
+    s.volumeSize[2] = (uint32_t)vt.pixelsDeep;
+    BKColumnMajor(vt.volumeTransform, s.patientToVoxel);
+    s.minPixelSpacing = vt.minPixelSpacing;
+    s.valueScale = vt.valueScale;
+    s.valueOffset = vt.valueOffset;
+    s.outOfBoundsValue = vt.outOfBoundsValue;
+    s.colorVolume = vt.color ? 1 : 0;
+    s.mode = _mode;
+    s.projection = _projection;
+    BKVector3(_cameraPosition, s.cameraPosition);
+    BKVector3(_cameraDirection, s.cameraDirection);
+    BKVector3(_cameraUp, s.cameraUp);
+    s.viewWidth = _viewWidth;
+    s.viewHeight = _viewHeight;
+    s.fieldOfView = _fieldOfView;
+    s.sampleSpacing = _sampleSpacing;
+    BKVector3(_cropMin, s.cropMin);
+    BKVector3(_cropMax, s.cropMax);
+    s.slabEnabled = _slabEnabled ? 1 : 0;
+    BKVector3(_slabPlane.point, s.slabPoint);
+    BKVector3(_slabPlane.normal, s.slabNormal);
+    s.slabThickness = _slabThickness;
+    s.clipPlaneEnabled = _clipPlaneEnabled ? 1 : 0;
+    BKVector3(_clipPlane.point, s.clipPoint);
+    BKVector3(_clipPlane.normal, s.clipNormal);
+    for (NSUInteger i = 0; i < _clipPlaneCount; i++) {
+        s.clipPlanes[4 * i + 0] = _clipPlanes[i].x;
+        s.clipPlanes[4 * i + 1] = _clipPlanes[i].y;
+        s.clipPlanes[4 * i + 2] = _clipPlanes[i].z;
+        s.clipPlanes[4 * i + 3] = _clipPlanes[i].w;
+    }
+    s.clipPlaneCount = (uint32_t)_clipPlaneCount;
+    s.tfMin = tf.minimumValue;
+    s.tfMax = tf.maximumValue;
+    s.windowCenter = _windowCenter;
+    s.windowWidth = _windowWidth;
+    s.missValue = _missValue;
+    s.opacityUnitDistance = _opacityUnitDistance;
+    s.shading = _shadingEnabled ? 1 : 0;
+    s.ambient = _ambient;
+    s.diffuse = _diffuse;
+    s.specular = _specular;
+    s.specularPower = _specularPower;
+    s.manualFiltering = _manualFiltering ? 1 : 0;
+    s.useGeometry = [self hasGeometry] ? 1 : 0;   // embedded objects (2026-11-14)
+    s.colorUsesTable = _colorChannelsUseTableColors ? 1 : 0;
+    s.blendOpacityUnitDistance = _blendOpacityUnitDistance;
+    // Fused scan (2026-11-24): only when it is set up completely and its table could be baked.
+    if ([self hasBlend] && [self bakedBlendTable]) {
+        BKVolumeTexture *bt = _blendVolumeTexture;
+        BKTransferFunction *btf = _blendTransferFunction;
+        s.useBlend = 1;
+        BKColumnMajor(bt.volumeTransform, s.blendPatientToVoxel);
+        s.blendVolumeSize[0] = (uint32_t)bt.pixelsWide;
+        s.blendVolumeSize[1] = (uint32_t)bt.pixelsHigh;
+        s.blendVolumeSize[2] = (uint32_t)bt.pixelsDeep;
+        s.blendValueScale = bt.valueScale;
+        s.blendValueOffset = bt.valueOffset;
+        s.blendTfMin = btf.minimumValue;
+        s.blendTfMax = btf.maximumValue;
+        s.blendColorVolume = bt.color ? 1 : 0;
+    }
+    s.normalize3f = BKSimdNormalize3f;   // the Mac's exact numbers (see BKRenderParamsCore.h)
 
-    // patient -> voxel, row-vector convention of N3/CATransform3D:
-    // voxel.x = p.x*m11 + p.y*m21 + p.z*m31 + m41 (etc.). As a column-major float3x3
-    // that is columns (m11,m12,m13), (m21,m22,m23), (m31,m32,m33).
-    p->patientToVoxelColumns[0] = BKFloat4(simd_make_float3(m.m11, m.m12, m.m13));
-    p->patientToVoxelColumns[1] = BKFloat4(simd_make_float3(m.m21, m.m22, m.m23));
-    p->patientToVoxelColumns[2] = BKFloat4(simd_make_float3(m.m31, m.m32, m.m33));
-    p->patientToVoxelTranslation = BKFloat4(simd_make_float3(m.m41, m.m42, m.m43));
-    simd_float3 volumeSize = simd_make_float3(vt.pixelsWide, vt.pixelsHigh, vt.pixelsDeep);
-    p->volumeSize = BKFloat4(volumeSize);
-
-    // Ray-cast region: crop box intersected with the volume's voxel-centre bounds.
-    simd_float3 volMax = volumeSize - 1.0f;
-    p->boxMin = BKFloat4(simd_clamp(BKFloat3(_cropMin), simd_make_float3(0, 0, 0), volMax));
-    p->boxMax = BKFloat4(simd_clamp(BKFloat3(_cropMax), simd_make_float3(0, 0, 0), volMax));
-
-    simd_float3 forward = BKFloat3(_cameraDirection);
-    simd_float3 up = BKFloat3(_cameraUp);
-    if (simd_length(forward) < 1e-6f) {
+    int code = BKRenderParamsFill(&s, (uint32_t)width, (uint32_t)height, p);
+    if (code == BKRenderParamsZeroDirection) {
         if (error) *error = BKRendererError(11, @"The camera direction is zero.");
         return NO;
     }
-    forward = simd_normalize(forward);
-    simd_float3 right = simd_cross(forward, up);
-    if (simd_length(right) < 1e-6f) {
+    if (code == BKRenderParamsUpParallel) {
         if (error) *error = BKRendererError(12, @"The camera up vector is parallel to the viewing direction.");
         return NO;
     }
-    right = simd_normalize(right);
-    up = simd_cross(right, forward);
-    p->cameraPosition = BKFloat4(BKFloat3(_cameraPosition));
-    p->cameraRight = BKFloat4(right);
-    p->cameraUp = BKFloat4(up);
-    p->cameraForward = BKFloat4(forward);
-
-    if (_projection == BKProjectionPerspective) {
-        float vfov = (float)_fieldOfView * (float)M_PI / 180.0f;
-        p->viewHeight = 2.0f * tanf(0.5f * vfov);
-        p->viewWidth = p->viewHeight * (float)width / (float)height;
-    } else {
-        p->viewWidth = (float)_viewWidth;
-        p->viewHeight = (float)_viewHeight;
-    }
-
-    p->slabPoint = BKFloat4(BKFloat3(_slabPlane.point));
-    simd_float3 normal = BKFloat3(_slabPlane.normal);
-    p->slabNormal = BKFloat4(simd_length(normal) > 1e-6f ? simd_normalize(normal) : simd_make_float3(0, 0, 1));
-    p->slabThickness = (float)MAX(_slabThickness, 0.0);
-    p->useSlab = _slabEnabled ? 1 : 0;
-
-    p->clipPoint = BKFloat4(BKFloat3(_clipPlane.point));
-    simd_float3 clipNormal = BKFloat3(_clipPlane.normal);
-    p->clipNormal = BKFloat4(simd_length(clipNormal) > 1e-6f ? simd_normalize(clipNormal) : simd_make_float3(0, 0, 1));
-    p->useClip = _clipPlaneEnabled ? 1 : 0;
-
-    // Extra planes: already stored as plain float4s in the backend-neutral packing (BKClipPlanes.h).
-    for (NSUInteger i = 0; i < _clipPlaneCount; i++)
-        p->clipPlanes[i] = _clipPlanes[i];
-    p->clipPlaneCount = (int32_t)_clipPlaneCount;
-
-    p->stepSize = _sampleSpacing > 0 ? (float)_sampleSpacing : (float)(0.5 * vt.minPixelSpacing);
-    if (!(p->stepSize > 0)) p->stepSize = 0.5f;
-    p->opacityUnitDistance = _opacityUnitDistance > 0 ? _opacityUnitDistance : 1.0f;
-    p->valueScale = vt.valueScale;
-    p->valueOffset = vt.valueOffset;
-    p->tfMin = tf.minimumValue;
-    p->tfMax = tf.maximumValue;
-    p->windowCenter = _windowCenter;
-    p->windowWidth = _windowWidth;
-    // missValue (if set) overrides the volume's outside value, e.g. to match VTK's.
-    p->outOfBoundsValue = isnan(_missValue) ? vt.outOfBoundsValue : _missValue;
-    p->ambient = _ambient;
-    p->diffuse = _diffuse;
-    p->specular = _specular;
-    p->specularPower = _specularPower;
-    p->width = (uint32_t)width;
-    p->height = (uint32_t)height;
-    p->mode = _mode;
-    p->projection = _projection;
-    p->shading = _shadingEnabled ? 1 : 0;
-    p->manualFiltering = _manualFiltering ? 1 : 0;
-    p->useGeometry = [self hasGeometry] ? 1 : 0;   // embedded objects (2026-11-14)
-    [self fillBlendParams:p];                       // colour scans + fusion (2026-11-24)
     return YES;
 }
 

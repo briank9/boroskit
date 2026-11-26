@@ -10,7 +10,8 @@
  */
 
 #import "BKTransferFunction.h"
-#import "BKRenderCore.h"   // the evaluation/baking maths, shared with a future Vulkan backend
+#import "BKRenderCore.h"
+#import "BKRenderParamsCore.h"   // preset (CLUT) -> points, 2026-11-26   // the evaluation/baking maths, shared with a future Vulkan backend
 
 // One control point: a CT value and up to three components (r,g,b for colour points,
 // just [0] = opacity for opacity points). Same type as the plain-C core uses.
@@ -114,27 +115,19 @@ static void BKInsertPoint(NSMutableData *points, BKTFPoint point)
                                windowCenter:(float)windowCenter windowWidth:(float)windowWidth
                               opacityPoints:(const CGPoint *)opacityPoints count:(NSUInteger)count
 {
+    // 2026-11-26 (Vulkan plan 7.1 #4a): the VRView rules live in the plain-C core BKRenderTFFromCLUT (same arithmetic
+    // as the code that was here, shared with the Vulkan engine); this method only hands over and takes back the points.
     BKTransferFunction *tf = [[self alloc] init];
-    float start = windowCenter - windowWidth / 2.0f;
-    float end = windowCenter + windowWidth / 2.0f;
-
-    // Colour: exactly like vtkColorTransferFunction::BuildFunctionFromTable(start, end, 255, table)
-    // as called by -[VRView setCLUT:::]: VTK takes the FIRST 255 entries (0..254) and spaces
-    // them (end - start) / 254 apart, so entry 254 sits on the window end and entry 255 is
-    // never used. (Fix: this used to spread all 256 entries over /255, which shifted the
-    // colours by up to 0.4% of the window compared with the Horos VR window.)
-    for (int i = 0; i < 255; i++) {
-        float value = start + (end - start) * (float)i / 254.0f;
-        [tf addColorPointAtValue:value red:red[i] / 255.0f green:green[i] / 255.0f blue:blue[i] / 255.0f];
-    }
-
-    // Opacity: same rules as -[VRView setOpacity:].
-    if (count == 0 || opacityPoints[0].x != 0)
-        [tf addOpacityPointAtValue:start opacity:0];
-    for (NSUInteger i = 0; i < count; i++)
-        [tf addOpacityPointAtValue:start + (float)(opacityPoints[i].x / 256.0) * (end - start) opacity:(float)opacityPoints[i].y];
-    if (count == 0 || opacityPoints[count - 1].x != 256)
-        [tf addOpacityPointAtValue:end opacity:1];
+    double *xy = count ? malloc(2 * count * sizeof(double)) : NULL;
+    BKTFPoint *opacity = malloc((count + 2) * sizeof(BKTFPoint));
+    BKTFPoint color[255];
+    for (NSUInteger i = 0; i < count; i++) { xy[2 * i] = opacityPoints[i].x; xy[2 * i + 1] = opacityPoints[i].y; }
+    size_t colorCount = 0, opacityCount = 0;
+    BKRenderTFFromCLUT(red, green, blue, windowCenter, windowWidth, xy, count, color, &colorCount, opacity, &opacityCount);
+    [tf->_colorPoints appendBytes:color length:colorCount * sizeof(BKTFPoint)];
+    [tf->_opacityPoints appendBytes:opacity length:opacityCount * sizeof(BKTFPoint)];
+    free(xy);
+    free(opacity);
     return tf;
 }
 

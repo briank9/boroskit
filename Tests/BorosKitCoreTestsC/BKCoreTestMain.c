@@ -58,6 +58,10 @@ void bk_test_seg_counts_volumes(void);
 void bk_test_seg_slices_planes(void);
 void bk_test_seg_overlay_picture(void);
 void bk_test_seg_mask_surface(void);
+// 2026-11-26 (agent "vulkan-engine"): the ray caster's parameter block (BKRenderParamsTests.c)
+void bk_test_render_params_frame(void);
+void bk_test_render_params_fields(void);
+void bk_test_render_params_clut(void);
 
 static const struct { const char *name; BKCoreTestFunction run; } kTests[] = {
     { "vec_basics", bk_test_vec_basics },
@@ -92,6 +96,9 @@ static const struct { const char *name; BKCoreTestFunction run; } kTests[] = {
     { "seg_slices_planes", bk_test_seg_slices_planes },
     { "seg_overlay_picture", bk_test_seg_overlay_picture },
     { "seg_mask_surface", bk_test_seg_mask_surface },
+    { "render_params_frame", bk_test_render_params_frame },
+    { "render_params_fields", bk_test_render_params_fields },
+    { "render_params_clut", bk_test_render_params_clut },
 };
 static const int kTestCount = (int)(sizeof kTests / sizeof kTests[0]);
 
