@@ -83,6 +83,11 @@ public:
     gpu::Status encodeRaycast(gpu::CommandList &list, const BKRenderParams &p, const RaycastInputs &in,
                               gpu::Buffer &colorOut, gpu::Buffer &valueOut);
 
+    // What (2026-11-26, Vulkan plan 7.1 #5 "SlabPass"): the MPR / thin and thick slab pictures - the values-only
+    // path of the same ray cast (p.valuesOnly is forced to 1; the colour output is the pass's placeholder). Thin
+    // slab = p.useSlab with slabThickness 0 (one sample per ray), thick = MIP / MinIP / average over the slab.
+    gpu::Status encodeValues(gpu::CommandList &list, const BKRenderParams &p, const RaycastInputs &in, gpu::Buffer &valueOut);
+
     // What: the same straight into a storage image, laid over an opaque background colour (on-screen 3D view).
     gpu::Status encodeRaycastToTexture(gpu::CommandList &list, const BKRenderParams &p, const RaycastInputs &in,
                                        gpu::Texture &target, const float background[4]);

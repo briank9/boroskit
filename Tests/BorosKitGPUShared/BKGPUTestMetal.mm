@@ -7,6 +7,7 @@
 extern "C" NSString *BKMeshShaderSource(void);   // BorosKitMeshRender/BKMeshShaderSource.mm
 extern "C" NSString *BKSurfaceShaderSource(void); // BorosKitSurface/BKSurfaceShaderSource.mm
 extern "C" NSString *BKVolumeShaderSource(void);  // BorosKitRender/BKShaderSource.mm (2026-11-26: ray caster)
+extern "C" NSString *BKReformatShaderSource(void); // BorosKitRender/BKReformatShaderSource.mm (2026-11-26: reformat)
 
 namespace bkshared {
 
@@ -57,6 +58,9 @@ std::unique_ptr<boroskit::gpu::Device> MakeTestMetalDevice()
     id<MTLLibrary> volume = [mtl newLibraryWithSource:BKVolumeShaderSource() options:[BKMetalDevice shaderCompileOptions] error:&error];
     if (!volume) { NSLog(@"BorosKit GPU tests: volume library failed: %@", error); return nullptr; }
     BKGPUMetalAddLibrary(*device, volume);    // 2026-11-26: bk_raycast / bk_brick_* (BKRaycastPass)
+    id<MTLLibrary> reformat = [mtl newLibraryWithSource:BKReformatShaderSource() options:[BKMetalDevice shaderCompileOptions] error:&error];
+    if (!reformat) { NSLog(@"BorosKit GPU tests: reformat library failed: %@", error); return nullptr; }
+    BKGPUMetalAddLibrary(*device, reformat);  // 2026-11-26: bk_curved_reformat (BKReformatPass)
     BKGPUMetalAddLibrary(*device, mesh);
     BKGPUMetalAddLibrary(*device, triangle);
     BKGPUMetalAddLibrary(*device, scan);

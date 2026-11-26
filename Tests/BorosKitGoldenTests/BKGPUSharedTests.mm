@@ -85,6 +85,14 @@
                                              strict && strict[0] == '1'), 0);
 }
 
+// 2026-11-26 (7.1 #5): ReformatPass straight on the MetalDevice (strict with BK_GOLDEN_STRICT=1).
+- (void)testReformatPass
+{
+    if (![self haveDevice]) return;
+    const char *strict = getenv("BK_GOLDEN_STRICT");
+    XCTAssertEqual(bkshared::TestReformatPass(*_device, [self referencesFolder].fileSystemRepresentation, "metal", strict && strict[0] == '1'), 0);
+}
+
 - (void)testFeatureSceneRenders
 {
     if (![self haveDevice]) return;

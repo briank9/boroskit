@@ -247,6 +247,13 @@ Status RaycastPass::encodeRaycast(CommandList &list, const BKRenderParams &p, co
     return list.dispatch(*m.raycast, b.data(), (uint32_t)b.size(), (p.width + 7) / 8, (p.height + 7) / 8, 1);
 }
 
+Status RaycastPass::encodeValues(CommandList &list, const BKRenderParams &p, const RaycastInputs &in, Buffer &valueOut)
+{
+    BKRenderParams values = p;
+    values.valuesOnly = 1;   // the kernel then never writes the colour buffer
+    return encodeRaycast(list, values, in, *impl_->noBuffer, valueOut);
+}
+
 Status RaycastPass::encodeRaycastToTexture(CommandList &list, const BKRenderParams &p, const RaycastInputs &in, Texture &target,
                                            const float background[4])
 {

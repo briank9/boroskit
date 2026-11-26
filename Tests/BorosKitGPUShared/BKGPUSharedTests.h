@@ -74,11 +74,23 @@ struct RaycastCaseOutput {
     int32_t mode = 0;
     std::vector<uint8_t> rgba;
     std::vector<float> values;
+    bool valuesOnlyIdentical = false;   // the values-only (SlabPass) render gave exactly the same values
 };
 bool RenderRaycastCases(boroskit::gpu::Device &device, bool manualFiltering, std::vector<RaycastCaseOutput> *out);
 // strict (2026-11-26, after the portable-normalise switch): zero tolerance for the hardware-filtered run (Metal).
 int TestRaycastPass(boroskit::gpu::Device &device, const char *referencesDir, const char *outDir, const char *label,
                     bool strict = false);
+
+// What (2026-11-26, Vulkan plan 7.1 #5): the five golden curved-reformat cases (both height limits) through
+// ReformatPass on this device; compared with the recorded Metal references (strict = zero tolerance, else 1 HU /
+// 0.5 %) and with the CPU reference BKReformatComputeRows (< 0.5 HU).
+struct ReformatCaseOutput {
+    std::string name;
+    uint32_t width = 0, height = 0;
+    std::vector<float> values, cpu;
+};
+bool RenderReformatCases(boroskit::gpu::Device &device, std::vector<ReformatCaseOutput> *out);
+int TestReformatPass(boroskit::gpu::Device &device, const char *referencesDir, const char *label, bool strict);
 
 }  // namespace bkshared
 

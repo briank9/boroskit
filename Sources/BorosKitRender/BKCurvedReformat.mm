@@ -8,141 +8,25 @@
 #import "BKVolumeTexture.h"
 #import "BKMetalDevice.h"
 #include <unistd.h>
+#include "BKReformatPass.h"   // 2026-11-26: the picture on the shared GPU interface (Vulkan plan 7.1 #5)
+#include "BKGPUMetal.h"
 
-#define BKR_STR2(x) #x
-#define BKR_STR(x) BKR_STR2(x)
+namespace bkgpu = boroskit::gpu;
+
 
 static NSError *BKReformatError(NSInteger code, NSString *text)
 {
     return [NSError errorWithDomain:@"BKCurvedReformat" code:code userInfo:@{ NSLocalizedDescriptionKey: text }];
 }
 
-// The kernel. Metal -> GLSL: `kernel` + [[thread_position_in_grid]] -> compute shader + gl_GlobalInvocationID;
-// `constant BKReformatParams &` -> layout(std430) readonly buffer (or uniform block); `device const float4 *`
-// -> std430 readonly buffer of vec4; `texture3d<float, access::read>.read(uint3)` -> texelFetch(sampler3D, ivec3, 0)
-// (R16_UNORM, normalised 0..1); `device float *` -> std430 writeonly buffer of float; int(float) truncates
-// toward zero in both.
-static NSString *BKReformatShaderSource(void)
-{
-    static NSString *source;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        const char *header =
-            "#include <metal_stdlib>\n"
-            "using namespace metal;\n"
-            "typedef uint uint32_t;\n"
-            "typedef int int32_t;\n"
-            "struct BKReformatParams { " BKR_STR(BK_REFORMAT_PARAMS_FIELDS) " };\n";
-        const char *body = R"(
-// Exact voxel read, or outOfBoundsValue outside the scan (GLSL: texelFetch + bounds test).
-static float bkr_fetch(texture3d<float, access::read> vol, constant BKReformatParams &p, int x, int y, int z)
-{
-    if (x < 0 || y < 0 || z < 0 || x >= int(p.volumeWide) || y >= int(p.volumeHigh) || z >= int(p.volumeDeep))
-        return p.outOfBoundsValue;
-    return vol.read(uint3(x, y, z)).r * p.valueScale + p.valueOffset;
-}
+extern "C" NSString *BKReformatShaderSource(void);   // BKReformatShaderSource.mm (2026-11-26)
 
-static void bkr_cubic_weights(float d, thread float *w)
-{
-    float d2 = d * d, d3 = d2 * d;
-    w[0] = 0.5f * (-d + 2.0f * d2 - d3);
-    w[1] = 0.5f * (2.0f - 5.0f * d2 + 3.0f * d3);
-    w[2] = 0.5f * (d + 4.0f * d2 - 3.0f * d3);
-    w[3] = 0.5f * (-d2 + d3);
-}
-
-// Same as BKReformatSample() in BKCurvedReformatCore.c.
-static float bkr_sample(texture3d<float, access::read> vol, constant BKReformatParams &p, float3 c)
-{
-    if (p.interpolation == 0) {   // nearest: (int)(c + 0.5), cut toward zero (classic rule)
-        return bkr_fetch(vol, p, int(c.x + 0.5f), int(c.y + 0.5f), int(c.z + 0.5f));
-    }
-    if (p.interpolation == 1) {   // linear, classic rule: base cut toward zero, whole sample outside if any voxel is
-        int3 i0 = int3(c);         // (GLSL: ivec3(c) also cuts toward zero)
-        if (i0.x < 0 || i0.y < 0 || i0.z < 0 || i0.x + 1 >= int(p.volumeWide) || i0.y + 1 >= int(p.volumeHigh) ||
-            i0.z + 1 >= int(p.volumeDeep))
-            return p.outOfBoundsValue;
-        float3 d = c - float3(i0);
-        float sum = 0.0f;
-        for (int k = 0; k < 2; k++)
-            for (int j = 0; j < 2; j++)
-                for (int i = 0; i < 2; i++) {
-                    float w = (i ? d.x : 1.0f - d.x) * (j ? d.y : 1.0f - d.y) * (k ? d.z : 1.0f - d.z);
-                    sum += w * bkr_fetch(vol, p, i0.x + i, i0.y + j, i0.z + k);
-                }
-        return sum;
-    }
-    float3 f = floor(c);
-    float3 d = c - f;
-    int3 i0 = int3(f);
-    float wx[4], wy[4], wz[4];   // cubic (Catmull-Rom)
-    bkr_cubic_weights(d.x, wx);
-    bkr_cubic_weights(d.y, wy);
-    bkr_cubic_weights(d.z, wz);
-    float sum = 0.0f;
-    for (int k = 0; k < 4; k++) {
-        float plane = 0.0f;
-        for (int j = 0; j < 4; j++) {
-            float line = 0.0f;
-            for (int i = 0; i < 4; i++) line += wx[i] * bkr_fetch(vol, p, i0.x + i - 1, i0.y + j - 1, i0.z + k - 1);
-            plane += wy[j] * line;
-        }
-        sum += wz[k] * plane;
-    }
-    return sum;
-}
-
-// Same as BKReformatInBand() in BKCurvedReformatCore.c: the height band test for one slab sample.
-static bool bkr_in_band(constant BKReformatParams &p, float3 c)
-{
-    if (p.clipEnabled == 0) return true;
-    float t = p.clipNormalX * c.x + p.clipNormalY * c.y + p.clipNormalZ * c.z;
-    return t >= p.clipLow && t <= p.clipHigh;
-}
-
-// One thread per output pixel (GLSL: layout(local_size_x = 8, local_size_y = 8) in; same body).
-kernel void bk_curved_reformat(texture3d<float, access::read> vol [[texture(0)]],
-                               constant BKReformatParams &p [[buffer(0)]],
-                               device const float4 *frames [[buffer(1)]],   // 3 per column: base, row, slab (w = cut-off height function)
-                               device float *outValues [[buffer(2)]],
-                               uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= p.width || gid.y >= p.height) return;
-    float4 b4 = frames[gid.x * 3], r4 = frames[gid.x * 3 + 1], s4 = frames[gid.x * 3 + 2];
-    float3 base = b4.xyz, row = r4.xyz, slab = s4.xyz;
-    float ry = float(gid.y) - p.rowCentre;
-    float acc = 0.0f;
-    uint n = 0;   // samples taken (both height limits: Mac band + Boros Mobile clip band)
-    for (uint z = 0; z < p.depth; z++) {
-        float rz = float(z) - p.slabCentre;
-        if (p.bandEnabled != 0u) {   // Mac height cut-off (BKHeightBandInside): outside samples are never read
-            float h = b4.w + r4.w * ry + s4.w * rz;
-            if (!(h >= p.bandLow && h <= p.bandHigh)) continue;
-        }
-        float3 c = base + row * ry + slab * rz;
-        if (!bkr_in_band(p, c)) continue;   // Boros Mobile clip band: left out of the projection
-        float value = bkr_sample(vol, p, c);
-        if (p.projection == 1)      acc = (n == 0 || value > acc) ? value : acc;                     // MIP
-        else if (p.projection == 2) acc = (n == 0 || value < acc) ? value : acc;                     // MinIP
-        else if (p.projection == 3) acc = (n == 0) ? value : (acc * float(n) + value) / float(n + 1); // running mean
-        else if (p.projection == 4) acc += (max(value, -1000.0f) + 1000.0f) * p.radiographK;        // radiograph sum
-        else if (n == 0) acc = value;   // no projection: the first slab sample (classic)
-        n++;
-    }
-    if (p.bandEnabled != 0u && n == 0) acc = p.bandOutsideValue;   // the whole pixel is cut off (Mac band)
-    else if (n == 0) acc = p.outOfBoundsValue;                      // the whole slab is outside the clip band
-    else if (p.projection == 4) acc = 3000.0f - 4000.0f * exp(-acc);
-    outValues[gid.y * p.width + gid.x] = acc;
-}
-)";
-        source = [[NSString stringWithUTF8String:header] stringByAppendingString:[NSString stringWithUTF8String:body]];
-    });
-    return source;
-}
-
+// 2026-11-26 (agent "vulkan-engine"): a thin Metal adapter over the backend-neutral ReformatPass (shared with the
+// Vulkan engine); public API, error codes and memory rules (no-copy page-aligned output) unchanged.
 @implementation BKCurvedReformat {
     id<MTLCommandQueue> _queue;
-    id<MTLComputePipelineState> _pipeline;
+    std::unique_ptr<bkgpu::Device> _gpu;
+    std::unique_ptr<boroskit::render::ReformatPass> _pass;
 }
 
 - (instancetype)initWithDevice:(id<MTLDevice>)device error:(NSError **)error
@@ -154,10 +38,13 @@ kernel void bk_curved_reformat(texture3d<float, access::read> vol [[texture(0)]]
             return nil;
         }
         id<MTLLibrary> library = [_device newLibraryWithSource:BKReformatShaderSource() options:[BKMetalDevice shaderCompileOptions] error:error];
-        id<MTLFunction> function = [library newFunctionWithName:@"bk_curved_reformat"];
-        _pipeline = function ? [_device newComputePipelineStateWithFunction:function error:error] : nil;
         _queue = [_device newCommandQueue];
-        if (_pipeline == nil || _queue == nil) {
+        if (library && _queue && bkgpu::makeMetalDevice(_device, _queue, &_gpu) == bkgpu::Status::Ok &&
+            bkgpu::BKGPUMetalAddLibrary(*_gpu, library) == bkgpu::Status::Ok) {
+            _pass.reset(new boroskit::render::ReformatPass(*_gpu));
+            if (_pass->prepare() != bkgpu::Status::Ok) _pass.reset();
+        }
+        if (_pass == nullptr || _queue == nil) {
             if (error && *error == nil) *error = BKReformatError(2, @"The curved-MPR kernel could not be built.");
             return nil;
         }
@@ -184,21 +71,22 @@ static BKReformatParams BKReformatWithVolume(BKReformatParams params, BKVolumeTe
         return nil;
     }
     params = BKReformatWithVolume(params, volume);
-    id<MTLBuffer> frameBuffer = [_device newBufferWithBytes:frames length:sizeof(BKReformatFrame) * params.width
-                                                    options:MTLResourceStorageModeShared];
-    if (frameBuffer == nil) {
+    std::unique_ptr<bkgpu::Buffer> frameBuffer = _pass->makeFrames(frames, params.width, nullptr);
+    if (frameBuffer == nullptr) {
         if (error) *error = BKReformatError(4, @"Not enough memory for the column frames.");
         return nil;
     }
     id<MTLCommandBuffer> cb = [_queue commandBuffer];
-    id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-    [enc setComputePipelineState:_pipeline];
-    [enc setTexture:volume.texture atIndex:0];
-    [enc setBytes:&params length:sizeof(params) atIndex:0];
-    [enc setBuffer:frameBuffer offset:0 atIndex:1];
-    [enc setBuffer:valueBuffer offset:0 atIndex:2];
-    [enc dispatchThreadgroups:MTLSizeMake((params.width + 7) / 8, (params.height + 7) / 8, 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
-    [enc endEncoding];
+    {
+        // Recorded through the shared interface (the command buffer keeps the Metal buffers alive until it is done).
+        std::unique_ptr<bkgpu::CommandList> list = bkgpu::BKGPUMetalCommandList(*_gpu, cb);
+        std::unique_ptr<bkgpu::Texture> scan = bkgpu::BKGPUMetalWrapTexture(*_gpu, volume.texture);
+        std::unique_ptr<bkgpu::Buffer> values = bkgpu::BKGPUMetalWrapBuffer(*_gpu, valueBuffer);
+        if (!list || !scan || !values || _pass->encode(*list, params, *frameBuffer, *scan, *values) != bkgpu::Status::Ok) {
+            if (error) *error = BKReformatError(6, @"The GPU failed to draw the picture.");
+            return nil;
+        }
+    }
     [cb commit];
     return cb;
 }

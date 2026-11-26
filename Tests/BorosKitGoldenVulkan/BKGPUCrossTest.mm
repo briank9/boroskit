@@ -89,6 +89,7 @@ int main(int argc, char **argv)
         std::vector<bkshared::RaycastCaseOutput> mRay[2], vRay[2];
         for (int m = 0; m < 2; m++)
             if (!bkshared::RenderRaycastCases(*metal, m != 0, &mRay[m])) { std::printf("FAIL: ray casting on Metal\n"); failures++; }
+        failures += bkshared::TestReformatPass(*metal, refs, "metal", true);   // 2026-11-26: Metal strict
         std::vector<uint8_t> mRGBA, vRGBA;
         std::vector<float> mDist, vDist;
         if (!bkshared::RenderFeatureScene(*metal, &mRGBA, &mDist)) { std::printf("FAIL: feature scene on Metal\n"); failures++; }

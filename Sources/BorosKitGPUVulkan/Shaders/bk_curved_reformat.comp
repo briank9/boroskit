@@ -1,0 +1,33 @@
+// BorosKitGPUVulkan: the curved reformat (bk_curved_reformat) - thin GLSL entry point; the maths is
+// BKReformatShaderBodies.h (shared with Metal). One thread per output pixel.
+// Original BorosKit code written for this project; contains no third-party code. 2026-11-26, agent "vulkan-engine".
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#define BK_GLSL 1
+#define uint32_t uint
+#define int32_t int
+#include "BKCurvedReformatCore.h"
+#include "BKReformatShaderBodies.h"
+#define bk_float3 vec3
+#define bk_float4 vec4
+#define bk_int3 ivec3
+#define bkr_texture3d texture3D
+#define BKR_READ(t, x, y, z) texelFetch(sampler3D(t, bkrSampler), ivec3(x, y, z), 0).r
+#define BKR_P_PARAM
+#define BKR_P_ARG
+#define BKR_P_FIRST_PARAM
+#define BKR_P_FIRST_ARG
+#define BKR_OUT4(name) out float name[4]
+#define BKR_FN
+layout(local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2) in;
+layout(std430, set = 0, binding = 0) readonly buffer BKReformatParamsBlock { BK_REFORMAT_PARAMS_FIELDS } p;
+layout(std430, set = 0, binding = 1) readonly buffer BKFrames { vec4 frames[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer BKValues { float outValues[]; };
+layout(set = 0, binding = 16) uniform texture3D vol;
+layout(set = 0, binding = 40) uniform sampler bkrSampler;
+BK_REFORMAT_HELPER_BODIES
+void main()
+{
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    BK_REFORMAT_KERNEL_BODY
+}

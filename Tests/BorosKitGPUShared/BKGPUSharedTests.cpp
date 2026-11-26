@@ -12,6 +12,7 @@
 // 2026-11-26 (7.1 #4): the ray caster - private headers of BorosKitRender, by path (also compiled in the XCTest target)
 #include "../../Sources/BorosKitRender/BKRaycastPass.h"
 #include "../../Sources/BorosKitRender/BKRenderParamsCore.h"
+#include "../../Sources/BorosKitRender/BKReformatPass.h"   // 2026-11-26 (7.1 #5)
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -720,7 +721,17 @@ bool RenderRaycastCases(Device &device, bool manualFiltering, std::vector<Raycas
             std::unique_ptr<Buffer> values = device.makeBuffer(pixels * 4, Memory::Readback, UsageStorage, nullptr);
             if (!colors || !values || pass.encodeRaycast(*cl, p, in, *colors, *values) != Status::Ok ||
                 device.submit(*cl, true) != Status::Ok) { ok = false; break; }
+            // SlabPass (values-only path, 2026-11-26): the same parameters, values only - must equal the full render.
+            std::unique_ptr<Buffer> slabValues = device.makeBuffer(pixels * 4, Memory::Readback, UsageStorage, nullptr);
+            std::unique_ptr<CommandList> sl = device.begin(nullptr);
+            if (!slabValues || !sl || pass.encodeValues(*sl, p, in, *slabValues) != Status::Ok || device.submit(*sl, true) != Status::Ok) {
+                ok = false;
+                break;
+            }
             RaycastCaseOutput o;
+            o.valuesOnlyIdentical = std::memcmp(slabValues->map(), values->map(), pixels * 4) == 0;
+            slabValues->unmap();
+            values->unmap();
             o.name = c.name;
             o.width = c.width; o.height = c.height; o.mode = c.mode;
             const uint8_t *rgba = (const uint8_t *)colors->map();
@@ -779,12 +790,108 @@ int TestRaycastPass(Device &device, const char *referencesDir, const char *outDi
             char a[256], b[256];
             bk_golden_describe_image_report(&rc, a, sizeof a);
             bk_golden_describe_image_report(&rd, b, sizeof b);
-            std::printf("RAYCAST | %s | %s%s vs Metal reference: colour %s; values %s\n", o.name.c_str(), label,
-                        manual ? " (manual filtering)" : "", a, b);
-            if (!rc.pass || !rd.pass) failures++;
+            std::printf("RAYCAST | %s | %s%s vs Metal reference: colour %s; values %s; values-only (slab) path %s\n", o.name.c_str(), label,
+                        manual ? " (manual filtering)" : "", a, b, o.valuesOnlyIdentical ? "identical" : "DIFFERENT - FAIL");
+            if (!rc.pass || !rd.pass || !o.valuesOnlyIdentical) failures++;
             bk_golden_image_free(&ref);
             bk_golden_image_free(&refV);
         }
+    }
+    return failures;
+}
+
+// ---- Curved reformat (2026-11-26, Vulkan plan 7.1 #5) --------------------------------------------------------------
+
+bool RenderReformatCases(Device &device, std::vector<ReformatCaseOutput> *out)
+{
+    out->clear();
+    BKGoldenVolume vol;
+    std::memset(&vol, 0, sizeof vol);
+    if (bk_golden_make_head_phantom(&vol) != 0) return false;
+    const size_t n = (size_t)vol.width * vol.height * vol.depth;
+    float lo = INFINITY, hi = -INFINITY;
+    for (size_t i = 0; i < n; i++) { lo = std::fmin(lo, vol.voxels[i]); hi = std::fmax(hi, vol.voxels[i]); }
+    BKRenderQuantization q = BKRenderQuantizationForRange(lo, hi, BKRenderAllIntegral(vol.voxels, n));
+    std::vector<uint16_t> steps(n);
+    BKRenderQuantizeToSteps(vol.voxels, n, q, steps.data());
+    std::vector<float> stored(n);   // the stored scan as real values (CPU reference input)
+    for (size_t i = 0; i < n; i++) stored[i] = steps[i] / 65535.0f * q.valueScale + q.valueOffset;
+    bool ok = false;
+    do {
+        TextureDesc td;
+        td.type = TextureType::Texture3D;
+        td.format = Format::R16Unorm;
+        td.width = vol.width; td.height = vol.height; td.depth = vol.depth;
+        td.usage = UsageSampled | UsageCopyDestination;
+        std::unique_ptr<Texture> scan = device.makeTexture(td, nullptr);
+        std::unique_ptr<CommandList> list = scan ? device.begin(nullptr) : nullptr;
+        if (!list || list->upload(*scan, steps.data(), vol.width * 2, vol.width * vol.height * 2, 0, vol.depth) != Status::Ok ||
+            device.submit(*list, true) != Status::Ok) break;
+        boroskit::render::ReformatPass pass(device);
+        if (pass.prepare() != Status::Ok) break;
+        ok = true;
+        for (uint32_t i = 0; i < kBKGoldenReformatCaseCount && ok; i++) {
+            const BKGoldenReformatCase &c = kBKGoldenReformatCases[i];
+            std::vector<BKReformatFrame> frames(c.width);
+            bk_golden_reformat_frames(&c, (float *)frames.data());
+            BKReformatParams p;   // as BKGoldenTests.testCurvedReformats sets them
+            std::memset(&p, 0, sizeof p);
+            p.width = c.width; p.height = c.height; p.depth = c.depth;
+            p.interpolation = c.interpolation; p.projection = c.projection;
+            p.outOfBoundsValue = vol.outOfBoundsValue;
+            p.radiographK = BKReformatRadiographK(0.75, 0.5);
+            p.valueScale = q.valueScale; p.valueOffset = q.valueOffset;
+            p.volumeWide = vol.width; p.volumeHigh = vol.height; p.volumeDeep = vol.depth;
+            p.rowCentre = (c.height - 1) / 2.0f;
+            p.slabCentre = (c.depth - 1) / 2.0f;
+            p.bandEnabled = c.band ? 1u : 0u; p.bandLow = c.bandLow; p.bandHigh = c.bandHigh; p.bandOutsideValue = -3000.0f;
+            p.clipEnabled = c.clip; p.clipNormalZ = 1.0f; p.clipLow = c.clipLow; p.clipHigh = c.clipHigh;
+            std::unique_ptr<Buffer> fb = pass.makeFrames(frames.data(), c.width, nullptr);
+            std::unique_ptr<Buffer> values = device.makeBuffer((uint64_t)c.width * c.height * 4, Memory::Readback, UsageStorage, nullptr);
+            std::unique_ptr<CommandList> cl = device.begin(nullptr);
+            if (!fb || !values || !cl || pass.encode(*cl, p, *fb, *scan, *values) != Status::Ok || device.submit(*cl, true) != Status::Ok) {
+                ok = false;
+                break;
+            }
+            ReformatCaseOutput o;
+            o.name = c.name;
+            o.width = c.width; o.height = c.height;
+            const float *v = (const float *)values->map();
+            o.values.assign(v, v + (size_t)c.width * c.height);
+            values->unmap();
+            o.cpu.resize(o.values.size());
+            BKReformatComputeRows(&p, frames.data(), stored.data(), 0, c.height, o.cpu.data());
+            out->push_back(std::move(o));
+        }
+    } while (false);
+    bk_golden_volume_free(&vol);
+    return ok;
+}
+
+int TestReformatPass(Device &device, const char *referencesDir, const char *label, bool strict)
+{
+    std::vector<ReformatCaseOutput> cases;
+    if (!RenderReformatCases(device, &cases)) { std::printf("REFORMAT | %s | FAIL: could not render\n", label); return 1; }
+    int failures = 0;
+    const std::string refs = referencesDir;
+    for (const ReformatCaseOutput &o : cases) {
+        BKGoldenImage mine = { o.width, o.height, 1, BKGoldenFormatF32, (void *)o.values.data() };
+        BKGoldenImage ref;
+        std::memset(&ref, 0, sizeof ref);
+        if (bk_golden_read_pfm((refs + "/" + o.name + ".values.pfm").c_str(), &ref) != 0) {
+            std::printf("REFORMAT | %s | FAIL: reference missing\n", o.name.c_str());
+            failures++;
+            continue;
+        }
+        BKGoldenImageReport r = bk_golden_compare_images(&ref, &mine, strict ? BKGoldenImageTolerance{ 0, 0 } : BKGoldenImageTolerance{ 1.0, 0.005 });
+        char text[256];
+        bk_golden_describe_image_report(&r, text, sizeof text);
+        double worst = 0;
+        for (size_t k = 0; k < o.values.size(); k++) worst = std::fmax(worst, std::fabs((double)o.values[k] - o.cpu[k]));
+        std::printf("REFORMAT | %s | %s (ReformatPass) vs Metal reference: %s; CPU reference vs %s: max %.4g HU\n", o.name.c_str(), label,
+                    text, label, worst);
+        if (!r.pass || !(worst < 0.5)) failures++;
+        bk_golden_image_free(&ref);
     }
     return failures;
 }

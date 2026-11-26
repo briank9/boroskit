@@ -47,6 +47,7 @@
 #ifndef BK_CURVED_REFORMAT_CORE_H
 #define BK_CURVED_REFORMAT_CORE_H
 
+#ifndef BK_GLSL   // 2026-11-26: GLSL (bk_curved_reformat.comp) includes this header for BK_REFORMAT_PARAMS_FIELDS only
 #include <stdint.h>
 #include <stddef.h>
 #include "BKHeightBandCore.h"   // BKHeightBandInside (the cut-off test, 2026-11-25)
@@ -72,6 +73,8 @@ typedef enum {
 } BKReformatProjection;
 
 // The parameter block, written ONCE as a field list so C, the Metal kernel source and a future
+#endif   // !BK_GLSL
+
 // GLSL/HLSL port use the identical layout (32-bit scalars only = std430/std140 safe).
 #define BK_REFORMAT_PARAMS_FIELDS \
     uint32_t width;            /* output columns */ \
@@ -110,6 +113,7 @@ typedef enum {
     float reserved2;           /* keeps the block a multiple of 16 bytes (112) */ \
     float reserved3;
 
+#ifndef BK_GLSL
 typedef struct BKReformatParams {
     BK_REFORMAT_PARAMS_FIELDS
 } BKReformatParams;
@@ -172,4 +176,5 @@ float BKReformatSample(const BKReformatParams *params, const float *voxels, doub
 }
 #endif
 
+#endif   // !BK_GLSL
 #endif
