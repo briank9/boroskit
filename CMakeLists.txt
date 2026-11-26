@@ -35,7 +35,7 @@ include(cmake/BorosKitSources.cmake)
 # ---- One list of sources: stop if a core on disk is not listed (or a listed one is gone) ----------------
 file(GLOB_RECURSE BK_CORES_ON_DISK RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
      "${CMAKE_CURRENT_SOURCE_DIR}/Sources/*.c" "${CMAKE_CURRENT_SOURCE_DIR}/Sources/*.cpp")
-set(BK_CORES_LISTED ${BOROSKIT_VEC_SOURCES} ${BOROSKIT_CORE_C_SOURCES} ${BOROSKIT_CORE_CXX_SOURCES})
+set(BK_CORES_LISTED ${BOROSKIT_VEC_SOURCES} ${BOROSKIT_CORE_C_SOURCES} ${BOROSKIT_CORE_CXX_SOURCES} ${BOROSKIT_GPU_VULKAN_SOURCES})
 set(BK_MISSING ${BK_CORES_ON_DISK})
 list(REMOVE_ITEM BK_MISSING ${BK_CORES_LISTED})
 set(BK_GONE ${BK_CORES_LISTED})
@@ -135,3 +135,71 @@ if(NOT MSVC)
     target_compile_options(bk_gpu_interface_test PRIVATE -Wextra -pedantic -Werror)
 endif()
 add_test(NAME gpu.interface COMMAND bk_gpu_interface_test)
+
+# ---- Vulkan engine (step M6+, 2026-11-26) ----------------------------------------------------------------------
+# Needs the Vulkan SDK at BUILD time only: headers, glslc, spirv-val (user decisions D1 / D2). Found through the
+# VULKAN_SDK environment variable or the usual install places; without it the Vulkan part is skipped.
+find_path(BK_VULKAN_INCLUDE_DIR vulkan/vulkan.h HINTS "$ENV{VULKAN_SDK}/include" /usr/local/include)
+find_program(BK_GLSLC glslc HINTS "$ENV{VULKAN_SDK}/bin")
+find_program(BK_SPIRV_VAL spirv-val HINTS "$ENV{VULKAN_SDK}/bin")
+if(BK_VULKAN_INCLUDE_DIR AND BK_GLSLC AND BK_SPIRV_VAL)
+    message(STATUS "BorosKit Vulkan engine: headers ${BK_VULKAN_INCLUDE_DIR}, ${BK_GLSLC}, ${BK_SPIRV_VAL}")
+    # GLSL -> SPIR-V (Vulkan 1.3, optimised, no fast-math options exist in glslc) -> spirv-val -> embedded table.
+    set(BK_SPIRV_FILES "")
+    foreach(shader IN LISTS BOROSKIT_GPU_VULKAN_SHADERS)
+        get_filename_component(name "${shader}" NAME)
+        set(spv "${CMAKE_CURRENT_BINARY_DIR}/shaders/${name}.spv")
+        add_custom_command(OUTPUT "${spv}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+            COMMAND ${BK_GLSLC} --target-env=vulkan1.3 -O
+                    -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitGPUVulkan/Shaders"
+                    -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitMeshRender/include"
+                    -MD -MF "${spv}.d" -o "${spv}" "${CMAKE_CURRENT_SOURCE_DIR}/${shader}"
+            COMMAND ${BK_SPIRV_VAL} --target-env vulkan1.3 "${spv}"
+            DEPENDS "${shader}" DEPFILE "${spv}.d"
+            COMMENT "glslc + spirv-val ${name}" VERBATIM)
+        list(APPEND BK_SPIRV_FILES "${spv}")
+    endforeach()
+    set(BK_SHADER_TABLE "${CMAKE_CURRENT_BINARY_DIR}/shaders/BKVulkanShaderTable.cpp")
+    add_custom_command(OUTPUT "${BK_SHADER_TABLE}"
+        COMMAND ${CMAKE_COMMAND} "-DOUTPUT=${BK_SHADER_TABLE}" "-DSPIRV_FILES=${BK_SPIRV_FILES}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/BKEmbedSpirv.cmake"
+        DEPENDS ${BK_SPIRV_FILES} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/BKEmbedSpirv.cmake"
+        COMMENT "Embedding SPIR-V" VERBATIM)
+
+    # boroskit_gpu_vulkan: the backend. Nothing from Vulkan is linked (own loader, dlopen at run time).
+    add_library(boroskit_gpu_vulkan STATIC ${BOROSKIT_GPU_VULKAN_SOURCES} "${BK_SHADER_TABLE}")
+    target_include_directories(boroskit_gpu_vulkan PUBLIC Sources/BorosKitGPUVulkan/include
+                               PRIVATE Sources/BorosKitGPUVulkan "${BK_VULKAN_INCLUDE_DIR}")
+    target_link_libraries(boroskit_gpu_vulkan PUBLIC boroskit_gpu boroskit_cores ${CMAKE_DL_LIBS})
+
+    # Milestone 1 tests. The loader is told to use MoltenVK (this Mac; the SDK also has KosmicKrisp) and to
+    # find the validation layer in the SDK; MoltenVK's fast-math is switched off for golden runs.
+    set(BK_VULKAN_TEST_ENV "")
+    if(APPLE AND DEFINED ENV{VULKAN_SDK})
+        set(BK_VULKAN_TEST_ENV
+            "VK_DRIVER_FILES=$ENV{VULKAN_SDK}/share/vulkan/icd.d/MoltenVK_icd.json"
+            "MVK_CONFIG_FAST_MATH_ENABLED=0")
+        # The SDK installer normally also puts the layers in /usr/local; adding the SDK folder a second time
+        # would make the loader warn about duplicates (which the tests count), so only when they are missing.
+        if(NOT EXISTS "/usr/local/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json")
+            list(APPEND BK_VULKAN_TEST_ENV "VK_ADD_LAYER_PATH=$ENV{VULKAN_SDK}/share/vulkan/explicit_layer.d")
+        endif()
+    endif()
+    add_executable(bk_vulkan_triangle_test Tests/BorosKitGoldenVulkan/BKVulkanTriangleTest.cpp)
+    target_include_directories(bk_vulkan_triangle_test PRIVATE Tests/BorosKitGoldenVulkan)
+    target_link_libraries(bk_vulkan_triangle_test PRIVATE boroskit_gpu_vulkan)
+    add_test(NAME vulkan.triangle COMMAND bk_vulkan_triangle_test)
+
+    add_executable(bk_golden_vulkan Tests/BorosKitGoldenVulkan/BKGoldenVulkan.cpp Tests/BorosKitGoldenVulkan/BKPNGWrite.c)
+    target_include_directories(bk_golden_vulkan PRIVATE Tests/BorosKitGoldenVulkan)
+    target_link_libraries(bk_golden_vulkan PRIVATE boroskit_gpu_vulkan bk_golden_core)
+    target_compile_definitions(bk_golden_vulkan PRIVATE
+        BK_GOLDEN_REFERENCES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Tests/BorosKitGoldenTests/References")
+    set(BK_MILESTONE_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/milestone1" CACHE PATH "where bk_golden_vulkan writes its pictures")
+    file(MAKE_DIRECTORY "${BK_MILESTONE_OUTPUT}")
+    add_test(NAME vulkan.golden_mesh COMMAND bk_golden_vulkan "${BK_MILESTONE_OUTPUT}")
+    set_tests_properties(vulkan.triangle vulkan.golden_mesh PROPERTIES ENVIRONMENT "${BK_VULKAN_TEST_ENV}")
+else()
+    message(STATUS "BorosKit Vulkan engine: SKIPPED (Vulkan SDK headers / glslc / spirv-val not found; set VULKAN_SDK)")
+endif()

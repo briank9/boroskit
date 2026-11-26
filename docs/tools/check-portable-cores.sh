@@ -30,7 +30,8 @@ $out2"
   else echo "ok       $f"; fi
 done
 # C++: <thread> reaches pthread.h inside the standard library on Unix; that is fine (std::thread is portable).
-for f in $(find Sources -name '*.cpp' | sort); do
+# The Vulkan backend (Sources/BorosKitGPUVulkan) is not a core: it needs the Vulkan SDK headers (CMake builds it).
+for f in $(find Sources -name '*.cpp' -not -path 'Sources/BorosKitGPUVulkan/*' | sort); do
   out=$(clang++ -std=c++17 -DBK_PARALLEL_USE_STD_THREAD=1 -Werror -fno-modules -fsyntax-only -H $INC "$f" 2>&1)
   st=$?
   apple=$(printf '%s\n' "$out" | grep -E '^\.+ ' | grep -v 'pthread' | grep -E "$BAD" | sed 's/^\.* //' | sort -u | tr '\n' ' ')

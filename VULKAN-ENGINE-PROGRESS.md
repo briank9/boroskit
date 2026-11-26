@@ -150,3 +150,69 @@ MANIFEST.txt updated with the new sizes / hashes.
 
 ### Where to resume
 Vulkan SDK is being installed by the user. Next: check `vulkaninfo --summary`, then M6 (see above).
+
+## 2026-11-26 - M6-M10: MILESTONE 1 PASSED (agent "vulkan-engine", branch agent/vulkan-engine)
+
+Base: fast-forwarded to BorosKit main 9b18762 (agent/vulkan-engine + agent/ios-cutoff merge).
+Vulkan SDK 1.4.363.1 installed by the user (~/VulkanSDK/1.4.363.1/macOS; tools + layers also in /usr/local).
+
+### In plain words
+The new Vulkan engine draws on this Mac (through MoltenVK). It drew the test triangle exactly right, and it
+drew the golden bone surface **bit for bit identical** to the Metal reference picture: every pixel and every
+ray distance the same (max difference 0), for the milestone case and for the see-through perspective case
+too. The Vulkan checking layer (incl. synchronisation checks) reported nothing. Boros 6 is unchanged.
+Picture for the user: `milestone1-pictures/meshrender_bone_ortho_metal_vs_vulkan.png`
+(Metal | Vulkan | difference x 40, all black = no difference); also `..._persp_seethrough_...png`.
+
+### What was built
+- **M8 Metal half** (`df9c99f`): mesh shader maths moved into `BorosKitMeshRender/include/BKMeshShaderBodies.h`
+  (shared Metal/GLSL subset, option C), field list into `BKMeshUniformFields.h`; `BKMeshBoxDepthExtent` (C) used by
+  BKMeshRenderer. Golden strict unchanged (0 differences), all 8 SwiftPM suites pass.
+- **M6** `Sources/BorosKitGPUVulkan/` (CMake only): `BKGPUVulkan.h` (options: validation, sync validation, message
+  callback), `BKVulkanLoader` (own dlopen loader, X-macro function table, VK_NO_PROTOTYPES - nothing linked),
+  `BKVulkanDevice.cpp` (Vulkan 1.3 core, dynamic rendering; portability enumeration/subset; GPU choice through
+  BKGPUChoiceCore; own sub-allocator; buffers, 2D/3D textures, samplers, render pipelines, command lists with
+  staging uploads, readback, automatic layout/memory barriers, per-list descriptor pool; negative-height
+  viewport = Metal's y-up). Compute / Surface / timestamps: Status::Unsupported (later phases).
+- **M7** `Tests/BorosKitGoldenVulkan/BKVulkanTriangleTest.cpp` + GLSL `bk_triangle_*`: 724 inside pixels exact,
+  2158 outside exact, 190 edge pixels either - 0 wrong; 0 validation messages.
+- **M8 Vulkan half**: GLSL `bk_prelude.glsl`, `bk_mesh_vertex.vert`, `bk_mesh_fragment_distance.frag` (entry points
+  only, maths #included from BKMeshShaderBodies.h); CMake compiles with `glslc --target-env=vulkan1.3 -O`, checks
+  with `spirv-val`, embeds the words with our own `cmake/BKEmbedSpirv.cmake`.
+- **M9** `BKGoldenVulkan.cpp`: reads `surface_bone_300.bkmesh`, builds the settings block with the same C functions
+  as Metal (BKMeshBoxDepthExtent, BKMeshDepthRange, BKMeshUniformsFill, SetModel, SetColor), mirrors the draw
+  states (solid; see-through = depth-only pass + LESS_OR_EQUAL colour pass), compares with bk_golden_compare_*:
+  meshrender_bone_ortho rgba + distance max difference 0; meshrender_bone_persp_seethrough also 0.
+- **M10** `BKPNGWrite.c` (own PNG writer: stored deflate, CRC-32 / Adler-32 from the format description) and the
+  side-by-side pictures.
+- ctest: 23/23 (21 core + vulkan.triangle + vulkan.golden_mesh).
+
+### How to build / run (VULKAN_SDK is not set in the user's shell; the ~/.zprofile line was not added)
+```
+export VULKAN_SDK=~/VulkanSDK/1.4.363.1/macOS        # needed when CMake configures (finds headers/glslc/spirv-val)
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release && cmake --build build-cmake
+ctest --test-dir build-cmake --output-on-failure    # tests set VK_DRIVER_FILES=MoltenVK + MVK_CONFIG_FAST_MATH_ENABLED=0
+```
+Without VULKAN_SDK at configure time the Vulkan part is skipped (message), the core tests still run. To make it
+permanent the user can add `export VULKAN_SDK=$HOME/VulkanSDK/1.4.363.1/macOS` to ~/.zprofile (not done by the
+agent, as instructed).
+
+### Notes / surprises
+- Bit-identical (not just within tolerance) is plausible because MoltenVK turns our SPIR-V into Metal on the same
+  GPU; it proves the shared maths, layout, states and conventions are right, NOT other vendors' numbers (phase 9:
+  NVIDIA/AMD PC needed, user decision D6).
+- Extra run on the SDK's second Metal-based driver **KosmicKrisp** (Mesa): golden cases pass within tolerance
+  (ortho rgba max difference 1 in one channel, rest 0), triangle not run there with validation because
+  **KosmicKrisp + validation layer -> device creation refused (Status::Unsupported)** - not investigated yet
+  (open item; likely the layer-settings / sync-validation path). It also lacks fillModeNonSolid (wireframe).
+- Loader warns about duplicate layer manifests if the SDK layer folder is added while /usr/local has them; CMake
+  only adds VK_ADD_LAYER_PATH when /usr/local lacks the validation layer.
+- `MVK_CONFIG_FAST_MATH_ENABLED=0` is the MoltenVK environment setting as I remember it (should be verified in the
+  SDK's MoltenVK docs); results were bit-identical anyway.
+- Front-face winding with the flipped viewport (VK_FRONT_FACE_COUNTER_CLOCKWISE) is untested: the golden cases
+  use no culling. Add a culling golden case before relying on it.
+
+### Where to resume
+1. Mesh pass completeness on Vulkan: lines, points, textured meshes, culling golden case (front-face check).
+2. Phase 2 per the kickoff plan: MetalDevice implementing BKGPU.h, then a C++ MeshPass used by both backends.
+3. Open: KosmicKrisp + validation refusal; asynchronous submit; compute pipelines (surface extraction, phase 4).

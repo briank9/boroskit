@@ -83,3 +83,16 @@ set(BOROSKIT_CORE_INCLUDE_DIRS
     Sources/BorosKitRender
     Sources/BorosKitSurface/include
 )
+
+# The Vulkan backend (2026-11-26, vulkan-engine M6): C++ against the installed Vulkan SDK headers; built only
+# when CMake finds the SDK (never by Package.swift). Listed here so the "one list" check knows about it.
+set(BOROSKIT_GPU_VULKAN_SOURCES
+    Sources/BorosKitGPUVulkan/BKVulkanLoader.cpp
+    Sources/BorosKitGPUVulkan/BKVulkanDevice.cpp
+)
+set(BOROSKIT_GPU_VULKAN_SHADERS
+    Sources/BorosKitGPUVulkan/Shaders/bk_triangle_vertex.vert
+    Sources/BorosKitGPUVulkan/Shaders/bk_triangle_fragment.frag
+    Sources/BorosKitGPUVulkan/Shaders/bk_mesh_vertex.vert
+    Sources/BorosKitGPUVulkan/Shaders/bk_mesh_fragment_distance.frag
+)
