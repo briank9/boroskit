@@ -61,6 +61,31 @@ static std::string NewestHomeSDK()
 
 static std::string gLoaderPath;   // which libvulkan was opened (for the log / Preferences note)
 
+// What: the folders searched for libvulkan.1.dylib, in order (see OpenLoader).
+static std::vector<std::string> LoaderDirs()
+{
+    std::vector<std::string> dirs;
+#if defined(__APPLE__)
+    if (const char *sdk = std::getenv("VULKAN_SDK")) dirs.push_back(std::string(sdk) + "/lib");
+    std::string home = NewestHomeSDK();
+    if (!home.empty()) dirs.push_back(home + "/lib");
+    dirs.push_back("/usr/local/lib");
+#endif
+    return dirs;
+}
+
+std::string FindLoaderFile()
+{
+#if defined(__APPLE__)
+    for (const std::string &d : LoaderDirs()) {
+        struct stat st;
+        std::string lib = d + "/libvulkan.1.dylib";
+        if (stat(lib.c_str(), &st) == 0) return lib;
+    }
+#endif
+    return std::string();
+}
+
 // What: the library handle and vkGetInstanceProcAddr, found once per process. Why: the loader stays open
 // for the life of the program (closing it while devices exist would crash).
 // Search order (macOS): VULKAN_SDK/lib, the newest ~/VulkanSDK/<version>/macOS/lib, /usr/local/lib, then the
@@ -72,12 +97,8 @@ static void *OpenLoader()
 #if defined(_WIN32)
     return (void *)LoadLibraryA("vulkan-1.dll");
 #else
-    std::vector<std::string> dirs;
+    std::vector<std::string> dirs = LoaderDirs();
 #if defined(__APPLE__)
-    if (const char *sdk = std::getenv("VULKAN_SDK")) dirs.push_back(std::string(sdk) + "/lib");
-    std::string home = NewestHomeSDK();
-    if (!home.empty()) dirs.push_back(home + "/lib");
-    dirs.push_back("/usr/local/lib");
     for (const std::string &d : dirs) {
         std::string lib = d + "/libvulkan.1.dylib";
         struct stat st;

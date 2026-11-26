@@ -35,7 +35,15 @@ static Status BKGPUVulkanTestFactory(std::unique_ptr<Device> *out, std::string *
     return Status::Ok;
 }
 
+// What: is the engine there, without loading anything (Preferences shows the switch enabled or a one-line note)?
+static bool BKGPUVulkanTestProbe(std::string *reason)
+{
+    if (!vulkanBackendBuilt()) { *reason = "this build has no Vulkan engine (built without the Vulkan SDK)"; return false; }
+    if (!vulkanLoaderInstalled(nullptr)) { *reason = "Vulkan SDK not installed (not bundled with the app)"; return false; }
+    return true;
+}
+
 extern "C" void BKGPUVulkanTestEngineInstall(void)
 {
-    BKGPURegisterTestEngine(BKGPUVulkanTestFactory);
+    BKGPURegisterTestEngine(BKGPUVulkanTestFactory, BKGPUVulkanTestProbe);
 }

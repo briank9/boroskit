@@ -17,6 +17,7 @@
 #define VK_NO_PROTOTYPES
 #endif
 #include <vulkan/vulkan.h>
+#include <string>
 
 namespace boroskit {
 namespace gpu {
@@ -68,6 +69,8 @@ struct Functions {
 #undef BK_VK_DECLARE
 
 // What: opens the system Vulkan loader and fills the global functions. false = no Vulkan on this machine.
+// What (2026-11-26): the libvulkan file the loader search would open, WITHOUT opening it ("" = none found).
+std::string FindLoaderFile();
 // What (2026-11-26): the path of the libvulkan that was opened ("" before / if none).
 const char *LoaderPath();
 // What: vkGetInstanceProcAddr of the loader (opening it the first time), or nullptr when there is no Vulkan.

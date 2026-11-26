@@ -29,7 +29,9 @@ namespace gpu {
 // What the Vulkan backend registers (BKGPUVulkanTestEngineInstall): makes the test device once. Returns Status::Ok
 // and the device, or a status + a one-line reason. description: e.g. "Vulkan (MoltenVK) on Apple M1 Pro, loader ...".
 typedef Status (*BKGPUTestEngineFactory)(std::unique_ptr<Device> *out, std::string *description, std::string *reason);
-void BKGPURegisterTestEngine(BKGPUTestEngineFactory factory);
+// probe: answers without starting anything (no library loaded) whether the factory would find Vulkan; reason when not.
+typedef bool (*BKGPUTestEngineProbe)(std::string *reason);
+void BKGPURegisterTestEngine(BKGPUTestEngineFactory factory, BKGPUTestEngineProbe probe);
 
 // What: the shared test device when the preferred engine is the Vulkan test engine and it started; else nullptr
 // (the renderer then uses Metal, as always). Call when a renderer is created.

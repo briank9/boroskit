@@ -26,6 +26,12 @@ bool vulkanLoaderAvailable(const char **path)
     return false;
 }
 
+bool vulkanLoaderInstalled(const char **path)
+{
+    if (path) *path = "";
+    return false;
+}
+
 int vulkanBackendBuilt()
 {
     return 0;

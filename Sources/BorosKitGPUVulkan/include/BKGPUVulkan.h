@@ -45,6 +45,9 @@ const char *vulkanDriverName(const Device &device);
 // without the Vulkan SDK headers (BK_HAVE_VULKAN_HEADERS 0) - the backend is then a stub (makeVulkanDevice: NotFound).
 bool vulkanLoaderAvailable(const char **path);
 
+// What (2026-11-26): like vulkanLoaderAvailable but WITHOUT loading anything (file check only) - for settings screens.
+bool vulkanLoaderInstalled(const char **path);
+
 // What: 1 when this build contains the real Vulkan backend (the SDK headers were found at build time).
 int vulkanBackendBuilt();
 

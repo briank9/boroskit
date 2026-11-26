@@ -22,6 +22,7 @@ namespace {
 
 std::atomic<int> gPreferred(BKGPUEngineMetal);
 BKGPUTestEngineFactory gFactory = nullptr;
+BKGPUTestEngineProbe gProbe = nullptr;
 
 // The test device: started once, on first need, and kept for the life of the process (renderers keep raw pointers).
 struct TestEngine {
@@ -95,9 +96,10 @@ uint64_t Fingerprint(const uint8_t *bytes, size_t length)
 
 }  // namespace
 
-void BKGPURegisterTestEngine(BKGPUTestEngineFactory factory)
+void BKGPURegisterTestEngine(BKGPUTestEngineFactory factory, BKGPUTestEngineProbe probe)
 {
     gFactory = factory;
+    gProbe = probe;
 }
 
 Device *BKGPUTestEngineDevice()
@@ -330,6 +332,14 @@ id<MTLCommandBuffer> BKGPUFinishedCommandBuffer(id<MTLCommandQueue> queue)
     boroskit::gpu::TestEngine &e = boroskit::gpu::Engine();
     if (!e.device && reason) *reason = [NSString stringWithUTF8String:e.reason.c_str()];
     return e.device != nullptr;
+}
+
++ (BOOL)vulkanTestEngineInstalled:(NSString **)reason
+{
+    std::string why = "the app did not register the Vulkan engine";
+    bool ok = boroskit::gpu::gProbe && boroskit::gpu::gProbe(&why);
+    if (!ok && reason) *reason = [NSString stringWithUTF8String:why.c_str()];
+    return ok;
 }
 
 + (NSString *)currentEngineDescription

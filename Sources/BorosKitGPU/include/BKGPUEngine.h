@@ -37,6 +37,10 @@ typedef NS_ENUM(NSInteger, BKGPUEngineKind) {
 // The first call may take a moment (it starts the device once).
 + (BOOL)vulkanTestEngineAvailable:(NSString *_Nullable *_Nullable)reason;
 
+// What: the same question WITHOUT starting or loading anything (the installed SDK's loader file is looked for) - for
+// settings screens, so merely showing the choice never loads Vulkan into the app.
++ (BOOL)vulkanTestEngineInstalled:(NSString *_Nullable *_Nullable)reason;
+
 // What: a short description of the engine a renderer made NOW would use, e.g. "Metal" or
 // "Vulkan (MoltenVK) on Apple M1 Pro, loader /usr/local/lib/libvulkan.1.dylib".
 + (NSString *)currentEngineDescription;

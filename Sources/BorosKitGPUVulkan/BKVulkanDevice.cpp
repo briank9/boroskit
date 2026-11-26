@@ -1242,6 +1242,14 @@ int vulkanBackendBuilt()
     return 1;
 }
 
+bool vulkanLoaderInstalled(const char **path)
+{
+    static std::string found;
+    found = vk::FindLoaderFile();
+    if (path) *path = found.c_str();
+    return !found.empty();
+}
+
 }  // namespace gpu
 }  // namespace boroskit
 #endif   // BK_HAVE_VULKAN_HEADERS
