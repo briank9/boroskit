@@ -280,3 +280,54 @@ Pictures: milestone1-pictures/feature_scene_metal_vs_vulkan.png (Metal | Vulkan 
 1. Phase 3 / 4 per plan: surface extraction (compute pipelines in BKGPU.h: Metal + Vulkan), then the volume renderer.
 2. A recorded golden case for lines / points / textured meshes (today only the live Metal-vs-Vulkan cross check).
 3. Other Objective-C modules onto the interface one at a time (BKOverlayRenderer is small - a good next one).
+
+## 2026-11-26 - PHASE 3/4: GPU compute + recorded feature goldens + SurfacePass (branch agent/gpu-compute from main 4a2d64a)
+
+Agent "vulkan-engine". Commits: a57a9e7 (step 1 compute), 3584d87 (step 2 goldens), 23888c4 (step 3a SurfacePass +
+Metal adapter), fc3ad9b (step 3b Vulkan kernels + shared surface test). Pushed, NOT merged.
+
+### Step 1 - compute in the shared interface
+- BKGPU.h contract: workgroup size fixed per pipeline (Vulkan specialization constants 0..2 / local_size_*_id;
+  Metal threads_per_threadgroup); makeCompute -> Unsupported when the GPU cannot run that size (callers try
+  smaller); barriers automatic (each dispatch sees earlier writes; CPU sees results after submit(wait)).
+- MetalDevice: compute pipelines + dispatch on one compute encoder (encoders switch cleanly blit/compute/render).
+- VulkanDevice: compute pipelines with VkSpecializationInfo, checked against device limits; one memory barrier after
+  each dispatch (compute writes -> all commands + host). Loader: vkCreateComputePipelines, vkCmdDispatch.
+- SPIR-V now targets Vulkan 1.2 (glslc + spirv-val): with 1.3 glslc emits LocalSizeId, which needs maintenance4
+  (was a validation error). All older shaders unchanged in behaviour (goldens identical).
+- Test TestComputeScan: exclusive prefix sum of 100003 numbers, 3 dispatches, 256- and 64-thread groups: exact on
+  both backends.
+
+### Step 2 - recorded references for lines / points / textured
+- RenderFeatureScene(parts mask); TestGoldenFeatures with 4 cases (feature_textured, feature_lines,
+  feature_points, feature_scene). Recorded ONCE from Metal (old references rewritten byte-identical; manifest:
+  8 new files only).
+- Vulkan vs recorded Metal: textured / lines / points colours bit-identical, ray distance <= 1.5e-5 (one float
+  step); full scene: the known single wireframe-edge pixel (within tolerance). Metal strict 0.
+
+### Step 3 - SurfacePass (plan 7.1 step 3)
+- Sources/BorosKitSurface/BKSurfacePass.{h,cpp}: plain C++ on BKGPU.h + BKSurfaceCore; a one-to-one move of the
+  Metal flow (same buffers, memory kinds, order, command boundaries). BKSurfaceExtractor.m -> .mm is now a thin
+  adapter (MSL library cache, MetalDevice on its device + queue, wraps the scan texture, MeshView -> BKMesh).
+- GLSL twins bk_surface_{sample,blur,classify,emit}.comp + bk_surface_common.glsl, params from the same
+  BK_SURFACE_PARAM_FIELDS text.
+- Results: Metal strict 0 (all three golden surfaces identical, through the adapter AND through the pass directly).
+  Vulkan vs Metal references: identical triangle lists in all three cases; positions max 3.81e-06 voxel, normals
+  max 3.0e-06 (bone 300), 1.71e-07 (skin -500), 1.37e-07 (half resolution + smoothing, manual sampling). Agreed
+  tolerance 1e-4 / 1e-3. CPU reference vs Vulkan: 3.05e-06 voxel (same as CPU vs Metal).
+- Suites: swift test 463 tests 0 failures (BK_GOLDEN_STRICT=1); ctest 31/31; 0 validation messages.
+
+### For Boros 6 when this is merged (lead)
+- No app code change: BKSurfaceExtractor's Objective-C API and error codes are unchanged.
+- One small behaviour difference: a GPU failure during extraction no longer carries the MTLCommandBuffer's NSError
+  as NSUnderlyingErrorKey (the message/code are the same, BKSurfaceStatusGPUFailed).
+- BorosKitSurface now depends on BorosKitGPU and contains C++ (SwiftPM links it automatically; Boros 6 links libc++).
+- New header BKSurfacePass.h is in the BorosKitSurface umbrella; if a stale-module error appears in the bench, clear
+  build/Build/Intermediates.noindex/ExplicitPrecompiledModules/BorosKit* once.
+- Test in the app: build bone / skin surfaces (incl. lower resolution + smoothing) - should look exactly as before.
+
+### Where to resume
+1. Step 4 (not started): volume renderer params builder (R2/R3) in plain C.
+2. Optional: share the surface kernel bodies between MSL and GLSL (option C, like the mesh shaders) - today they are
+   line-by-line twins; any maths change must be made in both (the Vulkan golden test catches drift).
+3. Storage-image layouts for compute writes in VulkanDevice (not needed yet).
