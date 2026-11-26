@@ -23,6 +23,8 @@
 //   - Not implemented yet (Status::Unsupported, honestly reported): storage-image layouts for compute writes,
 //     Surface (phase 8), timestamps.
 
+#include "BKVulkanAvailable.h"
+#if BK_HAVE_VULKAN_HEADERS   // 2026-11-26: else BKVulkanStub.cpp (build without the SDK)
 #include "BKGPUVulkan.h"
 #include "BKVulkanLoader.h"
 #include "BKVulkanShaderTable.h"
@@ -1224,3 +1226,22 @@ const char *vulkanDriverName(const Device &device)
 
 }  // namespace gpu
 }  // namespace boroskit
+
+namespace boroskit {
+namespace gpu {
+
+bool vulkanLoaderAvailable(const char **path)
+{
+    bool ok = vk::LoaderEntry() != nullptr;
+    if (path) *path = vk::LoaderPath();
+    return ok;
+}
+
+int vulkanBackendBuilt()
+{
+    return 1;
+}
+
+}  // namespace gpu
+}  // namespace boroskit
+#endif   // BK_HAVE_VULKAN_HEADERS

@@ -99,7 +99,12 @@ set(BOROSKIT_CORE_INCLUDE_DIRS
 set(BOROSKIT_GPU_VULKAN_SOURCES
     Sources/BorosKitGPUVulkan/BKVulkanLoader.cpp
     Sources/BorosKitGPUVulkan/BKVulkanDevice.cpp
+    Sources/BorosKitGPUVulkan/BKVulkanStub.cpp     # 2026-11-26: entry points of a build without the SDK headers
 )
+# 2026-11-26: the committed copy of the generated SPIR-V table (compiled by SwiftPM / Xcode, which have no glslc step;
+# CMake compiles its own freshly generated table and checks that this copy is identical - test
+# vulkan.committed_shader_table_up_to_date; refresh with docs/tools/update-vulkan-shaders.sh).
+set(BOROSKIT_GPU_VULKAN_COMMITTED_TABLE Sources/BorosKitGPUVulkan/BKVulkanShaderTable.generated.cpp)
 set(BOROSKIT_GPU_VULKAN_SHADERS
     Sources/BorosKitGPUVulkan/Shaders/bk_triangle_vertex.vert
     Sources/BorosKitGPUVulkan/Shaders/bk_triangle_fragment.frag

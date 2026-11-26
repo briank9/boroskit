@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include "BKReformatPass.h"   // 2026-11-26: the picture on the shared GPU interface (Vulkan plan 7.1 #5)
 #include "BKGPUMetal.h"
+#import "BKGPUEngineBridge.h"   // 2026-11-26: the Vulkan TEST engine (Boros 6 MoltenVK switch)
 
 namespace bkgpu = boroskit::gpu;
 
@@ -27,6 +28,8 @@ extern "C" NSString *BKReformatShaderSource(void);   // BKReformatShaderSource.m
     id<MTLCommandQueue> _queue;
     std::unique_ptr<bkgpu::Device> _gpu;
     std::unique_ptr<boroskit::render::ReformatPass> _pass;
+    bkgpu::Device *_vk;                                       // 2026-11-26: Vulkan TEST engine, nullptr = Metal
+    std::unique_ptr<boroskit::render::ReformatPass> _vkPass;
 }
 
 - (instancetype)initWithDevice:(id<MTLDevice>)device error:(NSError **)error
@@ -44,6 +47,13 @@ extern "C" NSString *BKReformatShaderSource(void);   // BKReformatShaderSource.m
             _pass.reset(new boroskit::render::ReformatPass(*_gpu));
             if (_pass->prepare() != bkgpu::Status::Ok) _pass.reset();
         }
+        _vk = bkgpu::BKGPUTestEngineDevice();   // only when the user chose the Vulkan test engine
+        if (_vk) {
+            std::lock_guard<std::recursive_mutex> lock(bkgpu::BKGPUTestEngineMutex());
+            _vkPass.reset(new boroskit::render::ReformatPass(*_vk));
+            if (_vkPass->prepare() != bkgpu::Status::Ok) { _vkPass.reset(); _vk = nullptr; }
+        }
+        bkgpu::BKGPUEngineLogRenderer("BKCurvedReformat", _vk != nullptr);
         if (_pass == nullptr || _queue == nil) {
             if (error && *error == nil) *error = BKReformatError(2, @"The curved-MPR kernel could not be built.");
             return nil;
@@ -71,6 +81,24 @@ static BKReformatParams BKReformatWithVolume(BKReformatParams params, BKVolumeTe
         return nil;
     }
     params = BKReformatWithVolume(params, volume);
+    if (_vk) {   // Vulkan TEST engine: run now (waits), copy the values into the caller's buffer, hand back a done buffer
+        std::lock_guard<std::recursive_mutex> lock(bkgpu::BKGPUTestEngineMutex());
+        double t0 = bkgpu::BKGPUEngineNowMs();
+        std::shared_ptr<bkgpu::Texture> scan = bkgpu::BKGPUCopyMetalTexture(*_vk, volume.texture, true);
+        std::unique_ptr<bkgpu::Buffer> vkFrames = _vkPass->makeFrames(frames, params.width, nullptr);
+        uint64_t bytes = (uint64_t)params.width * params.height * sizeof(float);
+        std::unique_ptr<bkgpu::Buffer> values = _vk->makeBuffer(bytes, bkgpu::Memory::Readback, bkgpu::UsageStorage, nullptr);
+        std::unique_ptr<bkgpu::CommandList> list = (scan && vkFrames && values) ? _vk->begin(nullptr) : nullptr;
+        if (!list || _vkPass->encode(*list, params, *vkFrames, *scan, *values) != bkgpu::Status::Ok ||
+            _vk->submit(*list, true) != bkgpu::Status::Ok || valueBuffer.contents == nullptr) {
+            if (error) *error = BKReformatError(6, @"The Vulkan test engine failed to draw the picture.");
+            return nil;
+        }
+        memcpy(valueBuffer.contents, values->map(), (size_t)bytes);
+        values->unmap();
+        bkgpu::BKGPUEngineLogFrame("BKCurvedReformat", params.width, params.height, bkgpu::BKGPUEngineNowMs() - t0);
+        return bkgpu::BKGPUFinishedCommandBuffer(_queue);
+    }
     std::unique_ptr<bkgpu::Buffer> frameBuffer = _pass->makeFrames(frames, params.width, nullptr);
     if (frameBuffer == nullptr) {
         if (error) *error = BKReformatError(4, @"Not enough memory for the column frames.");

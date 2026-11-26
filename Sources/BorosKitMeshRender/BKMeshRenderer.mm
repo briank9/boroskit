@@ -20,6 +20,7 @@
 // this class is the Metal glue (object caches, Metal targets / command buffers wrapped for the pass).
 #import "BKGPUMetal.h"
 #include "BKMeshPass.h"
+#import "BKGPUEngineBridge.h"   // 2026-11-26: the Vulkan TEST engine (Boros 6 MoltenVK switch)
 #include <memory>
 #include <vector>
 
@@ -423,6 +424,9 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     // owns the pipelines, depth buffer and samplers (formerly ivars of this class).
     std::unique_ptr<boroskit::gpu::Device> _gpu;
     std::unique_ptr<boroskit::meshpass::MeshPass> _pass;
+    // 2026-11-26: the same pass on the Vulkan TEST engine (BKGPUEngine.h); nullptr = Metal (default).
+    boroskit::gpu::Device *_vk;
+    std::unique_ptr<boroskit::meshpass::MeshPass> _vkPass;
 }
 
 // Compiles the shader library once per GPU and shares it between renderers (compiling
@@ -466,6 +470,13 @@ static simd_float3 BKMeshFloat3(N3Vector v)
         if (error) *error = BKMeshRenderError(40, @"The GPU could not create a texture sampler.");
         return nil;
     }
+    _vk = boroskit::gpu::BKGPUTestEngineDevice();   // only when the user chose the Vulkan test engine
+    if (_vk) {
+        std::lock_guard<std::recursive_mutex> lock(boroskit::gpu::BKGPUTestEngineMutex());
+        _vkPass.reset(new boroskit::meshpass::MeshPass(*_vk));
+        if (!_vkPass->valid()) { _vkPass.reset(); _vk = nullptr; }
+    }
+    boroskit::gpu::BKGPUEngineLogRenderer("BKMeshRenderer", _vk != nullptr);
     _objects = @[];
     _lineObjects = @[];
     _pointObjects = @[];
@@ -602,11 +613,29 @@ static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
     // code a Vulkan engine runs). Here: pick the visible, uploaded objects (as before) and describe them to the pass,
     // wrapping the Metal buffers / textures each object already caches - nothing is copied.
     using namespace boroskit;
+    // 2026-11-26: Vulkan TEST engine (BKGPUEngine.h): the same items on copies of the objects' buffers / textures, drawn
+    // on the Vulkan device, read back and copied into the caller's textures. Only a fresh picture (clear) - drawing over
+    // what earlier commands of this command buffer put there stays on Metal (they have not run yet).
+    gpu::Format vkFormat = gpu::Format::RGBA8Unorm;
+    const bool vk = _vk && clear && gpu::BKGPUMetalFormat(colorTexture.pixelFormat, &vkFormat) &&
+                    (vkFormat == gpu::Format::RGBA8Unorm || vkFormat == gpu::Format::BGRA8Unorm);
+    std::unique_lock<std::recursive_mutex> vkLock;
+    if (vk) vkLock = std::unique_lock<std::recursive_mutex>(gpu::BKGPUTestEngineMutex());
+    else if (_vk) {
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ NSLog(@"Boros GPU engine: BKMeshRenderer draws over an existing picture (or into a non-8-bit target) with Metal even in Vulkan test mode"); });
+    }
+    std::vector<std::shared_ptr<gpu::Buffer>> vkBuffers;    // copies on the Vulkan device (cached per Metal buffer)
+    std::vector<std::shared_ptr<gpu::Texture>> vkTextures;
     std::vector<meshpass::Item> items;
     std::vector<std::unique_ptr<gpu::Buffer>> buffers;     // wrappers, alive until the pass is recorded
     std::vector<std::unique_ptr<gpu::Texture>> textures;
     auto wrap = [&](id<MTLBuffer> b) -> gpu::Buffer * {
         if (!b) return nullptr;
+        if (vk) {
+            vkBuffers.push_back(gpu::BKGPUCopyMetalBuffer(*_vk, b));
+            return vkBuffers.back().get();
+        }
         buffers.push_back(gpu::BKGPUMetalWrapBuffer(*_gpu, b));
         return buffers.back().get();
     };
@@ -631,8 +660,13 @@ static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
             id<MTLTexture> gpuTexture = [texture textureOnDevice:_device];
             id<MTLBuffer> tcBuffer = [object textureCoordinateBufferOnDevice:_device];
             if (gpuTexture && tcBuffer) {
-                textures.push_back(gpu::BKGPUMetalWrapTexture(*_gpu, gpuTexture));
-                it.texture = textures.back().get();
+                if (vk) {
+                    vkTextures.push_back(gpu::BKGPUCopyMetalTexture(*_vk, gpuTexture, true));
+                    it.texture = vkTextures.back().get();
+                } else {
+                    textures.push_back(gpu::BKGPUMetalWrapTexture(*_gpu, gpuTexture));
+                    it.texture = textures.back().get();
+                }
                 it.textureCoordinates = it.texture ? wrap(tcBuffer) : nullptr;
                 it.samplerIndex = (texture.interpolate ? 2 : 0) + (texture.repeat ? 1 : 0);
             }
@@ -690,8 +724,21 @@ static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
         items.push_back(it);
     }
 
-    std::unique_ptr<gpu::Texture> color = gpu::BKGPUMetalWrapTexture(*_gpu, colorTexture);
-    std::unique_ptr<gpu::Texture> distance = distanceTexture ? gpu::BKGPUMetalWrapTexture(*_gpu, distanceTexture) : nullptr;
+    std::unique_ptr<gpu::Texture> color, distance;
+    if (vk) {   // the pictures are made on the Vulkan device, then copied into the caller's textures
+        gpu::TextureDesc cd;
+        cd.format = gpu::Format::RGBA8Unorm;
+        cd.width = (uint32_t)width; cd.height = (uint32_t)height;
+        cd.usage = gpu::UsageRenderTarget | gpu::UsageCopySource;
+        color = _vk->makeTexture(cd, nullptr);
+        if (distanceTexture) {
+            cd.format = gpu::Format::R32Float;
+            distance = _vk->makeTexture(cd, nullptr);
+        }
+    } else {
+        color = gpu::BKGPUMetalWrapTexture(*_gpu, colorTexture);
+        distance = distanceTexture ? gpu::BKGPUMetalWrapTexture(*_gpu, distanceTexture) : nullptr;
+    }
     if (!color || (distanceTexture && !distance)) {
         if (error) *error = BKMeshRenderError(43, @"The output texture format is not supported (use RGBA8 or BGRA8, and R32Float for the ray distance).");
         return NO;
@@ -706,7 +753,26 @@ static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
     frame.area[0] = (int32_t)area.origin.x; frame.area[1] = (int32_t)area.origin.y;
     frame.area[2] = (int32_t)area.size.width; frame.area[3] = (int32_t)area.size.height;
     int32_t result;
-    {
+    if (vk) {
+        double t0 = gpu::BKGPUEngineNowMs();
+        std::unique_ptr<gpu::CommandList> list = _vk->begin(nullptr);
+        result = list ? _vkPass->encode(*list, frame, items.data(), items.size()) : (int32_t)meshpass::NoEncoder;
+        if (result == meshpass::Ok && _vk->submit(*list, true) != gpu::Status::Ok) result = meshpass::NoEncoder;
+        if (result == meshpass::Ok) {
+            std::vector<uint8_t> pixels, rays;
+            bool bgra = vkFormat == gpu::Format::BGRA8Unorm;
+            if (!gpu::BKGPUReadTexture(*_vk, *color, &pixels) || (distance && !gpu::BKGPUReadTexture(*_vk, *distance, &rays))) {
+                result = meshpass::NoEncoder;
+            } else {
+                if (bgra) gpu::BKGPUSwapRedBlue(pixels.data(), width * height);
+                gpu::BKGPUStampTestMarker(pixels.data(), (uint32_t)width, (uint32_t)height, bgra);
+                if (!gpu::BKGPUBlitBytesToMetalTexture(commandBuffer, colorTexture, pixels.data(), width * 4) ||
+                    (distance && !gpu::BKGPUBlitBytesToMetalTexture(commandBuffer, distanceTexture, rays.data(), width * 4)))
+                    result = meshpass::NoEncoder;
+            }
+        }
+        gpu::BKGPUEngineLogFrame("BKMeshRenderer", (uint32_t)width, (uint32_t)height, gpu::BKGPUEngineNowMs() - t0);
+    } else {
         std::unique_ptr<gpu::CommandList> list = gpu::BKGPUMetalCommandList(*_gpu, commandBuffer);
         result = list ? _pass->encode(*list, frame, items.data(), items.size()) : (int32_t)meshpass::NoEncoder;
     }   // the list ends its encoder here; the caller commits the command buffer

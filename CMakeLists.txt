@@ -35,7 +35,8 @@ include(cmake/BorosKitSources.cmake)
 # ---- One list of sources: stop if a core on disk is not listed (or a listed one is gone) ----------------
 file(GLOB_RECURSE BK_CORES_ON_DISK RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
      "${CMAKE_CURRENT_SOURCE_DIR}/Sources/*.c" "${CMAKE_CURRENT_SOURCE_DIR}/Sources/*.cpp")
-set(BK_CORES_LISTED ${BOROSKIT_VEC_SOURCES} ${BOROSKIT_CORE_C_SOURCES} ${BOROSKIT_CORE_CXX_SOURCES} ${BOROSKIT_GPU_VULKAN_SOURCES})
+set(BK_CORES_LISTED ${BOROSKIT_VEC_SOURCES} ${BOROSKIT_CORE_C_SOURCES} ${BOROSKIT_CORE_CXX_SOURCES} ${BOROSKIT_GPU_VULKAN_SOURCES}
+    ${BOROSKIT_GPU_VULKAN_COMMITTED_TABLE})
 set(BK_MISSING ${BK_CORES_ON_DISK})
 list(REMOVE_ITEM BK_MISSING ${BK_CORES_LISTED})
 set(BK_GONE ${BK_CORES_LISTED})
@@ -222,6 +223,13 @@ if(BK_VULKAN_INCLUDE_DIR AND BK_GLSLC AND BK_SPIRV_VAL)
     file(MAKE_DIRECTORY "${BK_MILESTONE_OUTPUT}")
     add_test(NAME vulkan.golden_mesh COMMAND bk_golden_vulkan "${BK_MILESTONE_OUTPUT}")
     set(BK_VULKAN_TESTS vulkan.triangle vulkan.golden_mesh)
+
+    # 2026-11-26 (Boros 6 MoltenVK test switch): the SwiftPM / Xcode build has no glslc step, so it compiles the
+    # COMMITTED copy of the table (generated from OUR GLSL). This test fails when the GLSL changed and the copy was not
+    # refreshed: run docs/tools/update-vulkan-shaders.sh (copies the freshly generated table over the committed one).
+    add_test(NAME vulkan.committed_shader_table_up_to_date
+             COMMAND ${CMAKE_COMMAND} -E compare_files "${BK_SHADER_TABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/${BOROSKIT_GPU_VULKAN_COMMITTED_TABLE}")
+    list(APPEND BK_VULKAN_TESTS vulkan.committed_shader_table_up_to_date)
 
     # Apple only: the Metal device built by CMake too (BKGPUMetal.mm + BKMetalDevice.m + the mesh MSL source), so one
     # program can run the shared tests on Metal AND Vulkan and compare them live (kickoff plan section 6, point 3).

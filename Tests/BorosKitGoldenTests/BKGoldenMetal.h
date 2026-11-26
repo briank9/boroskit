@@ -32,6 +32,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) id<MTLDevice> device;
 @property (nonatomic, readonly) BKVolumeTexture *volumeTexture;
 
+// What (2026-11-26, GPU engine switch tests): makes the volume renderer, surface extractor and mesh renderer again,
+// so they pick up the engine chosen now (BKGPUEngine). NO if one could not be made.
+- (BOOL)reloadRenderers;
+
 // Volume render: rgba (U8 x4) and values (F32 x1: projected HU, or accumulated opacity
 // in composite mode). Caller frees both. Returns NO + error on failure.
 - (BOOL)renderVolumeCase:(const BKGoldenVolumeCase *)c rgba:(BKGoldenImage *)rgba values:(BKGoldenImage *)values

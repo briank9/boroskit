@@ -5,6 +5,7 @@
 // BorosKitRender is the GPU layer on Apple's Metal (the replacement for VTK + OpenGL),
 // also shared by macOS and iOS.
 import PackageDescription
+import Foundation   // 2026-11-26: FileManager / ProcessInfo (finding the Vulkan SDK headers)
 
 // CPU floating-point rule for ALL BorosKit library code (2026-11-25, Vulkan engine kickoff, user decision D3):
 // -ffp-contract=off = never fuse a*b+c into one rounding step (FMA). Apple clang fuses by default, GCC /
@@ -12,6 +13,24 @@ import PackageDescription
 // camera maths ...) could differ in the last bit between the Mac build and a Windows / Linux (CMake) build
 // and flip decisions. CMakeLists.txt uses the same flag. No fast-math anywhere.
 let bkFloatingPoint = "-ffp-contract=off"
+
+// 2026-11-26 (Boros 6 MoltenVK test switch): the Vulkan SDK's include folder, when installed (user decision D2: Vulkan
+// headers only from the installed SDK, nothing vendored). Newest ~/VulkanSDK/<version>/macOS/include, else
+// $VULKAN_SDK/include; /usr/local/include (the SDK's system install) is searched by clang anyway. Without any of
+// them BorosKitGPUVulkan builds as a stub (BKVulkanAvailable.h) and the app simply has no Vulkan test engine.
+let bkVulkanIncludeFlags: [String] = {
+    var candidates: [String] = []
+    if let sdk = ProcessInfo.processInfo.environment["VULKAN_SDK"] { candidates.append(sdk + "/include") }
+    let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("VulkanSDK").path
+    let versions = ((try? FileManager.default.contentsOfDirectory(atPath: root)) ?? [])
+        .filter { !$0.hasPrefix(".") }
+        .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+    candidates += versions.map { root + "/" + $0 + "/macOS/include" }
+    for dir in candidates where FileManager.default.fileExists(atPath: dir + "/vulkan/vulkan.h") {
+        return ["-I" + dir]
+    }
+    return []
+}()
 
 let package = Package(
     name: "BorosKit",
@@ -28,6 +47,8 @@ let package = Package(
         .library(name: "BorosKitSurface", targets: ["BorosKitSurface"]),
         // BorosKitGPU (2026-11-26, Vulkan plan phase 2): the backend-neutral GPU interface (BKGPU.h) + its Metal device.
         .library(name: "BorosKitGPU", targets: ["BorosKitGPU"]),
+        // BorosKitGPUVulkan (2026-11-26): the Vulkan engine (MoltenVK on a Mac) - used only as Boros 6's TEST engine.
+        .library(name: "BorosKitGPUVulkan", targets: ["BorosKitGPUVulkan"]),
         // BorosKitDICOM (2026-11-24, iOS app): BorosKit's own licence-free DICOM reader
         .library(name: "BorosKitDICOM", targets: ["BorosKitDICOM"]),
         // BorosKitVec (2026-11-24): exported so app code (Swift) can use the BKVec types of the plain-C cores
@@ -166,7 +187,22 @@ let package = Package(
             publicHeadersPath: "include",
             cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
             cxxSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
-            linkerSettings: [.linkedFramework("Metal"), .linkedFramework("Foundation")]
+            linkerSettings: [.linkedFramework("Metal"), .linkedFramework("Foundation"),
+                             .linkedFramework("CoreGraphics"), .linkedFramework("CoreText"), .linkedFramework("QuartzCore")]   // test-engine marker / timing (2026-11-26)
+        ),
+        // BorosKitGPUVulkan (2026-11-26, Boros 6 MoltenVK test switch): VulkanDevice + its embedded SPIR-V
+        // (Generated/BKVulkanShaderTable.cpp, generated from OUR GLSL by CMake - see docs/tools/update-vulkan-shaders.sh)
+        // + the test-engine registration. The Vulkan loader is opened at run time from the user's SDK; never linked.
+        // Render: BKGPUChoiceCore (GPU choice rules).
+        .target(
+            name: "BorosKitGPUVulkan",
+            dependencies: ["BorosKitGPU", "BorosKitRender", "BorosKitVec"],
+            path: "Sources/BorosKitGPUVulkan",
+            exclude: ["Shaders"],
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint] + bkVulkanIncludeFlags)],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint] + bkVulkanIncludeFlags)],
+            linkerSettings: [.linkedFramework("Foundation")]
         ),
         .target(
             name: "BorosKitMeshRender",
@@ -256,7 +292,7 @@ let package = Package(
             name: "BorosKitGoldenTests",
             // GPU (2026-11-26, phase 2): BKGPUSharedTests.mm runs the backend-shared GPU tests on a MetalDevice.
             dependencies: ["BorosKitSurface", "BorosKitMeshRender", "BorosKitMesh", "BorosKitDisplay",
-                           "BorosKitRender", "BorosKitCore", "BorosKitGPU"],
+                           "BorosKitRender", "BorosKitCore", "BorosKitGPU", "BorosKitGPUVulkan"],
             path: "Tests/BorosKitGoldenTests",
             exclude: ["References"],
             // -ffp-contract=off: the phantom generator must give bit-identical scans on every

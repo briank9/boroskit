@@ -96,6 +96,15 @@ static BKGoldenImage BKGoldenImageFromFloats(NSData *data, NSUInteger width, NSU
     return self;
 }
 
+- (BOOL)reloadRenderers
+{
+    _volumeRenderer = [[BKVolumeRenderer alloc] initWithDevice:_device error:NULL];
+    _extractor = [[BKSurfaceExtractor alloc] initWithDevice:_device error:NULL];
+    _meshRenderer = [[BKMeshRenderer alloc] initWithDevice:_device error:NULL];
+    _volumeRenderer.volumeTexture = _volumeTexture;
+    return _volumeRenderer && _extractor && _meshRenderer;
+}
+
 - (BOOL)renderVolumeCase:(const BKGoldenVolumeCase *)c rgba:(BKGoldenImage *)rgba values:(BKGoldenImage *)values
                    error:(NSError **)error
 {

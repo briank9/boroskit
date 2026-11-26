@@ -39,6 +39,14 @@ Status makeVulkanDevice(const VulkanOptions &options, std::unique_ptr<Device> *o
 // What: the driver's name (e.g. "MoltenVK") of a Device made by makeVulkanDevice, for logs ("" otherwise).
 const char *vulkanDriverName(const Device &device);
 
+// What (2026-11-26, Boros 6 MoltenVK test switch): true when a Vulkan loader (libvulkan) can be opened on this machine
+// (opens it the first time); `path` (may be null) receives the loader that was found. Always false in a build made
+// without the Vulkan SDK headers (BK_HAVE_VULKAN_HEADERS 0) - the backend is then a stub (makeVulkanDevice: NotFound).
+bool vulkanLoaderAvailable(const char **path);
+
+// What: 1 when this build contains the real Vulkan backend (the SDK headers were found at build time).
+int vulkanBackendBuilt();
+
 }  // namespace gpu
 }  // namespace boroskit
 

@@ -27,6 +27,7 @@
 #import "CPRVolumeData.h"
 #include "BKRaycastPass.h"   // 2026-11-26: the ray caster on the shared GPU interface (Vulkan plan 7.1 #4b)
 #include "BKGPUMetal.h"      // MetalDevice glue
+#import "BKGPUEngineBridge.h" // 2026-11-26: the Vulkan TEST engine (Boros 6 MoltenVK switch)
 #include <vector>
 
 extern "C" NSString *BKVolumeShaderSource(void); // BKShaderSource.mm
@@ -120,6 +121,20 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     std::unique_ptr<bkgpu::Device> _gpu;
     std::unique_ptr<bkrender::RaycastPass> _pass;
 
+    // --- Vulkan TEST engine (2026-11-26, BKGPUEngine.h): the same pass on the shared Vulkan device; nullptr = Metal ---
+    bkgpu::Device *_vk;
+    std::unique_ptr<bkrender::RaycastPass> _vkPass;
+    std::unique_ptr<bkgpu::Texture> _vkTable;            // baked transfer function on the Vulkan device
+    std::shared_ptr<bkgpu::Buffer> _vkAlphaCount;
+    BKTransferFunction *_vkBakedTransferFunction;
+    std::unique_ptr<bkgpu::Buffer> _vkBrickRange;        // per volume
+    __weak BKVolumeTexture *_vkRangeVolume;
+    std::shared_ptr<bkgpu::Buffer> _vkBrickEmpty;
+    bkgpu::Buffer *_vkClassifiedAlphaCount;
+    __weak BKVolumeTexture *_vkClassifiedVolume;
+    std::unique_ptr<bkgpu::Texture> _vkBlendTable;
+    BKTransferFunction *_vkBakedBlendTransferFunction;
+
     std::unique_ptr<bkgpu::Texture> _table;        // baked transfer function (4096 x 1, RGBA float)
     BKTransferFunction *_bakedTransferFunction;    // which function _table currently holds
     BKTransferFunction *_defaultTransferFunction;  // gray ramp used when none is set
@@ -184,6 +199,13 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
         return nil;
     }
     _pass.reset(new bkrender::RaycastPass(*_gpu));
+    _vk = bkgpu::BKGPUTestEngineDevice();   // only when the user chose the Vulkan test engine
+    if (_vk) {
+        std::lock_guard<std::recursive_mutex> lock(bkgpu::BKGPUTestEngineMutex());
+        _vkPass.reset(new bkrender::RaycastPass(*_vk));
+        if (_vkPass->prepare() != bkgpu::Status::Ok) { _vkPass.reset(); _vk = nullptr; }
+    }
+    bkgpu::BKGPUEngineLogRenderer("BKVolumeRenderer", _vk != nullptr);
     if (_pass->prepare() != bkgpu::Status::Ok) {
         if (error) *error = BKRendererError(10, @"The ray-casting GPU programs could not be prepared.");
         return nil;
@@ -590,10 +612,134 @@ static void BKVector3(N3Vector v, double out[3])
 // What: encodes + runs the CPU-readable ray cast into `colorBuffer` / `valueBuffer` and waits for it.
 // `valuesOnly` = the kernel skips the RGBA picture (colorBuffer may then be a tiny placeholder).
 // Shared by -renderWithWidth:... and -renderValuesInto:... .
+#pragma mark - Vulkan TEST engine (2026-11-26, Boros 6 MoltenVK switch)
+
+// What: the whole ray cast on the Vulkan test device (RaycastPass, same parameter block as Metal), waited for. Inputs
+// are copies of the Metal objects (scan / fused scan cached per volume, object pictures every frame); colours (RGBA8
+// packed, premultiplied; skipped when valuesOnly) and values land in CPU memory.
+- (BOOL)vkRenderWidth:(NSUInteger)width height:(NSUInteger)height valuesOnly:(BOOL)valuesOnly
+               colors:(std::vector<uint8_t> *)colors values:(std::vector<float> *)values error:(NSError **)error
+{
+    std::lock_guard<std::recursive_mutex> lock(bkgpu::BKGPUTestEngineMutex());
+    BKTransferFunction *tf = [self effectiveTransferFunction];
+    if (!_vkTable || _vkBakedTransferFunction != tf) {
+        std::vector<float> rgba(kTransferFunctionEntries * 4);
+        [tf bakeIntoRGBA:rgba.data() count:kTransferFunctionEntries];
+        std::unique_ptr<bkgpu::Texture> table;
+        std::unique_ptr<bkgpu::Buffer> counts;
+        if (_vkPass->makeTable(rgba.data(), &table, &counts) != bkgpu::Status::Ok) {
+            if (error) *error = BKRendererError(15, @"Not enough memory for the colour table (Vulkan test engine).");
+            return NO;
+        }
+        _vkTable = std::move(table);
+        _vkAlphaCount = std::move(counts);
+        _vkBakedTransferFunction = tf;
+    }
+    BKRenderParams params;
+    if (![self fillParams:&params width:width height:height tf:tf error:error]) return NO;
+    params.valuesOnly = valuesOnly ? 1 : 0;
+
+    BKVolumeTexture *vt = _volumeTexture;
+    std::shared_ptr<bkgpu::Texture> scan = bkgpu::BKGPUCopyMetalTexture(*_vk, vt.texture, true);
+    std::shared_ptr<bkgpu::Texture> geomColor, geomDistance, blendScan;
+    bkrender::RaycastInputs in;
+    in.volume = scan.get();
+    in.table = _vkTable.get();
+    if ([self hasGeometry]) {   // these pictures change every frame: fresh copies
+        geomColor = bkgpu::BKGPUCopyMetalTexture(*_vk, _geometryColorTexture, false);
+        geomDistance = bkgpu::BKGPUCopyMetalTexture(*_vk, _geometryRayDistanceTexture, false);
+        in.geometryColor = geomColor.get();
+        in.geometryDistance = geomDistance.get();
+    }
+    if (params.useBlend) {
+        BKTransferFunction *btf = _blendTransferFunction;
+        if (!_vkBlendTable || _vkBakedBlendTransferFunction != btf) {
+            std::vector<float> rgba(kTransferFunctionEntries * 4);
+            [btf bakeIntoRGBA:rgba.data() count:kTransferFunctionEntries];
+            std::unique_ptr<bkgpu::Texture> table;
+            if (_vkPass->makeTable(rgba.data(), &table, nullptr) == bkgpu::Status::Ok) {
+                _vkBlendTable = std::move(table);
+                _vkBakedBlendTransferFunction = btf;
+            }
+        }
+        blendScan = bkgpu::BKGPUCopyMetalTexture(*_vk, _blendVolumeTexture.texture, true);
+        in.blendVolume = blendScan.get();
+        in.blendTable = _vkBlendTable.get();
+    }
+    if (!in.volume || !in.table || (params.useGeometry && (!in.geometryColor || !in.geometryDistance)) ||
+        (params.useBlend && (!in.blendVolume || !in.blendTable))) {
+        if (error) *error = BKRendererError(16, @"The Vulkan test engine could not copy the scan.");
+        return NO;
+    }
+    std::unique_ptr<bkgpu::CommandList> list = _vk->begin(nullptr);
+    if (!list) return NO;
+    // Empty-space skipping: the shared rule, the volume's brick list (once per volume), classification per table.
+    params.skipEmptySpace = 0;
+    if (bkrender::RaycastPass::WantsSkipping(_skipsEmptySpace, params)) {
+        uint32_t grid[3];
+        BKRenderBrickGrid((uint32_t)vt.pixelsWide, (uint32_t)vt.pixelsHigh, (uint32_t)vt.pixelsDeep, BK_BRICK_SIZE, grid);
+        if (!_vkBrickRange || _vkRangeVolume != vt) {
+            _vkBrickRange = _vkPass->makeBrickRanges(*scan, grid, nullptr);
+            _vkRangeVolume = vt;
+            _vkBrickEmpty.reset();
+        }
+        if (_vkBrickRange) {
+            params.brickGrid = bk_make_float4((float)grid[0], (float)grid[1], (float)grid[2], 0.0f);
+            bool ok = true;
+            if (_mode == BKRenderModeComposite) {
+                if (_vkClassifiedAlphaCount != _vkAlphaCount.get() || _vkClassifiedVolume != vt || !_vkBrickEmpty) {
+                    std::unique_ptr<bkgpu::Buffer> empty = _vkPass->encodeClassify(*list, params, *_vkBrickRange, *_vkAlphaCount, nullptr);
+                    if (empty) {
+                        _vkBrickEmpty = std::move(empty);
+                        _vkClassifiedAlphaCount = _vkAlphaCount.get();
+                        _vkClassifiedVolume = vt;
+                    }
+                    ok = empty != nullptr || _vkBrickEmpty != nullptr;
+                }
+                in.brickEmpty = _vkBrickEmpty.get();
+            }
+            if (ok) {
+                in.brickRange = _vkBrickRange.get();
+                params.skipEmptySpace = 1;
+            }
+        }
+    }
+    uint64_t pixels = (uint64_t)width * height;
+    std::unique_ptr<bkgpu::Buffer> colorOut = _vk->makeBuffer(pixels * 4, bkgpu::Memory::Readback, bkgpu::UsageStorage, nullptr);
+    std::unique_ptr<bkgpu::Buffer> valueOut = _vk->makeBuffer(pixels * 4, bkgpu::Memory::Readback, bkgpu::UsageStorage, nullptr);
+    if (!colorOut || !valueOut || _vkPass->encodeRaycast(*list, params, in, *colorOut, *valueOut) != bkgpu::Status::Ok ||
+        _vk->submit(*list, true) != bkgpu::Status::Ok) {
+        if (error) *error = BKRendererError(16, @"The Vulkan test engine failed to render the image.");
+        return NO;
+    }
+    if (colors && !valuesOnly) {
+        const uint8_t *c = (const uint8_t *)colorOut->map();
+        colors->assign(c, c + pixels * 4);
+        colorOut->unmap();
+    }
+    if (values) {
+        const float *v = (const float *)valueOut->map();
+        values->assign(v, v + pixels);
+        valueOut->unmap();
+    }
+    return YES;
+}
+
 - (id<MTLCommandBuffer>)commitRaycastWidth:(NSUInteger)width height:(NSUInteger)height
                                colorBuffer:(id<MTLBuffer>)colorBuffer valueBuffer:(id<MTLBuffer>)valueBuffer
                                 valuesOnly:(BOOL)valuesOnly error:(NSError **)error
 {
+    if (_vk) {   // Vulkan TEST engine: render now (waits), copy into the caller's buffers, hand back a done buffer
+        double t0 = bkgpu::BKGPUEngineNowMs();
+        std::vector<uint8_t> colors;
+        std::vector<float> values;
+        if (![self vkRenderWidth:width height:height valuesOnly:valuesOnly colors:&colors values:&values error:error]) return nil;
+        if (!valuesOnly && colorBuffer.contents && colorBuffer.length >= colors.size()) memcpy(colorBuffer.contents, colors.data(), colors.size());
+        if (valueBuffer.contents) memcpy(valueBuffer.contents, values.data(), values.size() * sizeof(float));
+        bkgpu::BKGPUEngineLogFrame(valuesOnly ? "BKVolumeRenderer (values)" : "BKVolumeRenderer", (uint32_t)width, (uint32_t)height,
+                                   bkgpu::BKGPUEngineNowMs() - t0);
+        return bkgpu::BKGPUFinishedCommandBuffer(_queue);
+    }
     BKTransferFunction *tf = [self effectiveTransferFunction];
     if (![self updateTransferFunctionTexture:tf]) {
         if (error) *error = BKRendererError(15, @"Not enough memory for the colour table.");
@@ -751,6 +897,36 @@ static void BKVector3(N3Vector v, double out[3])
     if (width == 0 || height == 0) {
         if (error) *error = BKRendererError(14, @"The output image size is zero.");
         return NO;
+    }
+
+    bkgpu::Format targetFormat;
+    if (_vk && bkgpu::BKGPUMetalFormat(texture.pixelFormat, &targetFormat) &&
+        (targetFormat == bkgpu::Format::RGBA8Unorm || targetFormat == bkgpu::Format::BGRA8Unorm)) {
+        // Vulkan TEST engine: ray cast on Vulkan, then lay the colour over the background exactly like the Metal
+        // texture kernel (rgb + (1 - a) * background, opaque) - from the 8-bit packed colour, so up to 1 grey level
+        // apart - add the "Vulkan (MoltenVK)" marker and copy it into the drawable within the caller's command buffer.
+        double t0 = bkgpu::BKGPUEngineNowMs();
+        std::vector<uint8_t> colors;
+        if (![self vkRenderWidth:width height:height valuesOnly:NO colors:&colors values:nullptr error:error]) return NO;
+        const size_t n = (size_t)width * height;
+        for (size_t i = 0; i < n; i++) {
+            uint8_t *p = &colors[4 * i];
+            float a = p[3] / 255.0f;
+            for (int k = 0; k < 3; k++) {
+                float v = p[k] / 255.0f + (1.0f - a) * backgroundColor[k];
+                p[k] = (uint8_t)(fminf(fmaxf(v, 0.0f), 1.0f) * 255.0f + 0.5f);
+            }
+            p[3] = 255;
+        }
+        bool bgra = targetFormat == bkgpu::Format::BGRA8Unorm;
+        if (bgra) bkgpu::BKGPUSwapRedBlue(colors.data(), n);
+        bkgpu::BKGPUStampTestMarker(colors.data(), (uint32_t)width, (uint32_t)height, bgra);
+        if (!bkgpu::BKGPUBlitBytesToMetalTexture(commandBuffer, texture, colors.data(), width * 4)) {
+            if (error) *error = BKRendererError(16, @"The Vulkan test picture could not be copied to the screen.");
+            return NO;
+        }
+        bkgpu::BKGPUEngineLogFrame("BKVolumeRenderer (screen)", (uint32_t)width, (uint32_t)height, bkgpu::BKGPUEngineNowMs() - t0);
+        return YES;
     }
 
     BKTransferFunction *tf = [self effectiveTransferFunction];

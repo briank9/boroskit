@@ -28,6 +28,7 @@
 #import <QuartzCore/QuartzCore.h>
 #include "BKSurfacePass.h"     // the shared GPU flow (2026-11-26)
 #include "BKGPUMetal.h"        // MetalDevice glue
+#import "BKGPUEngineBridge.h"  // 2026-11-26: the Vulkan TEST engine (Boros 6 MoltenVK switch)
 #include <vector>
 
 extern "C" NSString *BKSurfaceShaderSource(void); // BKSurfaceShaderSource.mm
@@ -124,6 +125,9 @@ static double BKNowMs(void)
 @implementation BKSurfaceExtractor {
     std::unique_ptr<bkgpu::Device> _gpu;          // MetalDevice over _device + _commandQueue (2026-11-26)
     std::unique_ptr<bksurface::SurfacePass> _pass; // the shared surface flow (BKSurfacePass.h)
+    // 2026-11-26: the same pass on the Vulkan TEST engine (BKGPUEngine.h); nullptr = Metal (default).
+    bkgpu::Device *_vk;
+    std::unique_ptr<bksurface::SurfacePass> _vkPass;
     NSDictionary *_lastTimings;
 }
 
@@ -171,6 +175,14 @@ static double BKNowMs(void)
         if (error) *error = BKSurfaceError(status, @"(The surface GPU programs could not be prepared.)", nil);
         return nil;
     }
+    // Vulkan TEST engine (only when the user chose it; else everything stays on Metal, as before).
+    _vk = bkgpu::BKGPUTestEngineDevice();
+    if (_vk) {
+        std::lock_guard<std::recursive_mutex> lock(bkgpu::BKGPUTestEngineMutex());
+        _vkPass.reset(new bksurface::SurfacePass(*_vk));
+        if (_vkPass->prepare() != BKSurfaceStatusOK) { _vkPass.reset(); _vk = nullptr; }
+    }
+    bkgpu::BKGPUEngineLogRenderer("BKSurfaceExtractor", _vk != nullptr);
     return self;
 }
 
@@ -265,6 +277,35 @@ static BKSurfaceStatus BKSurfaceAddMesh(void *context, uint32_t, const bksurface
         steps.push_back(BKSurfaceThresholdToSteps(threshold.floatValue, volume.valueScale, volume.valueOffset));
 
     // ---- The shared GPU flow (sample / blur / classify / row sums / emit) ----
+    if (_vk) {   // Vulkan TEST engine: the same pass on a cached copy of the scan; the meshes come out the same way
+        std::lock_guard<std::recursive_mutex> lock(bkgpu::BKGPUTestEngineMutex());
+        std::shared_ptr<bkgpu::Texture> vkScan = bkgpu::BKGPUCopyMetalTexture(*_vk, volume.texture, true);
+        if (!vkScan) {
+            if (error) *error = BKSurfaceError(BKSurfaceStatusGPUFailed, @"(Vulkan test engine: the scan could not be copied.)", nil);
+            return nil;
+        }
+        NSMutableArray<BKMesh *> *meshes = [NSMutableArray array];
+        BKSurfaceSinkContext sink = { meshes, nil };
+        bksurface::Stats stats;
+        double t0 = bkgpu::BKGPUEngineNowMs();
+        BKSurfaceStatus status = _vkPass->extract(*vkScan, rq, steps.data(), (uint32_t)steps.size(), BKSurfaceAddMesh, &sink, &stats);
+        if (status != BKSurfaceStatusOK) {
+            if (error) *error = sink.error ?: BKSurfaceError(status, stats.detail ? @(stats.detail) : nil, nil);
+            return nil;
+        }
+        bkgpu::BKGPUEngineLogFrame("BKSurfaceExtractor", stats.gridWidth, stats.gridHeight, bkgpu::BKGPUEngineNowMs() - t0);
+        timings.gridWidth = stats.gridWidth; timings.gridHeight = stats.gridHeight; timings.gridDepth = stats.gridDepth;
+        timings.samplingMilliseconds = stats.samplingMilliseconds;
+        timings.extractionMilliseconds = stats.extractionMilliseconds;
+        timings.meshMilliseconds = stats.sinkMilliseconds;
+        timings.vertexCount = (NSUInteger)stats.vertexCount;
+        timings.triangleCount = (NSUInteger)stats.triangleCount;
+        timings.peakTemporaryBytes = (NSUInteger)stats.peakTemporaryBytes;
+        timings.totalMilliseconds = BKNowMs() - tStart;
+        @synchronized (self) { _lastTimings = timings.dictionaryRepresentation; }
+        if (timingsOut) *timingsOut = timings;
+        return meshes;
+    }
     std::unique_ptr<bkgpu::Texture> scan = bkgpu::BKGPUMetalWrapTexture(*_gpu, volume.texture);
     if (!scan) {
         if (error) *error = BKSurfaceError(BKSurfaceStatusInvalidInput, @"(The scan texture has an unexpected format.)", nil);

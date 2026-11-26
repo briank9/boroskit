@@ -15,6 +15,8 @@
 #import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
 #include "BKDisplayPass.h"   // 2026-11-26: the draw on the shared GPU interface (Vulkan plan 7.1 #6)
 #include "BKGPUMetal.h"
+#import "BKGPUEngineBridge.h"   // 2026-11-26: the Vulkan TEST engine (Boros 6 MoltenVK switch)
+#include <vector>
 
 extern "C" NSString *BKDisplayShaderSource(void);
 
@@ -94,6 +96,8 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
     id<MTLLibrary> _library;
     std::unique_ptr<bkgpu::Device> _gpu;                          // MetalDevice over _device + _commandQueue
     std::unique_ptr<boroskit::display::DisplayPass> _pass;
+    bkgpu::Device *_vk;                                           // 2026-11-26: Vulkan TEST engine, nullptr = Metal
+    std::unique_ptr<boroskit::display::DisplayPass> _vkPass;
     id<MTLTexture> _imageTexture;
     id<MTLTexture> _lutTexture;      // 256 x 1 RGBA8, always valid (identity gray if no table)
 }
@@ -135,6 +139,13 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
             return nil;
         }
         _pass.reset(new boroskit::display::DisplayPass(*_gpu));
+        _vk = bkgpu::BKGPUTestEngineDevice();   // only when the user chose the Vulkan test engine
+        if (_vk) {
+            std::lock_guard<std::recursive_mutex> lock(bkgpu::BKGPUTestEngineMutex());
+            _vkPass.reset(new boroskit::display::DisplayPass(*_vk));
+            if (_vkPass->prepare() != bkgpu::Status::Ok) { _vkPass.reset(); _vk = nullptr; }
+        }
+        bkgpu::BKGPUEngineLogRenderer("BKImageLayerRenderer", _vk != nullptr);
         if (_pass->prepare() != bkgpu::Status::Ok) {
             if (error) *error = BKDisplayError(1, @"The display GPU programs could not be prepared");
             return nil;
@@ -263,9 +274,62 @@ static NSError *BKDisplayError(NSInteger code, NSString *message)
 
 // What: encodes one full-target draw. Without an image it only clears to the background.
 // Why: the same encode path serves the on-screen layer and offscreen rendering.
+// What (2026-11-26, Vulkan TEST engine): this layer's draw on the test device into `list` (a pass in progress).
+- (BOOL)vkEncodeInto:(bkgpu::CommandList &)list device:(bkgpu::Device &)device pass:(boroskit::display::DisplayPass &)pass
+               scale:(CGFloat)scale blended:(BOOL)blended keep:(std::vector<std::shared_ptr<bkgpu::Texture>> &)keep
+{
+    if (!_imageTexture) return YES;
+    BKDisplayParams params = [self paramsWithScale:scale];
+    if (blended) params.bgR = params.bgG = params.bgB = params.bgA = 0;   // outside the overlay: no change
+    keep.push_back(bkgpu::BKGPUCopyMetalTexture(device, _imageTexture, true));   // image / table: fixed until replaced
+    bkgpu::Texture *image = keep.back().get();
+    keep.push_back(bkgpu::BKGPUCopyMetalTexture(device, _lutTexture, true));
+    bkgpu::Texture *lut = keep.back().get();
+    return image && lut && pass.encode(list, params, *image, *lut, bkgpu::Format::RGBA8Unorm, blended) == bkgpu::Status::Ok;
+}
+
 - (BOOL)encodeToCommandBuffer:(id<MTLCommandBuffer>)commandBuffer texture:(id<MTLTexture>)texture
                         scale:(CGFloat)scale error:(NSError **)error
 {
+    bkgpu::Format targetFormat;
+    if (_vk && bkgpu::BKGPUMetalFormat(texture.pixelFormat, &targetFormat) &&
+        (targetFormat == bkgpu::Format::RGBA8Unorm || targetFormat == bkgpu::Format::BGRA8Unorm)) {
+        // Vulkan TEST engine: the image (and the fusion layer) drawn on the Vulkan device, read back, marked and copied
+        // into the caller's texture within its command buffer (later overlay passes draw over it as before).
+        std::lock_guard<std::recursive_mutex> lock(bkgpu::BKGPUTestEngineMutex());
+        double t0 = bkgpu::BKGPUEngineNowMs();
+        bkgpu::TextureDesc td;
+        td.format = bkgpu::Format::RGBA8Unorm;
+        td.width = (uint32_t)texture.width; td.height = (uint32_t)texture.height;
+        td.usage = bkgpu::UsageRenderTarget | bkgpu::UsageCopySource;
+        std::unique_ptr<bkgpu::Texture> target = _vk->makeTexture(td, nullptr);
+        std::unique_ptr<bkgpu::CommandList> list = target ? _vk->begin(nullptr) : nullptr;
+        bkgpu::PassTargets pt;
+        pt.color[0] = target.get();
+        pt.clearValue[0][0] = _backgroundColor.red; pt.clearValue[0][1] = _backgroundColor.green;
+        pt.clearValue[0][2] = _backgroundColor.blue; pt.clearValue[0][3] = _backgroundColor.alpha;
+        std::vector<std::shared_ptr<bkgpu::Texture>> keep;
+        std::vector<uint8_t> pixels;
+        BOOL ok = list && list->beginPass(pt) == bkgpu::Status::Ok &&
+                  [self vkEncodeInto:*list device:*_vk pass:*_vkPass scale:scale blended:NO keep:keep] &&
+                  (!_overlay || [_overlay vkEncodeInto:*list device:*_vk pass:*_vkPass scale:scale blended:YES keep:keep]);
+        if (ok) {
+            list->endPass();
+            ok = _vk->submit(*list, true) == bkgpu::Status::Ok && bkgpu::BKGPUReadTexture(*_vk, *target, &pixels);
+        }
+        if (ok) {
+            bool bgra = targetFormat == bkgpu::Format::BGRA8Unorm;
+            if (bgra) bkgpu::BKGPUSwapRedBlue(pixels.data(), texture.width * texture.height);
+            bkgpu::BKGPUStampTestMarker(pixels.data(), (uint32_t)texture.width, (uint32_t)texture.height, bgra);
+            ok = bkgpu::BKGPUBlitBytesToMetalTexture(commandBuffer, texture, pixels.data(), texture.width * 4);
+        }
+        if (!ok) {
+            if (error) *error = BKDisplayError(2, @"The Vulkan test engine could not draw the image");
+            return NO;
+        }
+        bkgpu::BKGPUEngineLogFrame("BKImageLayerRenderer", (uint32_t)texture.width, (uint32_t)texture.height, bkgpu::BKGPUEngineNowMs() - t0);
+        return YES;
+    }
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = texture;
     pass.colorAttachments[0].loadAction = MTLLoadActionClear;
