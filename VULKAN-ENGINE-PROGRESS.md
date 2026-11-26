@@ -331,3 +331,51 @@ Metal adapter), fc3ad9b (step 3b Vulkan kernels + shared surface test). Pushed, 
 2. Optional: share the surface kernel bodies between MSL and GLSL (option C, like the mesh shaders) - today they are
    line-by-line twins; any maths change must be made in both (the Vulkan golden test catches drift).
 3. Storage-image layouts for compute writes in VulkanDevice (not needed yet).
+
+## 2026-11-26 - VOLUME RENDER branch (agent/volume-render from main 4655a56)
+
+Agent "vulkan-engine". Commits: df35922 (step 1 surface kernels one source), 92516b3 (step 2a params builder in C),
+c59530c (step 2b+2c RaycastPass + Vulkan), plus this notes commit. Pushed, NOT merged.
+
+### Step 1 - one source for the surface kernels
+BKSurfaceShaderBodies.h (option C) replaces the phase-3/4 GLSL twins; MSL / GLSL are thin entry points. Metal golden
+strict 0; BorosKitSegmentation tests 8/8; Vulkan numbers unchanged (identical triangles, positions <= 3.81e-06 voxel).
+
+### Step 2a - parameter block in plain C (R2/R3)
+BKRenderParamsCore.{h,c} (private header): BKRenderSettings -> BKRenderParamsFill; BKRenderTFFromCLUT (preset CLUT ->
+points). OPEN USER DECISION: Apple's simd_normalize (hardware 1/sqrt estimate) cannot be reproduced portably, so the
+Mac adapter passes it in (strict 0). Switching the Mac to the portable double normalisation would change 4 of 8 volume
+goldens in strict mode, all within tolerance (vr_persp_oblique colour max 1 / 3 ch, values 6.6e-05; mpr_thin_oblique
+0.16 HU in 3 px; mip_persp_full 5.7 HU in 12 edge px). Recommended later: switch + re-record once (deterministic on
+every platform), like D3.
+
+### Step 2b/2c - RaycastPass
+- BKRaycastShaderBodies.h = the whole ray caster once; BKShaderSource.mm / bk_raycast*.comp are entry points.
+- BKRaycastPass (BorosKitRender) + BKVolumeRenderer.mm adapter (public API unchanged). BorosKitRender -> BorosKitGPU
+  dependency; BorosKitGPU no longer depends on BorosKitRender.
+- Metal golden strict 0 (472 tests). Vulkan vs Metal (same params): colour max 1 grey level, values within golden
+  tolerance (largest: perspective full MIP 5.7 HU in 3 edge px). Picture: milestone1-pictures/raycast_metal_vs_vulkan.png.
+
+### On-screen path on Vulkan (finding 5) - PLAN ONLY (not built)
+1. RaycastPass::encodeRaycastToTexture targets an RGBA8 STORAGE image owned by the view (not the swapchain image;
+   BGRA8 storage is usually missing). GLSL entry bk_raycast_texture.comp = same body as bk_raycast with
+   `imageStore(target, gid, vec4(clamp(rgb), 1))` (rgba8 format qualifier) instead of the buffer writes.
+2. A copy / blit (vkCmdBlitImage or a tiny full-screen draw that also does the LOD upscale and RGBA->BGRA) into the
+   acquired swapchain image, then present. Needs BKGPU.h: Surface acquire/present (phase 8) + a copy-texture command.
+3. Overlays (text, orientation cube) are separate Core Animation layers on the Mac; on Vulkan they must be drawn into
+   the same image (2D drawing engine choice) - a separate step.
+
+### For Boros 6 when this is merged (lead)
+- No app code change expected: BKVolumeRenderer / BKTransferFunction / BKSurfaceExtractor APIs unchanged.
+- Package graph: BorosKitRender now depends on BorosKitGPU (SwiftPM links it); BKVolumeRenderer is now C++ (.mm).
+- If the bench shows a stale-module error, clear build/Build/Intermediates.noindex/ExplicitPrecompiledModules/BorosKit*
+  once (module dependencies changed).
+- New error: code 15 "Not enough memory for the colour table" (was silently ignored before).
+- Please test in the app: 3D volume window (presets, crop box + rotated crop, clip plane, empty-space speed, colour
+  scans, fusion, embedded 3D points / meshes, MIP / MinIP / mean, perspective), MPR / curved MPR / thick slab
+  pictures, surface building. Everything should look exactly as before.
+
+### Where to resume
+1. User decision on the portable normalisation (re-record once) - then the Mac adapter drops its simd hook.
+2. On-screen Vulkan path (plan above) together with BKGPU.h Surface (phase 8).
+3. Next modules onto the interface: BKImageLayerRenderer (2D), BKOverlayRenderer; BKCurvedReformat (slab pictures).
