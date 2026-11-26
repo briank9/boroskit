@@ -398,3 +398,51 @@ every platform), like D3.
   MinIP identical, composite <= 9.7e-05, average 6.1e-05 HU, thin oblique MPR 0.108 HU (was 0.163 vs the old
   references), perspective full MIP 5.69 HU in 3 edge pixels (7664 of 7680 identical, was 7660). What remains is the
   shader compilers' float rounding, not the parameters. ctest 40/40, 0 validation messages.
+
+## 2026-11-26 - MPR + 2D DISPLAY branch (agent/mpr-display from main d4cb163), Vulkan plan 7.1 #5 and #6
+
+Agent "vulkan-engine". Commits: 4e8e771 (1a reformat goldens), 39ce884 (1b ReformatPass + SlabPass path), cb37d86
+(2a 2D goldens), 76e7696 (2b DisplayPass + OverlayPass), plus this notes commit. Pushed, NOT merged.
+
+### Step 1 - MPR / slabs / curved reformat
+- New references recorded from the UNCHANGED Metal class first: 5 reformat_pano_* cases (cubic mean; linear MIP +
+  Mac height band; nearest radiograph + clip band; cubic first sample + both limits; linear MinIP + both limits).
+- BKReformatShaderBodies.h (one source), BKReformatPass, BKCurvedReformat = thin adapter. BKReformatBandRows /
+  BKReformatComputeRows remain the CPU core (band export rows / reference; tested).
+- SlabPass = RaycastPass::encodeValues (the values-only path; thin slab = single plane, thick = MIP / MinIP / mean):
+  values-only == full render, bit for bit, on both backends.
+- Metal strict 0. Vulkan vs Metal: reformat max 0.00049 HU (all band / outside pixels identical).
+
+### Step 2 - 2D display + overlay
+- New references from the UNCHANGED Metal classes first: overlay_scene (incl. the segmentation label-map picture,
+  drawn as Boros 6 does) and display_overlay_layer.
+- BKDisplayShaderBodies.h / BKOverlayShaderBodies.h, DisplayPass / OverlayPass, adapters drawing into the caller's
+  encoder (BKGPUMetalCommandListForEncoder); new blend ColorTarget::straightOverKeepAlpha.
+- Metal strict 0 (incl. slice_* references). Vulkan vs Metal: bit-identical (3 pictures).
+- Picture: milestone1-pictures/display_overlay_metal_vs_vulkan.png.
+
+### Step 3 - segmentation label-map overlay
+Boros 6 draws it through the overlay engine (BorosSegmentationOverlay.m: BKLabelSliceToRGBA -> BKOverlayAddImage
+RGBA8 -> BKOverlayDrawImage nearest, white). That path is OverlayPass's image command; it is part of the golden
+overlay scene (bit-identical Metal / Vulkan). No separate hook needed; nothing changed for the segmentation agent.
+
+### Text on Vulkan - glyph source plan (decision D4 still OPEN; no font engine chosen)
+The overlay engine only needs glyphs as BKOverlayImageAlpha8 masks + positions (what the Mac's CoreText glyph source
+produces today). Options for Windows / Linux, to decide later: (a) the OS text APIs (DirectWrite / fontconfig +
+FreeType-class system library) behind the same glyph-source interface; (b) a BorosKit-owned bitmap / signed-distance
+font baked at build time from a licence-free font; (c) pre-rendered label atlases shipped with the app. Whatever is
+picked plugs in BEFORE BKOverlayCore (mask images); OverlayPass and the shaders stay as they are.
+
+### For Boros 6 when this is merged (lead)
+- No app code change expected: BKCurvedReformat, BKImageLayerRenderer, BKOverlayRenderer, BKVolumeRenderer APIs
+  unchanged. BorosKitDisplay now depends on BorosKitGPU; BKImageLayerRenderer is C++ (.mm).
+- The 2D renderers now reject an unknown target pixel format with an error (code 4) - BGRA8 / RGBA8 drawables are fine.
+- If the bench shows a stale-module error, clear ExplicitPrecompiledModules/BorosKit* once.
+- Please test in the app: 2D viewer (window / level, colour tables, zoom / rotate / flip, fusion layer), all overlays
+  (ROIs, text, rulers, segmentation overlay incl. outline mode), MPR + curved MPR / panorex (both height limits,
+  projections, exports cropped to the band), thick slabs.
+
+### Where to resume
+1. On-screen Vulkan path (storage image + copy, plan in the volume-render section) with BKGPU.h Surface (phase 8).
+2. Decision D4 (glyph source) when Windows / Linux UI work starts.
+3. Remaining Metal-only code: BKMeshRenderer extras, stereo compose (N4), the 3D view's upscale kernel.
