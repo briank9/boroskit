@@ -150,18 +150,18 @@ find_program(BK_GLSLC glslc HINTS "$ENV{VULKAN_SDK}/bin")
 find_program(BK_SPIRV_VAL spirv-val HINTS "$ENV{VULKAN_SDK}/bin")
 if(BK_VULKAN_INCLUDE_DIR AND BK_GLSLC AND BK_SPIRV_VAL)
     message(STATUS "BorosKit Vulkan engine: headers ${BK_VULKAN_INCLUDE_DIR}, ${BK_GLSLC}, ${BK_SPIRV_VAL}")
-    # GLSL -> SPIR-V (Vulkan 1.3, optimised, no fast-math options exist in glslc) -> spirv-val -> embedded table.
+    # GLSL -> SPIR-V (SPIR-V for Vulkan 1.2 so compute workgroup sizes need no maintenance4 feature; optimised, no fast-math options exist in glslc) -> spirv-val -> embedded table.
     set(BK_SPIRV_FILES "")
     foreach(shader IN LISTS BOROSKIT_GPU_VULKAN_SHADERS)
         get_filename_component(name "${shader}" NAME)
         set(spv "${CMAKE_CURRENT_BINARY_DIR}/shaders/${name}.spv")
         add_custom_command(OUTPUT "${spv}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/shaders"
-            COMMAND ${BK_GLSLC} --target-env=vulkan1.3 -O
+            COMMAND ${BK_GLSLC} --target-env=vulkan1.2 -O
                     -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitGPUVulkan/Shaders"
                     -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitMeshRender/include"
                     -MD -MF "${spv}.d" -o "${spv}" "${CMAKE_CURRENT_SOURCE_DIR}/${shader}"
-            COMMAND ${BK_SPIRV_VAL} --target-env vulkan1.3 "${spv}"
+            COMMAND ${BK_SPIRV_VAL} --target-env vulkan1.2 "${spv}"
             DEPENDS "${shader}" DEPFILE "${spv}.d"
             COMMENT "glslc + spirv-val ${name}" VERBATIM)
         list(APPEND BK_SPIRV_FILES "${spv}")

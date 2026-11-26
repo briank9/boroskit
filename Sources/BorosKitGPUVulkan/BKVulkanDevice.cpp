@@ -17,8 +17,11 @@
 //     buffers are followed by one memory barrier to every later read. One CommandList in flight at a time
 //     (submit waits), which is all milestone 1 needs; asynchronous submission comes with presentation.
 //   - Clip space: +y up like Metal - the viewport is set with a NEGATIVE height (core since Vulkan 1.1).
-//   - Not implemented yet (Status::Unsupported, honestly reported): compute pipelines / dispatch (phase 4,
-//     surface extraction), Surface (phase 8), timestamps.
+//   - Compute (2026-11-26, phase 3/4): pipelines with the workgroup size as specialization constants 0, 1, 2; after
+//     every dispatch one memory barrier (compute writes -> every later read, also the host), so the next command
+//     and the CPU (after submit) see the results.
+//   - Not implemented yet (Status::Unsupported, honestly reported): storage-image layouts for compute writes,
+//     Surface (phase 8), timestamps.
 
 #include "BKGPUVulkan.h"
 #include "BKVulkanLoader.h"
@@ -296,6 +299,22 @@ VkDescriptorType DescriptorType(SlotKind k)
 
 uint32_t BindingNumber(SlotKind k, uint32_t slot) { return kSlotBase[(int)k] + slot; }
 
+class VulkanComputePipeline final : public ComputePipeline {
+public:
+    VulkanComputePipeline(Context *c) : c_(c) {}
+    ~VulkanComputePipeline() override
+    {
+        if (pipeline) c_->f.vkDestroyPipeline(c_->device, pipeline, nullptr);
+        if (layout) c_->f.vkDestroyPipelineLayout(c_->device, layout, nullptr);
+        if (setLayout) c_->f.vkDestroyDescriptorSetLayout(c_->device, setLayout, nullptr);
+    }
+    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+private:
+    Context *c_;
+};
+
 class VulkanRenderPipeline final : public RenderPipeline {
 public:
     VulkanRenderPipeline(Context *c) : c_(c) {}
@@ -379,7 +398,8 @@ public:
         // Sampled textures go straight to the layout shaders read (no layout change is allowed inside a pass).
         if (d.usage & UsageSampled)
             transition(t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                       VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+                       VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_SHADER_READ_BIT);
         return Status::Ok;
     }
 
@@ -423,9 +443,22 @@ public:
         return Status::Ok;
     }
 
-    Status dispatch(ComputePipeline &, const Binding *, uint32_t, uint32_t, uint32_t, uint32_t) override
+    Status dispatch(ComputePipeline &pipeline, const Binding *bindings, uint32_t bindingCount,
+                    uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ) override
     {
-        return Status::Unsupported;   // compute comes with the surface-extraction port (phase 4)
+        if (inPass_) return Status::InvalidArgument;
+        VulkanComputePipeline &p = static_cast<VulkanComputePipeline &>(pipeline);
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        Status s = writeDescriptors(p.setLayout, bindings, bindingCount, &set);
+        if (s != Status::Ok) return s;
+        c_->f.vkCmdBindPipeline(cb_, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
+        if (set) c_->f.vkCmdBindDescriptorSets(cb_, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, 1, &set, 0, nullptr);
+        c_->f.vkCmdDispatch(cb_, groupsX, groupsY, groupsZ);
+        // The automatic barrier: what this dispatch wrote is visible to every later command and to the host.
+        memoryBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+                      VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_READ_BIT);
+        return Status::Ok;
     }
 
     // ---- drawing ----
@@ -752,11 +785,7 @@ public:
         return std::unique_ptr<Sampler>(s.release());
     }
 
-    std::unique_ptr<ComputePipeline> makeCompute(const ComputeDesc &, Status *status) override
-    {
-        Set(status, Status::Unsupported);   // phase 4 (surface extraction)
-        return nullptr;
-    }
+    std::unique_ptr<ComputePipeline> makeCompute(const ComputeDesc &desc, Status *status) override;
 
     std::unique_ptr<RenderPipeline> makeRender(const RenderDesc &desc, Status *status) override;
 
@@ -909,6 +938,53 @@ std::unique_ptr<RenderPipeline> VulkanDevice::makeRender(const RenderDesc &desc,
     if (r != VK_SUCCESS) { Set(status, Status::CompileFailed); return nullptr; }
     Set(status, Status::Ok);
     return std::unique_ptr<RenderPipeline>(p.release());
+}
+
+// What: a compute pipeline; the workgroup size goes in as specialization constants 0, 1, 2 (local_size_*_id).
+std::unique_ptr<ComputePipeline> VulkanDevice::makeCompute(const ComputeDesc &desc, Status *status)
+{
+    const uint32_t *w = desc.workgroup;
+    uint64_t threads = (uint64_t)w[0] * w[1] * w[2];
+    if (threads == 0 || threads > limits_.maxComputeWorkgroupInvocations || w[0] > limits_.maxComputeWorkgroupSize[0] ||
+        w[1] > limits_.maxComputeWorkgroupSize[1] || w[2] > limits_.maxComputeWorkgroupSize[2] || desc.slotCount > 48) {
+        Set(status, threads == 0 ? Status::InvalidArgument : Status::Unsupported);
+        return nullptr;
+    }
+    std::unique_ptr<VulkanComputePipeline> p(new VulkanComputePipeline(&c_));
+    std::vector<VkDescriptorSetLayoutBinding> bindings;
+    for (uint32_t i = 0; i < desc.slotCount; i++) {
+        VkDescriptorSetLayoutBinding b = {};
+        b.binding = BindingNumber(desc.slots[i].kind, desc.slots[i].slot);
+        b.descriptorType = DescriptorType(desc.slots[i].kind);
+        b.descriptorCount = 1;
+        b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings.push_back(b);
+    }
+    VkDescriptorSetLayoutCreateInfo dl = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    dl.bindingCount = (uint32_t)bindings.size();
+    dl.pBindings = bindings.data();
+    if (c_.f.vkCreateDescriptorSetLayout(c_.device, &dl, nullptr, &p->setLayout) != VK_SUCCESS) { Set(status, Status::OutOfMemory); return nullptr; }
+    VkPipelineLayoutCreateInfo pl = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &p->setLayout;
+    if (c_.f.vkCreatePipelineLayout(c_.device, &pl, nullptr, &p->layout) != VK_SUCCESS) { Set(status, Status::OutOfMemory); return nullptr; }
+    VkShaderModule module = MakeModule(c_, desc.kernel.name);
+    if (!module) { Set(status, Status::NotFound); return nullptr; }
+    VkSpecializationMapEntry entries[3];
+    for (uint32_t i = 0; i < 3; i++) entries[i] = { i, i * 4, 4 };
+    VkSpecializationInfo spec = { 3, entries, sizeof(uint32_t) * 3, w };
+    VkComputePipelineCreateInfo ci = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = module;
+    ci.stage.pName = "main";
+    ci.stage.pSpecializationInfo = &spec;
+    ci.layout = p->layout;
+    VkResult r = c_.f.vkCreateComputePipelines(c_.device, VK_NULL_HANDLE, 1, &ci, nullptr, &p->pipeline);
+    c_.f.vkDestroyShaderModule(c_.device, module, nullptr);
+    if (r != VK_SUCCESS) { Set(status, Status::CompileFailed); return nullptr; }
+    Set(status, Status::Ok);
+    return std::unique_ptr<ComputePipeline>(p.release());
 }
 
 bool HasExtension(const std::vector<VkExtensionProperties> &list, const char *name)

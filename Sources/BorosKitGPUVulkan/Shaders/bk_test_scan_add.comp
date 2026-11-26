@@ -1,0 +1,12 @@
+// BorosKitGPUVulkan: compute test kernel 3/3 - adds each block's start to its values.
+// Original BorosKit code written for this project; contains no third-party code. 2026-11-26, agent "vulkan-engine".
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "bk_test_scan_common.glsl"
+layout(std430, set = 0, binding = 2) buffer BKOut { uint v[]; } outValues;
+layout(std430, set = 0, binding = 4) readonly buffer BKBlockStarts { uint v[]; } blockStarts;
+void main()
+{
+    uint idx = gl_WorkGroupID.x * gl_WorkGroupSize.x + gl_LocalInvocationID.x;
+    if (idx < P.count) outValues.v[idx] += blockStarts.v[gl_WorkGroupID.x];
+}

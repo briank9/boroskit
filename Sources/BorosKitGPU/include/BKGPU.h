@@ -5,7 +5,7 @@
 // VULKAN-ENGINE-KICKOFF.md section 2.2, refining VULKAN-PORT-PLAN.md section 6).
 // Implemented by: VulkanDevice (Sources/BorosKitGPUVulkan, CMake only, milestone 1, 2026-11-26) and MetalDevice
 // (BKGPUMetal.mm in this target, SwiftPM, phase 2, 2026-11-26). First module on it: the mesh renderer
-// (BorosKitMeshRender/include/BKMeshPass.h). Compute pipelines are declared but not implemented yet (phase 4).
+// (BorosKitMeshRender/include/BKMeshPass.h). Compute (2026-11-26): both devices; first user BKSurfacePass.
 //
 // PORTING NOTES (read first):
 //   - Plain C++17 + <cstdint> / <memory>. No Apple, Metal, Objective-C or Vulkan types or headers, so the
@@ -174,9 +174,16 @@ struct SlotLayout {
 // Metal: the library compiled from the module's MSL source).
 struct ShaderRef { const char *name = nullptr; };
 
+// Compute (2026-11-26, phase 3/4): the workgroup size is FIXED when the pipeline is made and is exactly the size every
+// dispatch uses. Kernels learn it as follows - Vulkan: specialization constants 0, 1, 2 (GLSL
+// `layout(local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2) in;`, so `gl_WorkGroupSize` may also size
+// shared arrays); Metal: [[threads_per_threadgroup]]. makeCompute answers Status::Unsupported when this GPU cannot run
+// the kernel with that many threads per group (Metal: the pipeline's maxTotalThreadsPerThreadgroup; Vulkan: the
+// device limits) - callers then try a smaller size. Barriers are automatic: a dispatch sees everything earlier
+// commands of the same CommandList wrote, and after submit(wait) the CPU sees what the GPU wrote.
 struct ComputeDesc {
     ShaderRef kernel;
-    uint32_t workgroup[3] = { 1, 1, 1 };   // fixed here (Vulkan specialization constants)
+    uint32_t workgroup[3] = { 1, 1, 1 };   // fixed here (Vulkan specialization constants 0..2)
     const SlotLayout *slots = nullptr;
     uint32_t slotCount = 0;
     const char *label = nullptr;

@@ -49,6 +49,11 @@
     if ([self haveDevice]) XCTAssertEqual(bkshared::TestWinding(*_device), 0);
 }
 
+- (void)testComputePrefixSum
+{
+    if ([self haveDevice]) XCTAssertEqual(bkshared::TestComputeScan(*_device), 0);
+}
+
 - (void)testFeatureSceneRenders
 {
     if (![self haveDevice]) return;

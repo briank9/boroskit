@@ -30,6 +30,7 @@ int main(int argc, char **argv)
         failures += bkshared::TestTriangle(*metal);
         failures += bkshared::TestGoldenMeshes(*metal, refs, nullptr, "metal", true);
         failures += bkshared::TestWinding(*metal);
+        failures += bkshared::TestComputeScan(*metal);
         std::vector<uint8_t> mRGBA, vRGBA;
         std::vector<float> mDist, vDist;
         if (!bkshared::RenderFeatureScene(*metal, &mRGBA, &mDist)) { std::printf("FAIL: feature scene on Metal\n"); failures++; }
@@ -42,6 +43,7 @@ int main(int argc, char **argv)
             failures += bkshared::TestTriangle(*vulkan);
             failures += bkshared::TestGoldenMeshes(*vulkan, refs, nullptr, "vulkan", false);
             failures += bkshared::TestWinding(*vulkan);
+            failures += bkshared::TestComputeScan(*vulkan);
             if (!bkshared::RenderFeatureScene(*vulkan, &vRGBA, &vDist)) { std::printf("FAIL: feature scene on Vulkan\n"); failures++; }
         }
         if (mRGBA.size() == vRGBA.size() && !mRGBA.empty()) {

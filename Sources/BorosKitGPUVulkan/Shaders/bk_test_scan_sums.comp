@@ -1,0 +1,18 @@
+// BorosKitGPUVulkan: compute test kernel 2/3 - one workgroup turns the block sums into block starts (chunked loop).
+// Original BorosKit code written for this project; contains no third-party code. 2026-11-26, agent "vulkan-engine".
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "bk_test_scan_common.glsl"
+layout(std430, set = 0, binding = 3) readonly buffer BKBlockSums { uint v[]; } blockSums;
+layout(std430, set = 0, binding = 4) buffer BKBlockStarts { uint v[]; } blockStarts;
+void main()
+{
+    uint lid = gl_LocalInvocationID.x, n = gl_WorkGroupSize.x, carry = 0u;
+    for (uint i0 = 0u; i0 < P.blocks; i0 += n) {
+        uint i = i0 + lid;
+        uint total;
+        uint before = bk_workgroup_exclusive_scan(i < P.blocks ? blockSums.v[i] : 0u, lid, n, total);
+        if (i < P.blocks) blockStarts.v[i] = before + carry;
+        carry += total;
+    }
+}

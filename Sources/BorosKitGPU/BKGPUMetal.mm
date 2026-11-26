@@ -4,7 +4,7 @@
 // Written 2026-11-26 by agent "vulkan-engine" (Vulkan plan phase 2). Objective-C++, ARC.
 //
 // Every mapping reproduces what BorosKit's hand-written Metal code did, so passes built on the interface draw the
-// same pixels (strict golden). Compute pipelines are not implemented yet (Status::Unsupported, phase 4).
+// same pixels (strict golden). Compute pipelines + dispatch since 2026-11-26 (phase 3/4).
 
 #import "BKGPUMetal.h"
 #import "BKMetalDevice.h"
@@ -82,6 +82,13 @@ public:
     id<MTLSamplerState> sampler;
 };
 
+class MetalComputePipeline final : public ComputePipeline {
+public:
+    id<MTLComputePipelineState> state;
+    MTLSize workgroup;
+    std::vector<SlotLayout> slots;
+};
+
 class MetalRenderPipeline final : public RenderPipeline {
 public:
     id<MTLRenderPipelineState> state;
@@ -102,7 +109,7 @@ struct MetalShared {
 class MetalCommandList final : public CommandList {
 public:
     MetalCommandList(MetalShared *shared, id<MTLCommandBuffer> cb, bool external) : shared_(shared), cb_(cb), external_(external) {}
-    ~MetalCommandList() override { endBlit(); endPass(); }
+    ~MetalCommandList() override { endBlit(); endCompute(); endPass(); }
 
     id<MTLCommandBuffer> commandBuffer() const { return cb_; }
     bool external() const { return external_; }
@@ -159,9 +166,42 @@ public:
         return Status::Ok;
     }
 
-    Status dispatch(ComputePipeline &, const Binding *, uint32_t, uint32_t, uint32_t, uint32_t) override
+    // Compute (2026-11-26): consecutive dispatches share one compute encoder; Metal orders them and tracks the
+    // hazards between them (the resources are hazard-tracked), so no explicit barrier is needed.
+    Status dispatch(ComputePipeline &pipeline, const Binding *bindings, uint32_t bindingCount,
+                    uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ) override
     {
-        return Status::Unsupported;   // phase 4
+        if (render_) return Status::InvalidArgument;
+        endBlit();
+        if (!compute_) compute_ = [cb_ computeCommandEncoder];
+        if (!compute_) return Status::OutOfMemory;
+        MetalComputePipeline &p = static_cast<MetalComputePipeline &>(pipeline);
+        [compute_ setComputePipelineState:p.state];
+        for (uint32_t i = 0; i < bindingCount; i++) {
+            const Binding &b = bindings[i];
+            switch (b.kind) {
+                case SlotKind::UniformBlock:
+                case SlotKind::StorageBuffer:
+                    if (b.bytes) {
+                        if (b.byteCount == 0 || b.byteCount > kMaxInlineBytes) return Status::InvalidArgument;
+                        [compute_ setBytes:b.bytes length:b.byteCount atIndex:b.slot];
+                    } else if (b.buffer) {
+                        [compute_ setBuffer:static_cast<MetalBuffer *>(b.buffer)->buffer offset:(NSUInteger)b.offset atIndex:b.slot];
+                    } else return Status::InvalidArgument;
+                    break;
+                case SlotKind::SampledTexture:
+                case SlotKind::StorageImage:
+                    if (!b.texture) return Status::InvalidArgument;
+                    [compute_ setTexture:static_cast<MetalTexture *>(b.texture)->texture atIndex:b.slot];
+                    break;
+                case SlotKind::Sampler:
+                    if (!b.sampler) return Status::InvalidArgument;
+                    [compute_ setSamplerState:static_cast<MetalSampler *>(b.sampler)->sampler atIndex:b.slot];
+                    break;
+            }
+        }
+        [compute_ dispatchThreadgroups:MTLSizeMake(groupsX, groupsY, groupsZ) threadsPerThreadgroup:p.workgroup];
+        return Status::Ok;
     }
 
     // A render pass exactly like the hand-written mesh renderer's: colour targets cleared or kept, depth cleared to
@@ -170,6 +210,7 @@ public:
     {
         if (render_ || targets.colorCount > 2 || (targets.colorCount == 0 && !targets.depth)) return Status::InvalidArgument;
         endBlit();
+        endCompute();
         MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
         NSUInteger width = 0, height = 0;
         for (uint32_t i = 0; i < targets.colorCount; i++) {
@@ -269,11 +310,12 @@ public:
 
     void timestamp(uint32_t) override {}
 
-    void finish() { endBlit(); endPass(); }
+    void finish() { endBlit(); endCompute(); endPass(); }
 
 private:
     id<MTLBlitCommandEncoder> blit()
     {
+        endCompute();
         if (!blit_) blit_ = [cb_ blitCommandEncoder];
         return blit_;
     }
@@ -281,12 +323,17 @@ private:
     {
         if (blit_) { [blit_ endEncoding]; blit_ = nil; }
     }
+    void endCompute()
+    {
+        if (compute_) { [compute_ endEncoding]; compute_ = nil; }
+    }
 
     MetalShared *shared_;
     id<MTLCommandBuffer> cb_;
     bool external_;
     id<MTLRenderCommandEncoder> render_;
     id<MTLBlitCommandEncoder> blit_;
+    id<MTLComputeCommandEncoder> compute_;
 };
 
 // ---- The device ---------------------------------------------------------------------------------------------------
@@ -374,10 +421,25 @@ public:
         return std::unique_ptr<Sampler>(new MetalSampler(s));
     }
 
-    std::unique_ptr<ComputePipeline> makeCompute(const ComputeDesc &, Status *status) override
+    std::unique_ptr<ComputePipeline> makeCompute(const ComputeDesc &desc, Status *status) override
     {
-        Set(status, Status::Unsupported);   // phase 4 (surface extraction)
-        return nullptr;
+        id<MTLFunction> kernel = function(desc.kernel.name);
+        if (!kernel) { Set(status, Status::NotFound); return nullptr; }
+        NSError *error = nil;
+        id<MTLComputePipelineState> state = [shared_.device newComputePipelineStateWithFunction:kernel error:&error];
+        if (!state) {
+            NSLog(@"BorosKit MetalDevice: compute pipeline %s failed: %@", desc.kernel.name, error);
+            Set(status, Status::CompileFailed);
+            return nullptr;
+        }
+        uint64_t threads = (uint64_t)desc.workgroup[0] * desc.workgroup[1] * desc.workgroup[2];
+        if (threads == 0 || threads > state.maxTotalThreadsPerThreadgroup) { Set(status, Status::Unsupported); return nullptr; }
+        std::unique_ptr<MetalComputePipeline> p(new MetalComputePipeline());
+        p->state = state;
+        p->workgroup = MTLSizeMake(desc.workgroup[0], desc.workgroup[1], desc.workgroup[2]);
+        p->slots.assign(desc.slots, desc.slots + desc.slotCount);
+        Set(status, Status::Ok);
+        return std::unique_ptr<ComputePipeline>(p.release());
     }
 
     std::unique_ptr<RenderPipeline> makeRender(const RenderDesc &desc, Status *status) override

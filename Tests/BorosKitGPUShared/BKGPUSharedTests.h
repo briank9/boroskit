@@ -33,6 +33,11 @@ int TestGoldenMeshes(boroskit::gpu::Device &device, const char *referencesDir, c
 // none / back / front; the result must match the plain-C rule BKMeshTriangleIsCulled (BKMeshDrawCore.h).
 int TestWinding(boroskit::gpu::Device &device);
 
+// What (2026-11-26, phase 3/4): GPU compute - an exclusive prefix sum of 100003 pseudo-random numbers in three
+// dispatches (blocks, block sums, add), with workgroups of 256 and of 64 threads; must equal the CPU sum exactly.
+// Shaders bk_test_scan_blocks / bk_test_scan_sums / bk_test_scan_add (Metal twins in BKGPUTestMetal.mm).
+int TestComputeScan(boroskit::gpu::Device &device);
+
 // What: a scene with every other kind BKMeshPass draws - solid and see-through lines, points, a textured quad
 // (nearest + repeat, linear + clamp), a see-through mesh, a wireframe mesh, culling - rendered into RGBA8 + ray
 // distance (96 x 80). Used to compare two backends with each other (no recorded reference yet).

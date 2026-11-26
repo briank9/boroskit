@@ -54,7 +54,8 @@ namespace vk {
     X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCreateFence) X(vkDestroyFence) X(vkWaitForFences) \
     X(vkCmdPipelineBarrier) X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) \
     X(vkCmdBeginRendering) X(vkCmdEndRendering) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
-    X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdBindIndexBuffer)
+    X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdBindIndexBuffer) \
+    X(vkCreateComputePipelines) X(vkCmdDispatch)
 
 #define BK_VK_DECLARE(name) PFN_##name name = nullptr;
 struct Functions {

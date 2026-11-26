@@ -5,7 +5,7 @@
 //
 // PORTING NOTES:
 //   - The table is GENERATED at build time (cmake/BKEmbedSpirv.cmake): every Shaders/<name>.<stage> GLSL file
-//     is compiled by glslc (--target-env=vulkan1.3, no fast-math options), checked by spirv-val, and its words
+//     is compiled by glslc (--target-env=vulkan1.2: portable SPIR-V, also no maintenance4 needed; no fast-math options), checked by spirv-val, and its words
 //     written into a C++ array. The tools only run on the developer machine (user decision D1); their output
 //     is BorosKit's own compiled shader.
 //   - A ShaderRef names a program by its file stem, which is also the Metal function name where one exists

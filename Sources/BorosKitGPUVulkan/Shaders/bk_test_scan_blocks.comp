@@ -1,0 +1,17 @@
+// BorosKitGPUVulkan: compute test kernel 1/3 - prefix sum inside each workgroup-sized block, and the block sums.
+// Original BorosKit code written for this project; contains no third-party code. 2026-11-26, agent "vulkan-engine".
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "bk_test_scan_common.glsl"
+layout(std430, set = 0, binding = 1) readonly buffer BKValues { uint v[]; } values;
+layout(std430, set = 0, binding = 2) buffer BKOut { uint v[]; } outValues;
+layout(std430, set = 0, binding = 3) buffer BKBlockSums { uint v[]; } blockSums;
+void main()
+{
+    uint lid = gl_LocalInvocationID.x, n = gl_WorkGroupSize.x, idx = gl_WorkGroupID.x * n + lid;
+    uint value = idx < P.count ? values.v[idx] : 0u;
+    uint total;
+    uint before = bk_workgroup_exclusive_scan(value, lid, n, total);
+    if (idx < P.count) outValues.v[idx] = before;
+    if (lid == 0u) blockSums.v[gl_WorkGroupID.x] = total;
+}

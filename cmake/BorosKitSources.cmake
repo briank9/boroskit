@@ -106,4 +106,8 @@ set(BOROSKIT_GPU_VULKAN_SHADERS
     Sources/BorosKitGPUVulkan/Shaders/bk_point_vertex.vert
     Sources/BorosKitGPUVulkan/Shaders/bk_line_fragment.frag
     Sources/BorosKitGPUVulkan/Shaders/bk_line_fragment_distance.frag
+    # 2026-11-26 (phase 3/4): compute test kernels (shared test TestComputeScan)
+    Sources/BorosKitGPUVulkan/Shaders/bk_test_scan_blocks.comp
+    Sources/BorosKitGPUVulkan/Shaders/bk_test_scan_sums.comp
+    Sources/BorosKitGPUVulkan/Shaders/bk_test_scan_add.comp
 )

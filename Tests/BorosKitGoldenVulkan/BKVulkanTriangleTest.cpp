@@ -17,9 +17,10 @@ int main()
         if (!device) return 1;
         failures += bkshared::TestTriangle(*device);
         failures += bkshared::TestWinding(*device);
+        failures += bkshared::TestComputeScan(*device);   // 2026-11-26: compute
     }   // everything destroyed first, so clean-up messages are counted too
     std::printf("validation messages: %d errors, %d warnings\n", messages.errors, messages.warnings);
     if (messages.errors || messages.warnings) failures++;
-    std::printf("%s Vulkan triangle + winding\n", failures ? "FAILED" : "PASSED");
+    std::printf("%s Vulkan triangle + winding + compute\n", failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;
 }

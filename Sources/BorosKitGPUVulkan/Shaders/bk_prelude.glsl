@@ -3,7 +3,7 @@
 // Written 2026-11-26 by agent "vulkan-engine" (step M8, shader option C).
 //
 // PORTING NOTES: included first by every BorosKit GLSL program (glslc -I adds this folder and the BorosKit
-// include folders). No precision-relaxing qualifiers, no fast-math: compiled with glslc --target-env=vulkan1.3.
+// include folders). No precision-relaxing qualifiers, no fast-math: compiled with glslc --target-env=vulkan1.2 (2026-11-26; portable SPIR-V).
 
 #ifndef BK_PRELUDE_GLSL
 #define BK_PRELUDE_GLSL

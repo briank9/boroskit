@@ -287,6 +287,64 @@ int TestWinding(Device &device)
     return failures;
 }
 
+// ---- Compute: prefix sum ---------------------------------------------------------------------------------------------
+
+int TestComputeScan(Device &device)
+{
+    const uint32_t count = 100003;
+    std::vector<uint32_t> values(count), expected(count);
+    uint32_t state = 20261126u, sum = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        state = state * 1664525u + 1013904223u;   // a fixed linear congruential sequence (exact, platform-independent)
+        values[i] = state >> 22;                  // 0..1023
+        expected[i] = sum;
+        sum += values[i];
+    }
+    int failures = 0;
+    const uint32_t sizes[2] = { 256, 64 };
+    for (uint32_t n : sizes) {
+        SlotLayout slots[5] = { { SlotKind::StorageBuffer, 0, false, false, false }, { SlotKind::StorageBuffer, 1, false, false, false },
+                                { SlotKind::StorageBuffer, 2, true, false, false }, { SlotKind::StorageBuffer, 3, true, false, false },
+                                { SlotKind::StorageBuffer, 4, true, false, false } };
+        const char *names[3] = { "bk_test_scan_blocks", "bk_test_scan_sums", "bk_test_scan_add" };
+        std::unique_ptr<ComputePipeline> k[3];
+        Status s = Status::Ok;
+        for (int i = 0; i < 3 && s == Status::Ok; i++) {
+            ComputeDesc cd;
+            cd.kernel.name = names[i];
+            cd.workgroup[0] = n;
+            cd.slots = slots;
+            cd.slotCount = 5;
+            k[i] = device.makeCompute(cd, &s);
+        }
+        if (s != Status::Ok) { std::printf("FAIL compute (%s, %u threads): pipelines (status %d)\n", device.name(), n, (int)s); failures++; continue; }
+        uint32_t blocks = (count + n - 1) / n;
+        std::unique_ptr<Buffer> in = UploadBuffer(device, values.data(), count * 4, UsageStorage);
+        std::unique_ptr<Buffer> out = device.makeBuffer(count * 4, Memory::Readback, UsageStorage, nullptr);
+        std::unique_ptr<Buffer> sums = device.makeBuffer(blocks * 4, Memory::DeviceOnly, UsageStorage, nullptr);
+        std::unique_ptr<Buffer> starts = device.makeBuffer(blocks * 4, Memory::DeviceOnly, UsageStorage, nullptr);
+        if (!in || !out || !sums || !starts) { std::printf("FAIL compute: buffers\n"); failures++; continue; }
+        const uint32_t params[2] = { count, blocks };
+        Binding b[5];
+        b[0].kind = SlotKind::StorageBuffer; b[0].slot = 0; b[0].bytes = params; b[0].byteCount = sizeof params;
+        Buffer *bufs[4] = { in.get(), out.get(), sums.get(), starts.get() };
+        for (int i = 0; i < 4; i++) { b[i + 1].kind = SlotKind::StorageBuffer; b[i + 1].slot = (uint32_t)i + 1; b[i + 1].buffer = bufs[i]; }
+        std::unique_ptr<CommandList> list = device.begin(&s);
+        bool ok = list && list->dispatch(*k[0], b, 5, blocks, 1, 1) == Status::Ok &&
+                  list->dispatch(*k[1], b, 5, 1, 1, 1) == Status::Ok &&
+                  list->dispatch(*k[2], b, 5, blocks, 1, 1) == Status::Ok && device.submit(*list, true) == Status::Ok;
+        if (!ok) { std::printf("FAIL compute (%s, %u threads): dispatch\n", device.name(), n); failures++; continue; }
+        const uint32_t *got = (const uint32_t *)out->map();
+        uint32_t wrong = 0, first = UINT32_MAX;
+        for (uint32_t i = 0; i < count; i++) if (got[i] != expected[i]) { if (first == UINT32_MAX) first = i; wrong++; }
+        out->unmap();
+        std::printf("compute (%s) prefix sum of %u numbers, %u threads per group: %u wrong%s\n", device.name(), count, n, wrong,
+                    wrong ? " - FAIL" : " (exact)");
+        if (wrong) { std::printf("   first wrong at %u\n", first); failures++; }
+    }
+    return failures;
+}
+
 // ---- Feature scene (cross-backend) ---------------------------------------------------------------------------------
 
 bool RenderFeatureScene(Device &device, std::vector<uint8_t> *rgba, std::vector<float> *distance)
