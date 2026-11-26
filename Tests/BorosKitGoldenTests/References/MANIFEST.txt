@@ -2,6 +2,14 @@
 # file  bytes  hash (bk_golden_hash, hex)
 avg_coronal_slab20.rgba.pam  36931  df99e96d3b7d261e
 avg_coronal_slab20.values.pfm  36878  22a505841b97c363
+feature_lines.distance.pfm  30734  266def4fcfd14cdc
+feature_lines.rgba.pam  30787  9bdc593ee6d7fea3
+feature_points.distance.pfm  30734  60fffff8a226a41e
+feature_points.rgba.pam  30787  2f91bcd0c00e8e9b
+feature_scene.distance.pfm  30734  e5dcf31f7b447c54
+feature_scene.rgba.pam  30787  7f3ccd1d23189f68
+feature_textured.distance.pfm  30734  e0f7fd1df7076e47
+feature_textured.rgba.pam  30787  10322b9f74ecefde
 mesh_decimate_50.bkmesh  88352  bd0c46c6feabd919
 mesh_smooth_taubin10.bkmesh  174992  c2ae5790be75d308
 meshrender_bone_ortho.distance.pfm  36878  7765f72e4934b62f
@@ -35,4 +43,4 @@ vr_ortho_left_clipped_unlit.rgba.pam  36931  b71f0253cc53926b
 vr_ortho_left_clipped_unlit.values.pfm  36878  1bce5c496c86fade
 vr_persp_oblique.rgba.pam  30787  9bac4f9fa42ae485
 vr_persp_oblique.values.pfm  30734  ae5613eb39e544e6
-# total 1944087 bytes
+# total 2190171 bytes

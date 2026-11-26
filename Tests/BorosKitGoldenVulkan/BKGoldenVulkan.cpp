@@ -49,6 +49,7 @@ int main(int argc, char **argv)
         std::unique_ptr<Device> device = StartDevice(&messages);
         if (!device) return 1;
         failures += bkshared::TestGoldenMeshes(*device, refs.c_str(), outDir.c_str(), "vulkan", false);
+        failures += bkshared::TestGoldenFeatures(*device, refs.c_str(), outDir.c_str(), "vulkan", false, false);   // 2026-11-26
     }
     for (uint32_t i = 0; i < kBKGoldenMeshRenderCaseCount; i++) {
         std::string name = kBKGoldenMeshRenderCases[i].name;

@@ -54,6 +54,17 @@
     if ([self haveDevice]) XCTAssertEqual(bkshared::TestComputeScan(*_device), 0);
 }
 
+// 2026-11-26: recorded references for lines, points, textured meshes and the whole scene (strict when
+// BK_GOLDEN_STRICT=1; recorded with BK_GOLDEN_RECORD=1 - this Metal run is the reference).
+- (void)testGoldenFeatures
+{
+    if (![self haveDevice]) return;
+    const char *rec = getenv("BK_GOLDEN_RECORD"), *strict = getenv("BK_GOLDEN_STRICT");
+    bool record = rec && rec[0] == '1', isStrict = strict && strict[0] == '1';
+    XCTAssertEqual(bkshared::TestGoldenFeatures(*_device, [self referencesFolder].fileSystemRepresentation, nullptr, "metal",
+                                                isStrict, record), 0);
+}
+
 - (void)testFeatureSceneRenders
 {
     if (![self haveDevice]) return;

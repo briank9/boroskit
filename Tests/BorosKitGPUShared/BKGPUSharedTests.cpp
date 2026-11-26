@@ -347,7 +347,7 @@ int TestComputeScan(Device &device)
 
 // ---- Feature scene (cross-backend) ---------------------------------------------------------------------------------
 
-bool RenderFeatureScene(Device &device, std::vector<uint8_t> *rgba, std::vector<float> *distance)
+bool RenderFeatureScene(Device &device, std::vector<uint8_t> *rgba, std::vector<float> *distance, uint32_t parts)
 {
     BKMeshCamera camera;
     std::memset(&camera, 0, sizeof camera);
@@ -370,7 +370,7 @@ bool RenderFeatureScene(Device &device, std::vector<uint8_t> *rgba, std::vector<
         if (!list || list->upload(*textures.back(), texels, 8, 16, 0, 1) != Status::Ok || device.submit(*list, true) != Status::Ok) return false;
     }
     const float normalsY[12] = { 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0 };
-    for (int q = 0; q < 2; q++) {
+    for (int q = 0; q < 2 && (parts & kFeatureTextured); q++) {
         float x0 = q ? 5.0f : -25.0f, x1 = x0 + 20.0f;
         std::vector<float> p = { x0, 0, 0,  x1, 0, 0,  x1, 0, 20,  x0, 0, 20 };
         meshpass::Item it = MeshItem(device, p, { 0, 1, 2, 0, 2, 3 }, normalsY, keep);
@@ -384,7 +384,7 @@ bool RenderFeatureScene(Device &device, std::vector<uint8_t> *rgba, std::vector<
         items.push_back(it);
     }
     // A see-through blue quad behind (two-pass), a wireframe quad, and a back-culled clockwise square (hidden).
-    {
+    if (parts & kFeatureMeshes) {
         std::vector<float> p = { -25, 10, -25,  25, 10, -25,  25, 10, -5,  -25, 10, -5 };
         meshpass::Item it = MeshItem(device, p, { 0, 1, 2, 0, 2, 3 }, normalsY, keep);
         it.color[0] = 0.2f; it.color[1] = 0.4f; it.color[2] = 1.0f; it.opacity = 0.5f; it.solid = 0;
@@ -418,10 +418,67 @@ bool RenderFeatureScene(Device &device, std::vector<uint8_t> *rgba, std::vector<
         it.solid = opacity >= 1 ? 1 : 0;
         items.push_back(it);
     };
-    pointsItem(meshpass::ItemKind::Lines, { -28, -5, -28,  28, -5, 28,  -28, -5, 28,  28, -5, -28 }, 1.5f, 1, 1, 0, 1);
-    pointsItem(meshpass::ItemKind::Lines, { -20, -2, 0,  20, -200, 0 }, 2.5f, 0, 1, 1, 0.6f);   // reaches behind the eye
-    pointsItem(meshpass::ItemKind::Points, { -15, -6, 15,  0, -6, 0,  15, -6, -15,  0, -300, 0 }, 3, 1, 0, 1, 1);
+    if (parts & kFeatureLines) {
+        pointsItem(meshpass::ItemKind::Lines, { -28, -5, -28,  28, -5, 28,  -28, -5, 28,  28, -5, -28 }, 1.5f, 1, 1, 0, 1);
+        pointsItem(meshpass::ItemKind::Lines, { -20, -2, 0,  20, -200, 0 }, 2.5f, 0, 1, 1, 0.6f);   // reaches behind the eye
+    }
+    if (parts & kFeaturePoints)
+        pointsItem(meshpass::ItemKind::Points, { -15, -6, 15,  0, -6, 0,  15, -6, -15,  0, -300, 0 }, 3, 1, 0, 1, 1);
     return RenderItems(device, pass, camera, 96, 80, items, rgba, distance) == 0;
+}
+
+// ---- Feature scene golden references (2026-11-26, phase 3/4 step 2) ------------------------------------------------
+
+const FeatureGoldenCase kFeatureGoldenCases[kFeatureGoldenCaseCount] = {
+    { "feature_textured", kFeatureTextured },
+    { "feature_lines", kFeatureLines },
+    { "feature_points", kFeaturePoints },
+    { "feature_scene", kFeatureAll },
+};
+
+int TestGoldenFeatures(Device &device, const char *referencesDir, const char *outDir, const char *label, bool strict, bool record)
+{
+    int failures = 0;
+    const std::string refs = referencesDir;
+    for (uint32_t i = 0; i < kFeatureGoldenCaseCount; i++) {
+        const FeatureGoldenCase &c = kFeatureGoldenCases[i];
+        std::vector<uint8_t> rgba;
+        std::vector<float> dist;
+        if (!RenderFeatureScene(device, &rgba, &dist, c.parts)) { std::printf("GOLDEN | %s | FAIL: could not render\n", c.name); failures++; continue; }
+        BKGoldenImage mine = { kFeatureWidth, kFeatureHeight, 4, BKGoldenFormatU8, rgba.data() };
+        BKGoldenImage mineD = { kFeatureWidth, kFeatureHeight, 1, BKGoldenFormatF32, dist.data() };
+        const std::string pam = refs + "/" + c.name + ".rgba.pam", pfm = refs + "/" + c.name + ".distance.pfm";
+        if (record) {   // only ever from the Metal reference backend (XCTest with BK_GOLDEN_RECORD=1)
+            if (bk_golden_write_pam(pam.c_str(), &mine) != 0 || bk_golden_write_pfm(pfm.c_str(), &mineD) != 0) failures++;
+            std::printf("GOLDEN | %s | recorded from %s\n", c.name, label);
+            continue;
+        }
+        if (outDir) {
+            bk_golden_write_pam((std::string(outDir) + "/" + c.name + "." + label + ".rgba.pam").c_str(), &mine);
+            bk_golden_write_pfm((std::string(outDir) + "/" + c.name + "." + label + ".distance.pfm").c_str(), &mineD);
+        }
+        BKGoldenImage ref, refD;
+        std::memset(&ref, 0, sizeof ref);
+        std::memset(&refD, 0, sizeof refD);
+        if (bk_golden_read_pam(pam.c_str(), &ref) != 0 || bk_golden_read_pfm(pfm.c_str(), &refD) != 0) {
+            std::printf("GOLDEN | %s | FAIL: reference missing (record with BK_GOLDEN_RECORD=1 on the Mac)\n", c.name);
+            bk_golden_image_free(&ref);
+            failures++;
+            continue;
+        }
+        BKGoldenImageTolerance tc = strict ? BKGoldenImageTolerance{ 0, 0 } : bk_golden_tolerance_u8();
+        BKGoldenImageTolerance td = strict ? BKGoldenImageTolerance{ 0, 0 } : BKGoldenImageTolerance{ 0.01, 0.005 };
+        BKGoldenImageReport rc = bk_golden_compare_images(&ref, &mine, tc), rd = bk_golden_compare_images(&refD, &mineD, td);
+        char text[256];
+        bk_golden_describe_image_report(&rc, text, sizeof text);
+        std::printf("GOLDEN | %s.rgba.pam | %s vs Metal reference: %s\n", c.name, label, text);
+        bk_golden_describe_image_report(&rd, text, sizeof text);
+        std::printf("GOLDEN | %s.distance.pfm | %s vs Metal reference: %s\n", c.name, label, text);
+        if (!rc.pass || !rd.pass) failures++;
+        bk_golden_image_free(&ref);
+        bk_golden_image_free(&refD);
+    }
+    return failures;
 }
 
 }  // namespace bkshared

@@ -31,6 +31,7 @@ int main(int argc, char **argv)
         failures += bkshared::TestGoldenMeshes(*metal, refs, nullptr, "metal", true);
         failures += bkshared::TestWinding(*metal);
         failures += bkshared::TestComputeScan(*metal);
+        failures += bkshared::TestGoldenFeatures(*metal, refs, nullptr, "metal", true, false);   // Metal: strict
         std::vector<uint8_t> mRGBA, vRGBA;
         std::vector<float> mDist, vDist;
         if (!bkshared::RenderFeatureScene(*metal, &mRGBA, &mDist)) { std::printf("FAIL: feature scene on Metal\n"); failures++; }

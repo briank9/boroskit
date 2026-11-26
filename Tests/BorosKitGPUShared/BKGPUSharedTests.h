@@ -40,8 +40,21 @@ int TestComputeScan(boroskit::gpu::Device &device);
 
 // What: a scene with every other kind BKMeshPass draws - solid and see-through lines, points, a textured quad
 // (nearest + repeat, linear + clamp), a see-through mesh, a wireframe mesh, culling - rendered into RGBA8 + ray
-// distance (96 x 80). Used to compare two backends with each other (no recorded reference yet).
-bool RenderFeatureScene(boroskit::gpu::Device &device, std::vector<uint8_t> *rgba, std::vector<float> *distance);
+// distance (96 x 80). `parts` picks what is drawn (2026-11-26: so each kind has its own recorded reference).
+enum : uint32_t { kFeatureTextured = 1, kFeatureMeshes = 2, kFeatureLines = 4, kFeaturePoints = 8, kFeatureAll = 15 };
+const uint32_t kFeatureWidth = 96, kFeatureHeight = 80;
+bool RenderFeatureScene(boroskit::gpu::Device &device, std::vector<uint8_t> *rgba, std::vector<float> *distance,
+                        uint32_t parts = kFeatureAll);
+
+// What (2026-11-26, phase 3/4 step 2): RECORDED golden references for lines, points and textured meshes (until
+// now only checked live, Metal vs Vulkan): feature_textured / feature_lines / feature_points / feature_scene
+// (.rgba.pam + .distance.pfm in References/). record = write them (Metal only); strict = zero tolerance;
+// otherwise the usual tolerances (u8 +-1 with 0.5 % outliers; distance 0.01 with 0.5 %).
+struct FeatureGoldenCase { const char *name; uint32_t parts; };
+const uint32_t kFeatureGoldenCaseCount = 4;
+extern const FeatureGoldenCase kFeatureGoldenCases[kFeatureGoldenCaseCount];
+int TestGoldenFeatures(boroskit::gpu::Device &device, const char *referencesDir, const char *outDir, const char *label,
+                       bool strict, bool record);
 
 }  // namespace bkshared
 
