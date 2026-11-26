@@ -3,7 +3,7 @@
 Original BorosKit document written for this project. Written 2026-11-24 by agent "vulkan-kickoff"
 on branch `agent/vulkan-kickoff` (BorosKit `29ecaec`). Builds on VULKAN-PORT-PLAN.md (the rules and
 the first design), VULKAN-PREP-AUDIT-2026-11-14.md, and today's VULKAN-READINESS-AUDIT-2026-11-24.md
-(the evidence; finding numbers below refer to it). Nothing in this plan has been started.
+(the evidence; finding numbers below refer to it). STATUS 2026-11-25: M1-M5 done on agent/vulkan-engine - see VULKAN-ENGINE-PROGRESS.md.
 
 ## In plain words (for the user)
 
