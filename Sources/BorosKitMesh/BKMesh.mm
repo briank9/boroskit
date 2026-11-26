@@ -16,6 +16,7 @@
 #import <unordered_map>
 #import <algorithm>
 #import <cmath>
+#include "BKMeshProcessingCore.h"   // SurfaceArea / EnclosedVolume (double, 2026-11-26)
 
 NSErrorDomain const BKMeshErrorDomain = @"BKMeshErrorDomain";
 
@@ -413,31 +414,27 @@ static BKCellKey BKExactKey(simd_float3 v)
     return [self edgeReport].nonManifoldEdgeCount == 0;
 }
 
-// Sums in double precision: millions of small triangles would lose accuracy in float.
-- (double)surfaceArea
+// 2026-11-26 (precision follow-up): area and volume come from the plain-C++ core (double + explicit fma,
+// identical on every platform; the same functions the CMake build tests with exact phantoms).
+- (std::vector<float>)packedVertices
 {
-    double area = 0;
-    for (size_t i = 0; i + 2 < _indexStore.size(); i += 3) {
-        simd_double3 a = simd_double(_vertexStore[_indexStore[i]]);
-        simd_double3 b = simd_double(_vertexStore[_indexStore[i + 1]]);
-        simd_double3 c = simd_double(_vertexStore[_indexStore[i + 2]]);
-        area += 0.5 * simd_length(simd_cross(b - a, c - a));
+    std::vector<float> xyz(3 * _vertexStore.size());
+    for (size_t i = 0; i < _vertexStore.size(); i++) {
+        xyz[3 * i] = _vertexStore[i].x; xyz[3 * i + 1] = _vertexStore[i].y; xyz[3 * i + 2] = _vertexStore[i].z;
     }
-    return area;
+    return xyz;
 }
 
-// Each triangle plus the origin forms a small pyramid; adding their signed volumes
-// gives the enclosed volume (parts outside the shape cancel out).
+- (double)surfaceArea
+{
+    return boroskit::meshcore::SurfaceArea([self packedVertices], _indexStore);
+}
+
+// Each triangle plus the origin forms a small pyramid; adding their signed volumes gives the enclosed volume
+// (parts outside the shape cancel out).
 - (double)enclosedVolume
 {
-    double volume = 0;
-    for (size_t i = 0; i + 2 < _indexStore.size(); i += 3) {
-        simd_double3 a = simd_double(_vertexStore[_indexStore[i]]);
-        simd_double3 b = simd_double(_vertexStore[_indexStore[i + 1]]);
-        simd_double3 c = simd_double(_vertexStore[_indexStore[i + 2]]);
-        volume += simd_dot(a, simd_cross(b, c)) / 6.0;
-    }
-    return volume;
+    return boroskit::meshcore::EnclosedVolume([self packedVertices], _indexStore);
 }
 
 #pragma mark - Simple shapes

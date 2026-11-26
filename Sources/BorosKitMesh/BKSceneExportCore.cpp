@@ -33,6 +33,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>   // strtod (FormatDouble)
 #include <cstring>
 #include <set>
 #include <cctype>
@@ -63,6 +64,22 @@ size_t FormatFloat(float value, int precision, char *buffer)
 #endif
 }
 
+// What (2026-11-26, precision follow-up): a DOUBLE as the shortest text that reads back as exactly the same
+// double (tries 15, 16, then 17 significant digits; 17 always round-trips). Geometry and camera numbers are
+// exported this way, so the file carries the full double result of the placement maths. snprintf with %.*g is
+// correctly rounded on Apple, glibc and current MSVC, so the text is the same on every platform. -0 and
+// non-finite values are written as 0 (as for floats).
+size_t FormatDouble(double value, char *buffer)
+{
+    if (!std::isfinite(value) || value == 0.0) value = 0.0;
+    int n = 0;
+    for (int digits = 15; digits <= 17; digits++) {
+        n = snprintf(buffer, 32, "%.*g", digits, value);
+        if (digits == 17 || std::strtod(buffer, nullptr) == value) break;
+    }
+    return n > 0 ? (size_t)n : 0;
+}
+
 // What: a growing piece of text with quick "append a number" helpers.
 // Why: each block of the parallel work builds its text in one of these.
 struct Text {
@@ -81,12 +98,25 @@ struct Text {
         std::to_chars_result r = std::to_chars(b, b + sizeof b, v);
         s.append(b, (size_t)(r.ptr - b));
     }
+    // A double (geometry / camera), shortest exact text (FormatDouble).
+    void dbl(double v)
+    {
+        char b[32];
+        s.append(b, FormatDouble(v, b));
+    }
     // Three numbers separated by spaces (a point, a direction or an RGB colour).
     void three(const float v[3], int precision = 9)
     {
         flt(v[0], precision); ch(' ');
         flt(v[1], precision); ch(' ');
         flt(v[2], precision);
+    }
+    // Three doubles (points and directions in world mm, 2026-11-26).
+    void three(const double v[3])
+    {
+        dbl(v[0]); ch(' ');
+        dbl(v[1]); ch(' ');
+        dbl(v[2]);
     }
 };
 
@@ -215,24 +245,24 @@ struct Placement {
     double n[9];        // normal matrix, column-major 3x3 (inverse transpose, sign-corrected)
     bool mirror = false;
 
-    // object point -> world point (mm)
-    inline void point(const float *p, float o[3]) const
+    // object point -> world point (mm), in DOUBLE (2026-11-26, precision follow-up): the placed position is
+    // written to the file at full double precision, not rounded back to float. Explicit fma chain
+    // m0*x + m4*y + m8*z + m12 (identical on every platform).
+    inline void point(const float *p, double o[3]) const
     {
         double x = p[0], y = p[1], z = p[2];
-        o[0] = (float)(m[0] * x + m[4] * y + m[8] * z + m[12]);
-        o[1] = (float)(m[1] * x + m[5] * y + m[9] * z + m[13]);
-        o[2] = (float)(m[2] * x + m[6] * y + m[10] * z + m[14]);
+        for (int r = 0; r < 3; r++) o[r] = std::fma(m[r], x, std::fma(m[4 + r], y, std::fma(m[8 + r], z, m[12 + r])));
     }
     // object normal -> world normal (unit length; a zero normal stays zero)
-    inline void normal(const float *p, float o[3]) const
+    inline void normal(const float *p, double o[3]) const
     {
         double x = p[0], y = p[1], z = p[2];
-        double a = n[0] * x + n[3] * y + n[6] * z;
-        double b = n[1] * x + n[4] * y + n[7] * z;
-        double c = n[2] * x + n[5] * y + n[8] * z;
-        double len = std::sqrt(a * a + b * b + c * c);
+        double a = std::fma(n[0], x, std::fma(n[3], y, n[6] * z));
+        double b = std::fma(n[1], x, std::fma(n[4], y, n[7] * z));
+        double c = std::fma(n[2], x, std::fma(n[5], y, n[8] * z));
+        double len = std::sqrt(std::fma(a, a, std::fma(b, b, c * c)));
         if (len > 0) { a /= len; b /= len; c /= len; }
-        o[0] = (float)a; o[1] = (float)b; o[2] = (float)c;
+        o[0] = a; o[1] = b; o[2] = c;
     }
 };
 
@@ -449,17 +479,17 @@ static void WorldBounds(const Scene &scene, const Prepared &prep, double lo[3], 
 {
     any = false;
     for (int i = 0; i < 3; i++) { lo[i] = 1e300; hi[i] = -1e300; }
-    auto take = [&](const float w[3]) {
-        for (int i = 0; i < 3; i++) { lo[i] = std::min(lo[i], (double)w[i]); hi[i] = std::max(hi[i], (double)w[i]); }
+    auto take = [&](const double w[3]) {
+        for (int i = 0; i < 3; i++) { lo[i] = std::min(lo[i], w[i]); hi[i] = std::max(hi[i], w[i]); }
         any = true;
     };
     for (size_t k = 0; k < scene.meshes.size(); k++) {
         const MeshItem &m = scene.meshes[k];
-        for (size_t v = 0; v < m.vertexCount; v++) { float w[3]; prep.meshPlacement[k].point(m.positions + 3 * v, w); take(w); }
+        for (size_t v = 0; v < m.vertexCount; v++) { double w[3]; prep.meshPlacement[k].point(m.positions + 3 * v, w); take(w); }
     }
     for (size_t k = 0; k < scene.lines.size(); k++) {
         const LineItem &l = scene.lines[k];
-        for (size_t v = 0; v < 2 * l.segmentCount; v++) { float w[3]; prep.linePlacement[k].point(l.points + 3 * v, w); take(w); }
+        for (size_t v = 0; v < 2 * l.segmentCount; v++) { double w[3]; prep.linePlacement[k].point(l.points + 3 * v, w); take(w); }
     }
 }
 
@@ -623,7 +653,7 @@ static Result WriteOBJ(const Scene &scene, const Prepared &prep, const std::stri
         // (the common "v x y z r g b" extension; BKMeshIO reads it back).
         if (!EmitBlocks(obj, progress, m.vertexCount, [&](Text &o, size_t b, size_t e) {
                 for (size_t v = b; v < e; v++) {
-                    float w[3];
+                    double w[3];
                     p.point(m.positions + 3 * v, w);
                     o.add("v "); o.three(w);
                     if (m.colors) { float c[4]; DrawnColor(m, v, c); o.ch(' '); o.three(c, 6); }
@@ -632,9 +662,9 @@ static Result WriteOBJ(const Scene &scene, const Prepared &prep, const std::stri
             })) goto stopped;
         if (m.normals && !EmitBlocks(obj, progress, m.vertexCount, [&](Text &o, size_t b, size_t e) {
                 for (size_t v = b; v < e; v++) {
-                    float w[3];
+                    double w[3];
                     p.normal(m.normals + 3 * v, w);
-                    o.add("vn "); o.three(w, 7); o.ch('\n');
+                    o.add("vn "); o.three(w); o.ch('\n');
                 }
             })) goto stopped;
         if (!EmitBlocks(obj, progress, m.triangleCount, [&](Text &o, size_t b, size_t e) {
@@ -661,7 +691,7 @@ static Result WriteOBJ(const Scene &scene, const Prepared &prep, const std::stri
         t.add("# line width "); t.flt(l.width, 6); t.add(" pixels (OBJ has no line width)\n");
         obj.write(t.s);
         if (!EmitBlocks(obj, progress, 2 * l.segmentCount, [&](Text &o, size_t b, size_t e) {
-                for (size_t v = b; v < e; v++) { float w[3]; p.point(l.points + 3 * v, w); o.add("v "); o.three(w); o.ch('\n'); }
+                for (size_t v = b; v < e; v++) { double w[3]; p.point(l.points + 3 * v, w); o.add("v "); o.three(w); o.ch('\n'); }
             })) goto stopped;
         if (!EmitBlocks(obj, progress, l.segmentCount, [&](Text &o, size_t b, size_t e) {
                 for (size_t s = b; s < e; s++) { o.add("l "); o.uint(vBase + 2 * s); o.ch(' '); o.uint(vBase + 2 * s + 1); o.ch('\n'); }
@@ -704,7 +734,7 @@ template <typename PointFn>
 static bool EmitPointList(Output &out, Progress &progress, size_t count, const PointFn &pointAt)
 {
     return EmitBlocks(out, progress, count, [&](Text &o, size_t b, size_t e) {
-        for (size_t v = b; v < e; v++) { float w[3]; pointAt(v, w); o.three(w); o.add(",\n"); }
+        for (size_t v = b; v < e; v++) { double w[3]; pointAt(v, w); o.three(w); o.add(",\n"); }
     });
 }
 
@@ -728,12 +758,11 @@ static Result WriteVRMLOrInventor(const Scene &scene, const Prepared &prep, cons
         if (prep.hasCamera) {
             double axis[3], angle;
             CameraOrientation(f, axis, angle);
-            float pos[3] = {(float)f.eye[0], (float)f.eye[1], (float)f.eye[2]};
-            float ax[3] = {(float)axis[0], (float)axis[1], (float)axis[2]};
+            const double *pos = f.eye, *ax = axis;   // camera numbers in double (2026-11-26)
             if (f.parallel) t.add("# The camera is parallel (orthographic); VRML 2.0 only has perspective, so the same view size is shown at the focal point.\n");
             t.add("Viewpoint {\n  position "); t.three(pos);
-            t.add("\n  orientation "); t.three(ax); t.ch(' '); t.flt((float)angle);
-            t.add("\n  fieldOfView "); t.flt((float)SmallerSideAngle(f, scene.imageWidth, scene.imageHeight));
+            t.add("\n  orientation "); t.three(ax); t.ch(' '); t.dbl(angle);
+            t.add("\n  fieldOfView "); t.dbl(SmallerSideAngle(f, scene.imageWidth, scene.imageHeight));
             t.add("\n  description \"BorosKit view\"\n}\n");
         }
     } else {
@@ -746,21 +775,20 @@ static Result WriteVRMLOrInventor(const Scene &scene, const Prepared &prep, cons
         if (prep.hasCamera) {
             double axis[3], angle;
             CameraOrientation(f, axis, angle);
-            float pos[3] = {(float)f.eye[0], (float)f.eye[1], (float)f.eye[2]};
-            float ax[3] = {(float)axis[0], (float)axis[1], (float)axis[2]};
+            const double *pos = f.eye, *ax = axis;   // camera numbers in double (2026-11-26)
             t.add(f.parallel ? "  OrthographicCamera {\n" : "  PerspectiveCamera {\n");
             t.add("    viewportMapping ADJUST_CAMERA\n    position "); t.three(pos);
-            t.add("\n    orientation "); t.three(ax); t.ch(' '); t.flt((float)angle);
-            t.add("\n    aspectRatio "); t.flt((float)scene.imageWidth / (float)std::max(1u, scene.imageHeight));
-            t.add("\n    focalDistance "); t.flt((float)f.distance);
-            if (f.parallel) { t.add("\n    height "); t.flt((float)(2.0 * f.parallelScale)); }
-            else { t.add("\n    heightAngle "); t.flt((float)(f.viewAngle * pi / 180.0)); }
+            t.add("\n    orientation "); t.three(ax); t.ch(' '); t.dbl(angle);
+            t.add("\n    aspectRatio "); t.dbl((double)scene.imageWidth / (double)std::max(1u, scene.imageHeight));
+            t.add("\n    focalDistance "); t.dbl(f.distance);
+            if (f.parallel) { t.add("\n    height "); t.dbl(2.0 * f.parallelScale); }
+            else { t.add("\n    heightAngle "); t.dbl(f.viewAngle * pi / 180.0); }
             t.add("\n  }\n");
             if (scene.headlight) {
                 // A light shining from the camera along the view, like the screen's head light.
-                float d[3] = {(float)f.dir[0], (float)f.dir[1], (float)f.dir[2]};
+                const double *d = f.dir;
                 t.add("  DirectionalLight { on TRUE intensity "); t.flt(scene.headlightIntensity, 6);
-                t.add(" color 1 1 1 direction "); t.three(d, 7); t.add(" }\n");
+                t.add(" color 1 1 1 direction "); t.three(d); t.add(" }\n");
             }
         }
     }
@@ -817,12 +845,12 @@ static Result WriteVRMLOrInventor(const Scene &scene, const Prepared &prep, cons
             t.add("    Coordinate3 { point [\n");
         }
         out.write(t.s);
-        if (!EmitPointList(out, progress, m.vertexCount, [&](size_t v, float w[3]) { p.point(m.positions + 3 * v, w); })) goto stopped;
+        if (!EmitPointList(out, progress, m.vertexCount, [&](size_t v, double w[3]) { p.point(m.positions + 3 * v, w); })) goto stopped;
         out.write(vrml ? "    ] }\n" : "    ] }\n");
         if (m.normals) {
             out.write(vrml ? "    normal Normal { vector [\n" : "    Normal { vector [\n");
             if (!EmitBlocks(out, progress, m.vertexCount, [&](Text &o, size_t b, size_t e) {
-                    for (size_t v = b; v < e; v++) { float w[3]; p.normal(m.normals + 3 * v, w); o.three(w, 7); o.add(",\n"); }
+                    for (size_t v = b; v < e; v++) { double w[3]; p.normal(m.normals + 3 * v, w); o.three(w); o.add(",\n"); }
                 })) goto stopped;
             out.write(vrml ? "    ] }\n    normalPerVertex TRUE\n" : "    ] }\n    NormalBinding { value PER_VERTEX_INDEXED }\n");
         }
@@ -864,7 +892,7 @@ static Result WriteVRMLOrInventor(const Scene &scene, const Prepared &prep, cons
             t.add("    Coordinate3 { point [\n");
         }
         out.write(t.s);
-        if (!EmitPointList(out, progress, 2 * l.segmentCount, [&](size_t v, float w[3]) { p.point(l.points + 3 * v, w); })) goto stopped;
+        if (!EmitPointList(out, progress, 2 * l.segmentCount, [&](size_t v, double w[3]) { p.point(l.points + 3 * v, w); })) goto stopped;
         out.write(vrml ? "    ] }\n    coordIndex [\n" : "    ] }\n    IndexedLineSet { coordIndex [\n");
         if (!EmitBlocks(out, progress, l.segmentCount, [&](Text &o, size_t b, size_t e) {
                 for (size_t s = b; s < e; s++) { o.uint(2 * s); o.add(", "); o.uint(2 * s + 1); o.add(", -1,\n"); }
@@ -920,9 +948,9 @@ static Result WriteRIB(const Scene &scene, const Prepared &prep, const std::stri
     if (f.parallel) {
         double s = f.parallelScale;
         t.add("Projection \"orthographic\"\nScreenWindow ");
-        t.flt((float)(-s * aspect)); t.ch(' '); t.flt((float)(s * aspect)); t.ch(' '); t.flt((float)-s); t.ch(' '); t.flt((float)s); t.ch('\n');
+        t.dbl(-s * aspect); t.ch(' '); t.dbl(s * aspect); t.ch(' '); t.dbl(-s); t.ch(' '); t.dbl(s); t.ch('\n');
     } else {
-        t.add("Projection \"perspective\" \"fov\" [ "); t.flt((float)(SmallerSideAngle(f, W, H) * 180.0 / pi)); t.add(" ]\n");
+        t.add("Projection \"perspective\" \"fov\" [ "); t.dbl(SmallerSideAngle(f, W, H) * 180.0 / pi); t.add(" ]\n");
     }
     if (scene.hasBackground) { t.add("Imager \"background\" \"color\" [ "); t.three(scene.background, 6); t.add(" ]\n"); }
     // World -> camera: rows are right, up, forward; translation moves the eye to 0.
@@ -933,16 +961,16 @@ static Result WriteRIB(const Scene &scene, const Prepared &prep, const std::stri
             {f.dir[0], f.dir[1], f.dir[2], -Dot(f.dir, f.eye)},
             {0, 0, 0, 1},
         };
-        t.add("# Camera: eye at "); for (int i = 0; i < 3; i++) { t.flt((float)f.eye[i]); t.ch(i < 2 ? ' ' : '\n'); }
+        t.add("# Camera: eye at "); for (int i = 0; i < 3; i++) { t.dbl(f.eye[i]); t.ch(i < 2 ? ' ' : '\n'); }
         t.add("Transform [");
-        for (int c = 0; c < 4; c++) for (int row = 0; row < 4; row++) { t.ch(' '); t.flt((float)V[row][c]); }
+        for (int c = 0; c < 4; c++) for (int row = 0; row < 4; row++) { t.ch(' '); t.dbl(V[row][c]); }
         t.add(" ]\n");
     }
     t.add("WorldBegin\n");
     t.add("LightSource \"ambientlight\" 1 \"intensity\" [ 1 ] \"lightcolor\" [ 1 1 1 ]\n");
     if (scene.headlight) {
-        float eye[3] = {(float)f.eye[0], (float)f.eye[1], (float)f.eye[2]};
-        float to[3] = {(float)(f.eye[0] + f.dir[0]), (float)(f.eye[1] + f.dir[1]), (float)(f.eye[2] + f.dir[2])};
+        const double *eye = f.eye;
+        double to[3] = {f.eye[0] + f.dir[0], f.eye[1] + f.dir[1], f.eye[2] + f.dir[2]};
         t.add("# Head light: from the eye along the view\n");
         t.add("LightSource \"distantlight\" 2 \"intensity\" [ "); t.flt(scene.headlightIntensity, 6);
         t.add(" ] \"lightcolor\" [ 1 1 1 ] \"from\" [ "); t.three(eye); t.add(" ] \"to\" [ "); t.three(to); t.add(" ]\n");
@@ -982,12 +1010,12 @@ static Result WriteRIB(const Scene &scene, const Prepared &prep, const std::stri
             })) goto stopped;
         out.write("  ] \"P\" [\n");
         if (!EmitBlocks(out, progress, m.vertexCount, [&](Text &o2, size_t b, size_t e) {
-                for (size_t v = b; v < e; v++) { float w[3]; p.point(m.positions + 3 * v, w); o2.three(w); o2.ch('\n'); }
+                for (size_t v = b; v < e; v++) { double w[3]; p.point(m.positions + 3 * v, w); o2.three(w); o2.ch('\n'); }
             })) goto stopped;
         if (m.normals) {
             out.write("  ] \"N\" [\n");
             if (!EmitBlocks(out, progress, m.vertexCount, [&](Text &o2, size_t b, size_t e) {
-                    for (size_t v = b; v < e; v++) { float w[3]; p.normal(m.normals + 3 * v, w); o2.three(w, 7); o2.ch('\n'); }
+                    for (size_t v = b; v < e; v++) { double w[3]; p.normal(m.normals + 3 * v, w); o2.three(w); o2.ch('\n'); }
                 })) goto stopped;
         }
         if (m.colors) {
@@ -1030,7 +1058,7 @@ static Result WriteRIB(const Scene &scene, const Prepared &prep, const std::stri
                 })) goto stopped;
             out.write("\n  ] \"nonperiodic\" \"P\" [\n");
             if (!EmitBlocks(out, progress, 2 * l.segmentCount, [&](Text &o2, size_t b, size_t e) {
-                    for (size_t v = b; v < e; v++) { float w[3]; p.point(l.points + 3 * v, w); o2.three(w); o2.ch('\n'); }
+                    for (size_t v = b; v < e; v++) { double w[3]; p.point(l.points + 3 * v, w); o2.three(w); o2.ch('\n'); }
                 })) goto stopped;
             t.s.clear();
             t.add("  ] \"constantwidth\" [ "); t.flt((float)(std::max(0.0f, l.width) * mmPerPixel), 6); t.add(" ]\nAttributeEnd\n");

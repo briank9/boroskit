@@ -215,6 +215,36 @@ SmoothStats SmoothLambdaMu(std::vector<float> &xyz, const std::vector<uint32_t> 
 
 #pragma mark - Normals
 
+// ---- Area and volume in double (2026-11-26, precision follow-up; see the header) ----------------------------
+
+// (a * b) - (c * d) with one rounding less (fma).
+static inline double DiffOfProducts(double a, double b, double c, double d) { return std::fma(a, b, -(c * d)); }
+
+double SurfaceArea(const std::vector<float> &xyz, const std::vector<uint32_t> &indices)
+{
+    double area = 0;
+    for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+        const float *a = &xyz[3 * (size_t)indices[t]], *b = &xyz[3 * (size_t)indices[t + 1]], *c = &xyz[3 * (size_t)indices[t + 2]];
+        double ux = (double)b[0] - a[0], uy = (double)b[1] - a[1], uz = (double)b[2] - a[2];
+        double vx = (double)c[0] - a[0], vy = (double)c[1] - a[1], vz = (double)c[2] - a[2];
+        double nx = DiffOfProducts(uy, vz, uz, vy), ny = DiffOfProducts(uz, vx, ux, vz), nz = DiffOfProducts(ux, vy, uy, vx);
+        area += 0.5 * std::sqrt(std::fma(nx, nx, std::fma(ny, ny, nz * nz)));
+    }
+    return area;
+}
+
+double EnclosedVolume(const std::vector<float> &xyz, const std::vector<uint32_t> &indices)
+{
+    double volume = 0;
+    for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+        const float *a = &xyz[3 * (size_t)indices[t]], *b = &xyz[3 * (size_t)indices[t + 1]], *c = &xyz[3 * (size_t)indices[t + 2]];
+        double cx = DiffOfProducts(b[1], c[2], b[2], c[1]), cy = DiffOfProducts(b[2], c[0], b[0], c[2]),
+               cz = DiffOfProducts(b[0], c[1], b[1], c[0]);
+        volume += std::fma((double)a[0], cx, std::fma((double)a[1], cy, (double)a[2] * cz)) / 6.0;
+    }
+    return volume;
+}
+
 void AreaWeightedNormals(const std::vector<float> &xyz, const std::vector<uint32_t> &indices, std::vector<float> &normals)
 {
     const size_t vertexCount = xyz.size() / 3;

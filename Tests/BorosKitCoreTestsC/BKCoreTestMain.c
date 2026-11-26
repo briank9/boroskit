@@ -44,6 +44,13 @@ void bk_test_once_many_threads(void);
 void bk_test_golden_phantom(void);
 void bk_test_golden_cpu_numbers(void);
 void bk_test_golden_cpu_meshes(void);
+void bk_test_roi_accuracy_length(void);
+void bk_test_roi_accuracy_angle(void);
+void bk_test_roi_accuracy_area(void);
+void bk_test_roi_accuracy_stats(void);
+void bk_test_roi_accuracy_centre(void);
+void bk_test_mesh_accuracy_box(void);
+void bk_test_export_accuracy_geometry(void);
 
 static const struct { const char *name; BKCoreTestFunction run; } kTests[] = {
     { "vec_basics", bk_test_vec_basics },
@@ -65,6 +72,13 @@ static const struct { const char *name; BKCoreTestFunction run; } kTests[] = {
     { "golden_phantom", bk_test_golden_phantom },
     { "golden_cpu_numbers", bk_test_golden_cpu_numbers },
     { "golden_cpu_meshes", bk_test_golden_cpu_meshes },
+    { "roi_accuracy_length", bk_test_roi_accuracy_length },
+    { "roi_accuracy_angle", bk_test_roi_accuracy_angle },
+    { "roi_accuracy_area", bk_test_roi_accuracy_area },
+    { "roi_accuracy_stats", bk_test_roi_accuracy_stats },
+    { "roi_accuracy_centre", bk_test_roi_accuracy_centre },
+    { "mesh_accuracy_box", bk_test_mesh_accuracy_box },
+    { "export_accuracy_geometry", bk_test_export_accuracy_geometry },
 };
 static const int kTestCount = (int)(sizeof kTests / sizeof kTests[0]);
 

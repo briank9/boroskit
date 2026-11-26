@@ -100,10 +100,14 @@ add_executable(bk_core_tests
     Tests/BorosKitCoreTestsC/BKOnceTests.cpp
     Tests/BorosKitCoreTestsC/BKGoldenPhantomTest.c
     Tests/BorosKitCoreTestsC/BKGoldenCPUCoresTest.cpp
+    Tests/BorosKitCoreTestsC/BKAccuracyTests.c
+    Tests/BorosKitCoreTestsC/BKMeshAccuracyTests.cpp
+    Tests/BorosKitCoreTestsC/BKExportAccuracyTests.cpp
 )
 target_link_libraries(bk_core_tests PRIVATE boroskit_cores bk_golden_core)
 target_compile_definitions(bk_core_tests PRIVATE
-    BK_GOLDEN_REFERENCES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Tests/BorosKitGoldenTests/References")
+    BK_GOLDEN_REFERENCES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Tests/BorosKitGoldenTests/References"
+    BK_TEST_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 
 # One ctest entry per test function (names from `bk_core_tests --list`).
 set(BK_CORE_TEST_NAMES
@@ -114,6 +118,8 @@ set(BK_CORE_TEST_NAMES
     mesh_uniforms_fill mesh_uniforms_model_and_colour mesh_depth_range
     once_single_thread once_many_threads
     golden_phantom golden_cpu_numbers golden_cpu_meshes
+    roi_accuracy_length roi_accuracy_angle roi_accuracy_area roi_accuracy_stats roi_accuracy_centre
+    mesh_accuracy_box export_accuracy_geometry
 )
 foreach(name IN LISTS BK_CORE_TEST_NAMES)
     add_test(NAME core.${name} COMMAND bk_core_tests ${name})

@@ -100,6 +100,13 @@ DecimateStats Decimate(std::vector<float> &xyz, std::vector<uint32_t> &indices, 
 // --- Normals ---------------------------------------------------------------------------
 // Area-weighted vertex normals (packed x,y,z, unit length; 0,0,0 for unused vertices).
 // Same definition as -[BKMesh computeSmoothNormals], but multithreaded.
+// What (2026-11-26, precision follow-up): the mesh's surface area (mm2) and enclosed volume (mm3, signed:
+// positive for outward-facing triangles), in DOUBLE with explicit fma (identical on every platform). Volume:
+// sum of the signed pyramids from the origin, dot(a, cross(b, c)) / 6; area: sum of |cross(b - a, c - a)| / 2.
+// Summed in triangle order (deterministic). Used by BKMesh -surfaceArea / -enclosedVolume.
+double SurfaceArea(const std::vector<float> &xyz, const std::vector<uint32_t> &indices);
+double EnclosedVolume(const std::vector<float> &xyz, const std::vector<uint32_t> &indices);
+
 void AreaWeightedNormals(const std::vector<float> &xyz, const std::vector<uint32_t> &indices,
                          std::vector<float> &normals);
 

@@ -43,6 +43,30 @@ static BOOL NearFloat(double a, double recorded)
     return fabs(a - recorded) <= 4.0 * (double)FLT_EPSILON * fmax(fabs(recorded), 1e-30);
 }
 
+// 2026-11-26 (precision follow-up, user decision 2026-11-25): BKROICore now measures in DOUBLE (exact maths,
+// fma, identical on every platform). Horos computed the same quantities in float, so its recorded values carry
+// float rounding. Rule used below to stay Horos-compatible without asking our double results to repeat
+// Horos' rounding errors:
+//   - values Horos summed in double and only stored as float (ROI mean, total, min, max, point value): our
+//     double result ROUNDED TO FLOAT must equal the recorded value exactly (SameFloat);
+//   - values Horos computed with float arithmetic (area shoelace, length via sin(atan), centroid shares, SD):
+//     within a fixed number of float steps of the recorded value (bounds below = measured worst on the 18
+//     recorded ROIs, rounded up; PRECISION-AUDIT.md);
+//   - angles: an ABSOLUTE bound, because Horos took acos of a float cosine, which loses digits near 0 and 180
+//     degrees (measured worst 0.00012 degree on the nearly straight oval corners; our atan2 is exact there).
+// The EXACT answers are proven separately by the phantom tests (BKROIAccuracyTests here, ctest roi_accuracy_*
+// in the CMake build). Measured 2026-11-26: area 23.98 steps, length 0.53, centroid 0.40, angle 0.000124 deg.
+static const double kHorosFloatStepsArea = 32, kHorosFloatStepsLength = 2, kHorosFloatStepsCentroid = 4;
+static const double kHorosAngleDegrees = 0.001;   // 100 x below the 0.1 degree shown
+static double gWorstSteps[4];   // area, angle (degrees, absolute), centroid, length (logged by the test)
+
+// How many float steps (FLT_EPSILON * |recorded|) `a` is from the recorded float value.
+static double FloatSteps(double a, double recorded)
+{
+    if (isnan(a) || isnan(recorded)) return (isnan(a) && isnan(recorded)) ? 0 : INFINITY;
+    return fabs(a - recorded) / ((double)FLT_EPSILON * fmax(fabs(recorded), 1e-30));
+}
+
 @implementation BKROICoreTests
 
 - (NSDictionary *)reference
@@ -103,20 +127,25 @@ static BOOL NearFloat(double a, double recorded)
         XCTAssertLessThanOrEqual(worst, 1e-9, @"%@ curve differs by %g", name, worst);
 
         // Area, centroid, length, angle.
-        XCTAssertTrue(SameFloat(BKROIAreaCm2(&s, &curve), Num(r[@"roiArea_cm2"])), @"%@ area %.9g vs %.9g", name,
-                      BKROIAreaCm2(&s, &curve), Num(r[@"roiArea_cm2"]));
+        double area = BKROIAreaCm2(&s, &curve), areaSteps = FloatSteps(area, Num(r[@"roiArea_cm2"]));
+        gWorstSteps[0] = fmax(gWorstSteps[0], areaSteps);
+        XCTAssertLessThanOrEqual(areaSteps, kHorosFloatStepsArea, @"%@ area %.12g vs Horos %.9g", name, area, Num(r[@"roiArea_cm2"]));
         BKROIPoint c = BKROICentroid(&s);
-        XCTAssertTrue(NearFloat(c.x, [r[@"centroid"][0] doubleValue]), @"%@ centroid x %.10g", name, c.x);
-        XCTAssertTrue(NearFloat(c.y, [r[@"centroid"][1] doubleValue]), @"%@ centroid y %.10g", name, c.y);
+        double cs = fmax(FloatSteps(c.x, [r[@"centroid"][0] doubleValue]), FloatSteps(c.y, [r[@"centroid"][1] doubleValue]));
+        gWorstSteps[2] = fmax(gWorstSteps[2], cs);
+        XCTAssertLessThanOrEqual(cs, kHorosFloatStepsCentroid, @"%@ centroid %.12g %.12g", name, c.x, c.y);
         if (r[@"length_mm"] && outline.count >= 2) {
-            float mm = BKROILength(outline.points[0], outline.points[1], sx, sy, 0);
-            float px = BKROILength(outline.points[0], outline.points[1], sx, sy, 1);
-            XCTAssertTrue(SameFloat(mm, Num(r[@"length_mm"])), @"%@ length cm %.9g vs %.9g", name, mm, Num(r[@"length_mm"]));
-            XCTAssertTrue(SameFloat(px, Num(r[@"length_px"])), @"%@ length px %.9g vs %.9g", name, px, Num(r[@"length_px"]));
+            double mm = BKROILength(outline.points[0], outline.points[1], sx, sy, 0);
+            double px = BKROILength(outline.points[0], outline.points[1], sx, sy, 1);
+            double ls = fmax(FloatSteps(mm, Num(r[@"length_mm"])), FloatSteps(px, Num(r[@"length_px"])));
+            gWorstSteps[3] = fmax(gWorstSteps[3], ls);
+            XCTAssertLessThanOrEqual(ls, kHorosFloatStepsLength, @"%@ length cm %.12g vs Horos %.9g", name, mm, Num(r[@"length_mm"]));
         }
         if (r[@"angle_p1_p0_p2"] && outline.count >= 3) {
-            float a = BKROIAngle(outline.points[1], outline.points[0], outline.points[2], sx, sy);
-            XCTAssertTrue(SameFloat(a, Num(r[@"angle_p1_p0_p2"])), @"%@ angle %.9g vs %.9g", name, a, Num(r[@"angle_p1_p0_p2"]));
+            double a = BKROIAngle(outline.points[1], outline.points[0], outline.points[2], sx, sy);
+            double ad = fabs(a - Num(r[@"angle_p1_p0_p2"]));
+            gWorstSteps[1] = fmax(gWorstSteps[1], ad);
+            XCTAssertLessThanOrEqual(ad, kHorosAngleDegrees, @"%@ angle %.12g vs Horos %.9g", name, a, Num(r[@"angle_p1_p0_p2"]));
         }
 
         // Inside pixels (order, positions, values) and statistics.
@@ -129,7 +158,7 @@ static BOOL NearFloat(double a, double recorded)
             XCTAssertTrue(SameFloat(v, Num(vals[0])), @"%@ point value", name);
             XCTAssertEqual(x, [locs[0][0] intValue]); XCTAssertEqual(y, [locs[0][1] intValue]);
             // One pixel: mean = total = min = max = value, SD NaN (recorded).
-            XCTAssertTrue(SameFloat(v, Num(st[@"mean"])) && SameFloat(v, Num(st[@"total"])), @"%@", name);
+            XCTAssertTrue(SameFloat(v, Num(st[@"mean"])) && SameFloat(v, Num(st[@"total"])), @"%@", name);   // point: value itself
             XCTAssertTrue(isnan(Num(st[@"dev"])), @"%@ dev", name);
         } else {
             // Inside pixels. The pixel mask is built from the curve's WHOLE-PIXEL corners ((long) cut
@@ -179,11 +208,11 @@ static BOOL NearFloat(double a, double recorded)
             free(recorded);
             // Statistics of the recorded mask: exact as before.
             BKROIStats S = BKROIStatsOfRuns(&runs, image, W, H);
-            XCTAssertTrue(SameFloat(S.mean, Num(st[@"mean"])), @"%@ mean %.9g vs %.9g", name, S.mean, Num(st[@"mean"]));
-            XCTAssertTrue(SameFloat(S.total, Num(st[@"total"])), @"%@ total %.9g vs %.9g", name, S.total, Num(st[@"total"]));
+            XCTAssertTrue(SameFloat((float)S.mean, Num(st[@"mean"])), @"%@ mean %.12g vs %.9g", name, S.mean, Num(st[@"mean"]));
+            XCTAssertTrue(SameFloat((float)S.total, Num(st[@"total"])), @"%@ total %.12g vs %.9g", name, S.total, Num(st[@"total"]));
             XCTAssertTrue(NearFloat(S.dev, Num(st[@"dev"])), @"%@ dev %.9g vs %.9g", name, S.dev, Num(st[@"dev"]));
-            XCTAssertTrue(SameFloat(S.min, Num(st[@"min"])), @"%@ min", name);
-            XCTAssertTrue(SameFloat(S.max, Num(st[@"max"])), @"%@ max", name);
+            XCTAssertTrue(SameFloat((float)S.min, Num(st[@"min"])), @"%@ min", name);
+            XCTAssertTrue(SameFloat((float)S.max, Num(st[@"max"])), @"%@ max", name);
             BKROIRunListFree(&runs);
         }
 
@@ -210,6 +239,8 @@ static BOOL NearFloat(double a, double recorded)
         BKROIPointListFree(&outline);
     }
     free(image);
+    NSLog(@"BKROI precision: largest distance from the recorded Horos float values: area %.2f float steps, "
+          @"angle %.6f degree, centroid %.2f steps, length %.2f steps", gWorstSteps[0], gWorstSteps[1], gWorstSteps[2], gWorstSteps[3]);
 }
 
 // Is the whole-pixel point of probe (x, y) within 1e-9 pixel of an edge of the curve?
@@ -232,8 +263,8 @@ static BOOL NearFloat(double a, double recorded)
 {
     BKROIPoint sq[4] = { {0, 0}, {10, 0}, {10, 10}, {0, 10} };
     XCTAssertEqualWithAccuracy(BKROIPolygonAreaPixels(sq, 4), 100, 0);
-    XCTAssertEqualWithAccuracy(BKROILength(sq[0], sq[2], 1, 1, 1), sqrtf(200), 1e-4);
-    XCTAssertEqualWithAccuracy(BKROIAngle(sq[1], sq[0], sq[3], 1, 1), 90, 1e-4);
+    XCTAssertEqual(BKROILength(sq[0], sq[2], 1, 1, 1), sqrt(200.0));   // double, exact (sqrt is correctly rounded)
+    XCTAssertEqual(BKROIAngle(sq[1], sq[0], sq[3], 1, 1), 90.0);
     // A 10 x 10 square from (2,2): rows 2..12 (11 rows) of 11 pixels with this rule.
     BKROIPoint q[4] = { {2, 2}, {12, 2}, {12, 12}, {2, 12} };
     BKROIRunList runs = BKROIInsideRuns(q, 4, 32, 32);

@@ -216,3 +216,20 @@ agent, as instructed).
 1. Mesh pass completeness on Vulkan: lines, points, textured meshes, culling golden case (front-face check).
 2. Phase 2 per the kickoff plan: MetalDevice implementing BKGPU.h, then a C++ MeshPass used by both backends.
 3. Open: KosmicKrisp + validation refusal; asynchronous submit; compute pipelines (surface extraction, phase 4).
+
+## 2026-11-26 - precision follow-up (branch agent/precision from main c6b6be6; user decision 2026-11-25)
+
+Full audit, requirements, boundary and app list: **PRECISION-AUDIT.md**. Summary:
+- BKROICore: area, length, angle, centre, statistics now DOUBLE with explicit fma (API types float -> double;
+  BKROIStats fields double). Inside-pixel choice unchanged (Horos-identical).
+- Mesh area / volume moved into the C++ core (meshcore::SurfaceArea / EnclosedVolume, double + fma); BKMesh calls it.
+- Scene export: placement in double (fma chain), coordinates / normals / camera written as shortest exact double
+  text (FormatDouble); colours stay float.
+- Phantom accuracy tests with written requirements, in BOTH builds (ctest roi_accuracy_*, mesh_accuracy_box,
+  export_accuracy_geometry; XCTest BKROIAccuracyTests includes the same C file, BKMeshAccuracyTests).
+- Horos comparison: measured bounds documented (area 23.98 float steps, angle 0.000137 deg, length 0.53 steps).
+- Re-recorded ONCE: the 4 scene-export files (+ MANIFEST); largest number change 6.9e-6 mm.
+- Results: swift test -c release (BK_GOLDEN_STRICT=1) 456 tests, 0 failures, every reference comparison max
+  difference 0; ctest 30/30 (incl. Vulkan milestone tests); check-portable-cores clean.
+- Open for the user: BKMesh float32 storage (PRECISION-AUDIT.md 5); app float measurements (6); own correctly
+  rounded sin/cos/atan2 if bit-identical angles across operating systems are required (3).

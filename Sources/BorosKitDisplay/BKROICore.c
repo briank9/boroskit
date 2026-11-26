@@ -196,23 +196,33 @@ BKROIPointList BKROICurveWithPieces(const BKROIShape *roi, double scale, int32_t
 // ---------------------------------------------------------------------------------------------------
 // Measurements
 
-float BKROIPolygonAreaPixels(const BKROIPoint *pts, uint32_t n)
+// 2026-11-26 (precision follow-up, user decision 2026-11-25; BOROSCMF-FRAMEWORK.md section 8): every number
+// below is a measurement the user reads, so it is computed in DOUBLE end to end, with explicit fma() where a
+// multiply-add decides the result (fma is correctly rounded by every C99 library, so the bits are the same on
+// every platform). Before, these followed the recorded Horos float arithmetic; the recorded Horos values are
+// still checked in BKROICoreTests (within the error of Horos' own float arithmetic, documented there) and the
+// exact answers by the phantom tests (BKROIAccuracyTests / ctest roi_accuracy_*).
+// Which pixels count as inside (BKROIInsideRuns) is NOT changed: that stays Horos-identical.
+
+// What: (a * b) - (c * d) with one rounding less (fma), used for cross products / determinants.
+static double BKROIDiffOfProducts(double a, double b, double c, double d)
 {
-    // Shoelace sum on the coordinates held as floats, summed in float (as recorded).
-    float area = 0;
-    for (uint32_t i = 0; pts && i < n; i++) {
-        uint32_t j = (i + 1) % n;
-        float xi = (float)pts[i].x, yi = (float)pts[i].y, xj = (float)pts[j].x, yj = (float)pts[j].y;
-        // 2026-11-25 (D3): each step is one explicit fused multiply-add (what the recorded Horos build's
-        // compiler did implicitly); fmaf is correctly rounded everywhere, so this is platform-independent.
-        area = fmaf(xi, yj, area);
-        area = fmaf(-yi, xj, area);
-    }
-    area *= 0.5f;
-    return fabsf(area);
+    return fma(a, b, -(c * d));
 }
 
-float BKROIAreaCm2(const BKROIShape *roi, const BKROIPointList *curve)
+double BKROIPolygonAreaPixels(const BKROIPoint *pts, uint32_t n)
+{
+    // Shoelace sum in double: area = 1/2 |sum(x_i * y_j - y_i * x_j)|, each product added with one fma.
+    double area = 0;
+    for (uint32_t i = 0; pts && i < n; i++) {
+        uint32_t j = (i + 1) % n;
+        area = fma(pts[i].x, pts[j].y, area);
+        area = fma(-pts[i].y, pts[j].x, area);
+    }
+    return fabs(0.5 * area);
+}
+
+double BKROIAreaCm2(const BKROIShape *roi, const BKROIPointList *curve)
 {
     if (!roi || (roi->spacingX == 0 && roi->spacingY == 0)) return 0;
     switch (roi->kind) {
@@ -221,43 +231,38 @@ float BKROIAreaCm2(const BKROIShape *roi, const BKROIPointList *curve)
         case BKROIKindOpenPolygon:
         case BKROIKindClosedPolygon:
         case BKROIKindPencil: {
-            float px = curve ? BKROIPolygonAreaPixels(curve->points, curve->count) : 0;
-            return (float)((double)px * roi->spacingX * roi->spacingY / 100.);   // pixels -> mm2 -> cm2
+            double px = curve ? BKROIPolygonAreaPixels(curve->points, curve->count) : 0;
+            return px * roi->spacingX * roi->spacingY / 100.0;   // pixels -> mm2 -> cm2
         }
         case BKROIKindRect:
-            return (float)(roi->rectW * roi->spacingX * roi->rectH * roi->spacingY / 100.);
-        case BKROIKindOval: {
-            float px = (float)(fabs(BK_ROI_PI * roi->rectW * 2. * roi->rectH * 2.) / 4.);   // pi a b, held as float
-            return (float)((double)px * roi->spacingX * roi->spacingY / 100.);
-        }
+            return fabs(roi->rectW * roi->spacingX * roi->rectH * roi->spacingY) / 100.0;
+        case BKROIKindOval:   // pi * a * b; rectW / rectH are the half axes in pixels
+            return fabs(BK_ROI_PI * roi->rectW * roi->rectH) * roi->spacingX * roi->spacingY / 100.0;
         default:
             return 0;
     }
 }
 
-float BKROILength(BKROIPoint a, BKROIPoint b, double spacingX, double spacingY, int inPixels)
+double BKROILength(BKROIPoint a, BKROIPoint b, double spacingX, double spacingY, int inPixels)
 {
-    double sx = fabs(a.x - b.x), sy = fabs(a.y - b.y);
+    double sx = a.x - b.x, sy = a.y - b.y;
     int mm = (spacingX != 0 && spacingY != 0) && !inPixels;
     if (mm) { sx *= spacingX; sy *= spacingY; }
-    float len;
-    if (sx == 0) len = (float)sy;
-    else if (sy == 0) len = (float)sx;
-    else len = (float)(sy / sin(atan(sy / sx)));   // same as the hypotenuse; this form matches the recording
-    if (mm) len = (float)(len / 10.0);              // mm -> cm
-    return len;
+    double len = sqrt(fma(sx, sx, sy * sy));   // sqrt is correctly rounded everywhere (IEEE 754)
+    return mm ? len / 10.0 : len;              // mm -> cm
 }
 
-float BKROIAngle(BKROIPoint a, BKROIPoint vertex, BKROIPoint b, double spacingX, double spacingY)
+double BKROIAngle(BKROIPoint a, BKROIPoint vertex, BKROIPoint b, double spacingX, double spacingY)
 {
     double sx = 1, sy = 1;
     if (spacingX != 0 && spacingY != 0) { sx = spacingX; sy = spacingY; }
-    float ax = (float)(a.x * sx - vertex.x * sx), ay = (float)(a.y * sy - vertex.y * sy);
-    float bx = (float)(b.x * sx - vertex.x * sx), by = (float)(b.y * sy - vertex.y * sy);
-    if (ax == 0 && ay == 0) return 0;
-    float c = (float)((ax * bx + ay * by) / (sqrt(ax * ax + ay * ay) * sqrt(bx * bx + by * by)));
-    const float degree = (float)(BK_ROI_PI / 180.0f);   // one degree in radians, held as a float (recorded)
-    return (float)(acos(c) / degree);
+    double ax = (a.x - vertex.x) * sx, ay = (a.y - vertex.y) * sy;
+    double bx = (b.x - vertex.x) * sx, by = (b.y - vertex.y) * sy;
+    if ((ax == 0 && ay == 0) || (bx == 0 && by == 0)) return 0;   // an arm of zero length: no angle
+    // atan2(|a x b|, a . b): accurate over the whole 0..180 range (acos loses digits near 0 and 180).
+    double cross = BKROIDiffOfProducts(ax, by, ay, bx);
+    double dot = fma(ax, bx, ay * by);
+    return atan2(fabs(cross), dot) * (180.0 / BK_ROI_PI);
 }
 
 BKROIPoint BKROICentroid(const BKROIShape *roi)
@@ -268,11 +273,13 @@ BKROIPoint BKROICentroid(const BKROIShape *roi)
         c.x = roi->rectX; c.y = roi->rectY;
         return c;
     }
-    float n = (float)roi->count;
-    for (uint32_t i = 0; roi->points && i < roi->count; i++) {
-        c.x += (float)roi->points[i].x / n;   // each share in float, summed in double (recorded)
-        c.y += (float)roi->points[i].y / n;
+    if (!roi->points || roi->count == 0) return c;
+    for (uint32_t i = 0; i < roi->count; i++) {   // sum in double, in point order, then one division
+        c.x += roi->points[i].x;
+        c.y += roi->points[i].y;
     }
+    c.x /= (double)roi->count;
+    c.y /= (double)roi->count;
     return c;
 }
 
@@ -409,42 +416,47 @@ done:
     return runs;
 }
 
-BKROIStats BKROIStatsOfRuns(const BKROIRunList *runs, const float *image, int32_t width, int32_t height)
+// 2026-11-26 (precision follow-up): statistics in double end to end - sum, mean, min, max, and the sample SD
+// as a two-pass sum of squared differences (each square added with one fma). The pixel values themselves are
+// the scan's float32 values (Horos' image format, exact for integer HU).
+static BKROIStats BKROIFinishStats(double total, double mn, double mx, uint32_t count, double sumSquares)
 {
     BKROIStats s;
     memset(&s, 0, sizeof s);
-    double total = 0, mn = FLT_MAX, mx = -FLT_MAX, mean = 0, dev = 0;
+    s.count = count;
+    s.total = total;
+    s.mean = count ? total / count : 0;
+    s.dev = count > 1 ? sqrt(sumSquares / (double)(count - 1)) : (count == 1 ? NAN : 0);   // one pixel: NaN, as Horos
+    s.min = count ? mn : 0;
+    s.max = count ? mx : 0;
+    return s;
+}
+
+BKROIStats BKROIStatsOfRuns(const BKROIRunList *runs, const float *image, int32_t width, int32_t height)
+{
+    double total = 0, mn = INFINITY, mx = -INFINITY, sumSquares = 0;
     uint32_t count = 0;
     for (uint32_t r = 0; runs && image && r < runs->count; r++) {
         const BKROIRun *u = &runs->runs[r];
         if (u->y < 0 || u->y >= height) continue;
         for (int32_t x = u->x0; x <= u->x1; x++) {
-            float v = image[(size_t)u->y * (size_t)width + (size_t)x];
+            double v = image[(size_t)u->y * (size_t)width + (size_t)x];
             total += v;
             if (mn > v) mn = v;
             if (mx < v) mx = v;
             count++;
         }
     }
-    if (count) mean = total / count;
+    double mean = count ? total / count : 0;
     for (uint32_t r = 0; runs && image && r < runs->count; r++) {
         const BKROIRun *u = &runs->runs[r];
         if (u->y < 0 || u->y >= height) continue;
         for (int32_t x = u->x0; x <= u->x1; x++) {
-            float d = (float)(mean - image[(size_t)u->y * (size_t)width + (size_t)x]);   // in float (recorded)
-            d *= d;
-            dev += d;
+            double d = mean - (double)image[(size_t)u->y * (size_t)width + (size_t)x];
+            sumSquares = fma(d, d, sumSquares);
         }
     }
-    float fdev = (float)dev;
-    fdev = fdev / (float)((long)count - 1);
-    s.dev = (float)sqrt(fdev);
-    s.count = count;
-    s.total = (float)total;
-    s.mean = (float)mean;
-    s.min = (mn == FLT_MAX) ? 0 : (float)mn;
-    s.max = (mx == -FLT_MAX) ? 0 : (float)mx;
-    return s;
+    return BKROIFinishStats(total, mn, mx, count, sumSquares);
 }
 
 float BKROIPointValue(BKROIPoint p, const float *image, int32_t width, int32_t height, int32_t *x, int32_t *y)
@@ -565,31 +577,20 @@ uint32_t BKROIValuesOfRuns(const BKROIRunList *runs, const float *image, const u
 
 BKROIStats BKROIStatsOfValues(const float *values, uint32_t count)
 {
-    BKROIStats s;
-    memset(&s, 0, sizeof s);
-    double total = 0, mn = FLT_MAX, mx = -FLT_MAX, mean = 0, dev = 0;
+    double total = 0, mn = INFINITY, mx = -INFINITY, sumSquares = 0;
     if (!values) count = 0;
     for (uint32_t i = 0; i < count; i++) {
-        float v = values[i];
+        double v = values[i];
         total += v;
         if (mn > v) mn = v;
         if (mx < v) mx = v;
     }
-    if (count) mean = total / count;
+    double mean = count ? total / count : 0;
     for (uint32_t i = 0; i < count; i++) {
-        float d = (float)(mean - values[i]);   // in float (recorded)
-        d *= d;
-        dev += d;
+        double d = mean - (double)values[i];
+        sumSquares = fma(d, d, sumSquares);
     }
-    float fdev = (float)dev;
-    fdev = fdev / (float)((long)count - 1);
-    s.dev = (float)sqrt(fdev);
-    s.count = count;
-    s.total = (float)total;
-    s.mean = (float)mean;
-    s.min = (mn == FLT_MAX) ? 0 : (float)mn;
-    s.max = (mx == -FLT_MAX) ? 0 : (float)mx;
-    return s;
+    return BKROIFinishStats(total, mn, mx, count, sumSquares);
 }
 
 // Central moment of order k, divided by count - 1 (as recorded).

@@ -79,22 +79,26 @@ BKROIPointList BKROIOutline(const BKROIShape *roi);
 // then one sample per whole step of `1/scale` pixel. Two equal neighbouring points -> no smoothing.
 BKROIPointList BKROICurve(const BKROIShape *roi, double scale);
 
-// What: area in pixels of a closed outline (the "shoelace" sum; float as recorded).
-float BKROIPolygonAreaPixels(const BKROIPoint *pts, uint32_t n);
+// PRECISION (2026-11-26, precision follow-up): every measurement below returns DOUBLE, computed in double
+// with explicit fma() (identical bits on every platform). Accuracy requirements and their phantom tests:
+// PRECISION-AUDIT.md. Inside-pixel selection is unchanged (Horos-identical).
+
+// What: area in pixels of a closed outline (the "shoelace" sum, double).
+double BKROIPolygonAreaPixels(const BKROIPoint *pts, uint32_t n);
 
 // What: the ROI area in cm2 (as shown in the ROI box): polygons, pencil, axis and dynamic angle from
 // their curve; rectangle w x h; oval pi a b; others 0; 0 when the pixel size is unknown.
-float BKROIAreaCm2(const BKROIShape *roi, const BKROIPointList *curve);
+double BKROIAreaCm2(const BKROIShape *roi, const BKROIPointList *curve);
 
 // What: distance from a to b in cm (pixel size known and inPixels 0) or in pixels.
-float BKROILength(BKROIPoint a, BKROIPoint b, double spacingX, double spacingY, int inPixels);
+double BKROILength(BKROIPoint a, BKROIPoint b, double spacingX, double spacingY, int inPixels);
 
 // What: the angle in degrees at `vertex` between the arms to `a` and `b` (0..180), measured in mm
-// (pixel size applied when known). 0 when the arm to `a` has zero length.
-float BKROIAngle(BKROIPoint a, BKROIPoint vertex, BKROIPoint b, double spacingX, double spacingY);
+// (pixel size applied when known). 0 when an arm has zero length.
+double BKROIAngle(BKROIPoint a, BKROIPoint vertex, BKROIPoint b, double spacingX, double spacingY);
 
 // What: the ROI's centre point as Boros shows it: rect / oval / point -> the rect corner (centre for an
-// oval); others -> the mean of the user's points.
+// oval); others -> the mean of the user's points (double sum in point order, one division).
 BKROIPoint BKROICentroid(const BKROIShape *roi);
 
 // ---- Inside pixels and statistics ----
@@ -119,11 +123,11 @@ BKROIRunList BKROIInsideRuns(const BKROIPoint *curve, uint32_t n, int32_t width,
 // Statistics of the inside pixels.
 typedef struct {
     uint32_t count;
-    float mean, total, dev, min, max;   // dev: sample SD (count - 1), NaN for a single pixel as recorded
+    double mean, total, dev, min, max;   // dev: sample SD (count - 1), NaN for a single pixel (as Horos)
 } BKROIStats;
 
-// What: statistics of `runs` on a float image (row stride = width), summed in run order (as recorded:
-// total and mean in double, the squared differences in float, min/max 0 when there are no pixels).
+// What: statistics of `runs` on a float image (row stride = width), summed in run order, all in double
+// (two-pass SD, squares added with fma); min/max 0 when there are no pixels.
 BKROIStats BKROIStatsOfRuns(const BKROIRunList *runs, const float *image, int32_t width, int32_t height);
 
 // What: the one pixel of a point ROI: its value, or 0 when the point is outside the image (as recorded);
@@ -168,7 +172,7 @@ uint32_t BKROIRunsPixelCount(const BKROIRunList *runs, int32_t width, int32_t he
 uint32_t BKROIValuesOfRuns(const BKROIRunList *runs, const float *image, const uint8_t *argb,
                            int32_t width, int32_t height, float *values, float *locations);
 
-// What: statistics of a list of values, with exactly the arithmetic of BKROIStatsOfRuns (same order).
+// What: statistics of a list of values, with exactly the arithmetic of BKROIStatsOfRuns (same order, double).
 BKROIStats BKROIStatsOfValues(const float *values, uint32_t count);
 
 // What: skewness and kurtosis of the values around `mean` (as recorded: the k-th central moment is

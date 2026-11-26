@@ -31,6 +31,9 @@
 //     until WriteScene returns.
 //   - Matrices are 16 doubles in COLUMN-MAJOR order, column-vector convention:
 //     point' = M * point, translation in elements 12, 13, 14 (same as Apple simd).
+//   - 2026-11-26 (precision follow-up): positions, normals and camera numbers are placed in DOUBLE (explicit
+//     fma) and written as the shortest text that reads back as the same double (FormatDouble), so the file
+//     carries the full placement result. Colours, opacities and line widths stay floats (below).
 //   - Number formatting: floats are written with 9 significant digits (enough to read
 //     back exactly the same 32-bit value). On systems that have
 //     std::to_chars for floating point it can be used (3x faster), but Apple's library
@@ -152,6 +155,10 @@ std::string MaterialPathForOBJ(const std::string &objPath);
 // Writes a float as text with `precision` significant digits (like printf "%.*g") into
 // `buffer` (at least 32 bytes) and returns the number of characters (no 0 written).
 size_t FormatFloat(float value, int precision, char *buffer);
+// Writes a double as the shortest text that reads back as exactly the same double (15-17 significant
+// digits) into `buffer` (at least 32 bytes); returns the number of characters. Used for all geometry and
+// camera numbers since 2026-11-26 (precision follow-up).
+size_t FormatDouble(double value, char *buffer);
 
 } // namespace sceneexport
 } // namespace boroskit
