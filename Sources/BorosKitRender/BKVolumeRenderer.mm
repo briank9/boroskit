@@ -1,5 +1,10 @@
 // BorosKitRender: BKVolumeRenderer implementation (see the header for what it does).
 
+/* 2026-11-26 (agent "vulkan-engine", Vulkan plan 7.1 #4): the GPU work (tables, brick lists, ray cast) now runs
+ * through the backend-neutral BKRaycastPass (shared with the Vulkan engine) and the parameter block comes from the
+ * plain-C BKRenderParamsFill; this class keeps its public API, its caches and policy, and the Metal-only upscale.
+ */
+
 /* BOROS OVERVIEW (plain language)
  * This is the main engine that draws the 3D picture of a scan on the computer's
  * graphics chip (GPU), which is much faster than the CPU for this kind of work.
@@ -20,8 +25,14 @@
 #import "BKVolumeFusionCore.h"   // colour scans + fusion rules (plain C, 2026-11-24)
 #import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
 #import "CPRVolumeData.h"
+#include "BKRaycastPass.h"   // 2026-11-26: the ray caster on the shared GPU interface (Vulkan plan 7.1 #4b)
+#include "BKGPUMetal.h"      // MetalDevice glue
+#include <vector>
 
-NSString *BKVolumeShaderSource(void); // BKShaderSource.mm
+extern "C" NSString *BKVolumeShaderSource(void); // BKShaderSource.mm
+
+namespace bkgpu = boroskit::gpu;
+namespace bkrender = boroskit::render;
 
 // Number of entries in the transfer-function lookup texture. 4096 gives < 1 HU per
 // entry over a typical 4000 HU CT range, so the GPU lookup is as fine as the data.
@@ -31,13 +42,6 @@ static const NSUInteger kTransferFunctionEntries = BK_TRANSFER_FUNCTION_ENTRIES;
 static NSError *BKRendererError(NSInteger code, NSString *message)
 {
     return [NSError errorWithDomain:BKRenderErrorDomain code:code userInfo:@{NSLocalizedDescriptionKey: message}];
-}
-
-// What: a float3 widened to the float4 the parameter block stores (w = 0).
-// Why: BKRenderParams keeps 3D quantities in float4 so its layout is std430 (Vulkan).
-static simd_float4 BKFloat4(simd_float3 v)
-{
-    return simd_make_float4(v, 0.0f);
 }
 
 #pragma mark - BKRenderResult
@@ -108,32 +112,27 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
 
 @implementation BKVolumeRenderer {
     id<MTLCommandQueue> _queue;
-    id<MTLComputePipelineState> _raycastPipeline;
-    id<MTLComputePipelineState> _sizePipeline;
-    id<MTLComputePipelineState> _texturePipeline;  // bk_raycast_texture (on-screen output)
-    id<MTLComputePipelineState> _upscalePipeline;  // bk_upscale (LOD stretch)
+    id<MTLComputePipelineState> _sizePipeline;     // bk_params_size (layout test helper, Metal only)
+    id<MTLComputePipelineState> _upscalePipeline;  // bk_upscale (LOD stretch, Metal only)
     id<MTLBuffer> _valuesOnlyColorPlaceholder;     // 16-byte stand-in for the RGBA output when only values are written (2026-11-15)
-    id<MTLTexture> _tfTexture;            // baked transfer function (4096 x 1, RGBA float)
-    BKTransferFunction *_bakedTransferFunction; // which function _tfTexture currently holds
-    BKTransferFunction *_defaultTransferFunction; // gray ramp used when none is set
+
+    // The shared GPU interface on this device + queue, and the ray caster on it (2026-11-26, Vulkan plan 7.1 #4b).
+    std::unique_ptr<bkgpu::Device> _gpu;
+    std::unique_ptr<bkrender::RaycastPass> _pass;
+
+    std::unique_ptr<bkgpu::Texture> _table;        // baked transfer function (4096 x 1, RGBA float)
+    BKTransferFunction *_bakedTransferFunction;    // which function _table currently holds
+    BKTransferFunction *_defaultTransferFunction;  // gray ramp used when none is set
 
     // --- Empty-space skipping (see BK_BRICK_SIZE in BKShaderTypes.h) ---
-    id<MTLComputePipelineState> _brickRangePipeline;    // bk_brick_ranges (once per volume)
-    id<MTLComputePipelineState> _classifyPipeline;      // bk_classify_bricks (per transfer function)
-    id<MTLBuffer> _alphaCountBuffer;    // running count of non-see-through table entries, per bake
-    id<MTLBuffer> _brickEmptyBuffer;    // 1 uint32 per brick: 1 = fully see-through
-    id<MTLBuffer> _classifiedAlphaCount;            // which table _brickEmptyBuffer was made for
-    __weak BKVolumeTexture *_classifiedVolume;      // ...and which volume
-    id<MTLBuffer> _placeholderBuffer;   // bound instead when skipping is off (the GPU wants something there)
-    // Embedded objects (2026-11-14): 1 x 1 pictures bound when there are none (every kernel
-    // argument must be bound; the shader does not read them then, p.useGeometry == 0).
-    id<MTLTexture> _noGeometryColor;
-    id<MTLTexture> _noGeometryDistance;
+    std::shared_ptr<bkgpu::Buffer> _alphaCount;    // running count of non-see-through table entries, per bake
+    std::shared_ptr<bkgpu::Buffer> _brickEmpty;    // 1 uint32 per brick: 1 = fully see-through
+    bkgpu::Buffer *_classifiedAlphaCount;          // which table _brickEmpty was made for
+    __weak BKVolumeTexture *_classifiedVolume;     // ...and which volume
 
-    // --- Fusion (2026-11-24, vr-colour-fusion): the fused scan's baked table and the stand-ins bound without one ---
+    // --- Fusion (2026-11-24, vr-colour-fusion): the fused scan's baked table ---
     id<MTLTexture> _blendTfTexture;              // 4096 x 1 RGBA float, the fused scan's colour / opacity
     BKTransferFunction *_bakedBlendTransferFunction;
-    id<MTLTexture> _noBlendVolume;               // 1 x 1 x 1 R16 3D texture bound at slot 5 when nothing is fused
 
     // --- Extra clipping planes (see -setPackedClipPlanes:count: / -setClipPlanes:count:) ---
     // Kept in the GPU packing (nx, ny, nz, w; cut where n.x + w > 0), so the simd setter needs no
@@ -174,26 +173,22 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     }
     id<MTLLibrary> library = [[self class] libraryForDevice:_device error:error];
     if (!library) return nil;
-    _raycastPipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_raycast"] error:error];
     _sizePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_params_size"] error:error];
-    _texturePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_raycast_texture"] error:error];
     _upscalePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_upscale"] error:error];
-    _brickRangePipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_brick_ranges"] error:error];
-    _classifyPipeline = [_device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bk_classify_bricks"] error:error];
-    if (!_raycastPipeline || !_sizePipeline || !_texturePipeline || !_upscalePipeline
-        || !_brickRangePipeline || !_classifyPipeline) return nil;
-    _placeholderBuffer = [_device newBufferWithLength:16 options:MTLResourceStorageModeShared];
-    _noGeometryColor = [_device newTextureWithDescriptor:[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO]];
-    _noGeometryDistance = [_device newTextureWithDescriptor:[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:1 height:1 mipmapped:NO]];
-    if (!_noGeometryColor || !_noGeometryDistance) return nil;
-    MTLTextureDescriptor *noBlend = [[MTLTextureDescriptor alloc] init];
-    noBlend.textureType = MTLTextureType3D;
-    noBlend.pixelFormat = MTLPixelFormatR16Unorm;
-    noBlend.width = noBlend.height = noBlend.depth = 1;
-    _noBlendVolume = [_device newTextureWithDescriptor:noBlend];
-    if (!_noBlendVolume) return nil;
-    _blendOpacityUnitDistance = 1;
+    if (!_sizePipeline || !_upscalePipeline) return nil;
     _queue = [_device newCommandQueue];
+    // The ray caster on the shared GPU interface (pipelines, sampler, placeholders).
+    if (!_queue || bkgpu::makeMetalDevice(_device, _queue, &_gpu) != bkgpu::Status::Ok ||
+        bkgpu::BKGPUMetalAddLibrary(*_gpu, library) != bkgpu::Status::Ok) {
+        if (error) *error = BKRendererError(10, @"The GPU interface could not be created.");
+        return nil;
+    }
+    _pass.reset(new bkrender::RaycastPass(*_gpu));
+    if (_pass->prepare() != bkgpu::Status::Ok) {
+        if (error) *error = BKRendererError(10, @"The ray-casting GPU programs could not be prepared.");
+        return nil;
+    }
+    _blendOpacityUnitDistance = 1;
 
     // Defaults (documented in the header).
     _mode = BKRenderModeComposite;
@@ -308,33 +303,22 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     return tf;
 }
 
-- (void)updateTransferFunctionTexture:(BKTransferFunction *)tf
+// A NEW table and count list every time (rare: only when the colours / opacity change), so a frame still being
+// drawn on the GPU keeps reading the old ones undisturbed. NO when the GPU memory could not be made.
+- (BOOL)updateTransferFunctionTexture:(BKTransferFunction *)tf
 {
-    if (_tfTexture && _bakedTransferFunction == tf) return;
-    if (!_tfTexture) {
-        MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
-                                                                                         width:kTransferFunctionEntries height:1 mipmapped:NO];
-        desc.usage = MTLTextureUsageShaderRead;
-        desc.storageMode = MTLStorageModeShared;
-#if TARGET_OS_OSX
-        if (!_device.hasUnifiedMemory) desc.storageMode = MTLStorageModeManaged; // Intel Macs
-#endif
-        _tfTexture = [_device newTextureWithDescriptor:desc];
-    }
-    float *rgba = malloc(kTransferFunctionEntries * 4 * sizeof(float));
+    if (_table && _bakedTransferFunction == tf) return YES;
+    float *rgba = (float *)malloc(kTransferFunctionEntries * 4 * sizeof(float));
     [tf bakeIntoRGBA:rgba count:kTransferFunctionEntries];
-    [_tfTexture replaceRegion:MTLRegionMake2D(0, 0, kTransferFunctionEntries, 1) mipmapLevel:0
-                    withBytes:rgba bytesPerRow:kTransferFunctionEntries * 4 * sizeof(float)];
-
-    // For empty-space skipping: count[k] = how many of the first k entries have any
-    // opacity at all (the shader skips only where the ray would find opacity exactly 0).
-    // A NEW buffer every time, so a frame still being drawn on the GPU keeps reading
-    // the old one undisturbed.
-    _alphaCountBuffer = [_device newBufferWithLength:(kTransferFunctionEntries + 1) * sizeof(uint32_t)
-                                             options:MTLResourceStorageModeShared];
-    BKRenderAlphaPrefixCount(rgba, kTransferFunctionEntries, _alphaCountBuffer.contents);   // plain-C core
+    std::unique_ptr<bkgpu::Texture> table;
+    std::unique_ptr<bkgpu::Buffer> counts;
+    bkgpu::Status s = _pass->makeTable(rgba, &table, &counts);   // + the empty-space skipping counts (plain-C core)
     free(rgba);
+    if (s != bkgpu::Status::Ok) return NO;
+    _table = std::move(table);
+    _alphaCount = std::move(counts);
     _bakedTransferFunction = tf;
+    return YES;
 }
 
 // The user may set a function and then keep editing it; take a private copy so the
@@ -394,7 +378,7 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
 #endif
     id<MTLTexture> texture = [_device newTextureWithDescriptor:desc];
     if (!texture) return nil;
-    float *rgba = malloc(kTransferFunctionEntries * 4 * sizeof(float));
+    float *rgba = (float *)malloc(kTransferFunctionEntries * 4 * sizeof(float));
     [tf bakeIntoRGBA:rgba count:kTransferFunctionEntries];
     [texture replaceRegion:MTLRegionMake2D(0, 0, kTransferFunctionEntries, 1) mipmapLevel:0
                  withBytes:rgba bytesPerRow:kTransferFunctionEntries * 4 * sizeof(float)];
@@ -408,14 +392,6 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
 - (BOOL)hasBlend
 {
     return _blendVolumeTexture && _blendTransferFunction && _blendVolumeTexture.texture.device == _device;
-}
-
-// What: binds the fused scan (or the stand-ins) at the kernels' slots 5 and 6.
-- (void)bindBlendToEncoder:(id<MTLComputeCommandEncoder>)enc
-{
-    id<MTLTexture> table = [self hasBlend] ? [self bakedBlendTable] : nil;
-    [enc setTexture:table ? _blendVolumeTexture.texture : _noBlendVolume atIndex:5];
-    [enc setTexture:table ?: _tfTexture atIndex:6];
 }
 
 // What: Apple's simd_normalize, handed to the plain-C params builder so the Mac keeps its exact numbers.
@@ -539,108 +515,85 @@ static void BKVector3(N3Vector v, double out[3])
         && c.width > 0 && c.height > 0;
 }
 
-// What: binds the object pictures (or the 1 x 1 placeholders) at the kernels' slots 3 and 4.
-- (void)bindGeometryToEncoder:(id<MTLComputeCommandEncoder>)enc
+// What: the GPU inputs of one ray cast, wrapping the Metal objects (nothing is copied). The wrappers are kept in
+// `keep` for the duration of the encoding. Absent objects / fused scan: nullptr (the pass binds its placeholders).
+- (bkrender::RaycastInputs)inputsKeeping:(std::vector<std::unique_ptr<bkgpu::Texture>> &)keep
 {
-    BOOL has = [self hasGeometry];
-    [enc setTexture:has ? _geometryColorTexture : _noGeometryColor atIndex:3];
-    [enc setTexture:has ? _geometryRayDistanceTexture : _noGeometryDistance atIndex:4];
+    bkrender::RaycastInputs in;
+    keep.push_back(bkgpu::BKGPUMetalWrapTexture(*_gpu, _volumeTexture.texture));
+    in.volume = keep.back().get();
+    in.table = _table.get();
+    if ([self hasGeometry]) {   // embedded objects (2026-11-14)
+        keep.push_back(bkgpu::BKGPUMetalWrapTexture(*_gpu, _geometryColorTexture));
+        in.geometryColor = keep.back().get();
+        keep.push_back(bkgpu::BKGPUMetalWrapTexture(*_gpu, _geometryRayDistanceTexture));
+        in.geometryDistance = keep.back().get();
+    }
+    id<MTLTexture> blendTable = [self hasBlend] ? [self bakedBlendTable] : nil;   // fused scan (2026-11-24)
+    if (blendTable) {
+        keep.push_back(bkgpu::BKGPUMetalWrapTexture(*_gpu, _blendVolumeTexture.texture));
+        in.blendVolume = keep.back().get();
+        keep.push_back(bkgpu::BKGPUMetalWrapTexture(*_gpu, blendTable));
+        in.blendTable = keep.back().get();
+    }
+    return in;
 }
 
 #pragma mark - Empty-space skipping
 
-// Number of bricks along each axis of `vt` (a partial brick at the end counts).
-static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
-{
-    uint32_t g[3];
-    BKRenderBrickGrid((uint32_t)vt.pixelsWide, (uint32_t)vt.pixelsHigh, (uint32_t)vt.pixelsDeep, BK_BRICK_SIZE, g);   // plain-C core
-    return simd_make_float3(g[0], g[1], g[2]);
-}
-
 // What: makes sure the volume's per-brick (lowest, highest) list exists; builds it on
-// the GPU the first time and waits for it.
+// the GPU the first time (RaycastPass) and waits for it.
 // Why wait: it is done once per volume (a few milliseconds), and waiting means every
 // renderer sharing the volume can use the list at once without any ordering worries.
 - (id<MTLBuffer>)brickRangesForVolume:(BKVolumeTexture *)vt
 {
     @synchronized (vt) {
         if (vt.brickRangeBuffer) return vt.brickRangeBuffer;
-        simd_float3 g = BKBrickGrid(vt);
-        simd_uint4 grid = simd_make_uint4((uint32_t)g.x, (uint32_t)g.y, (uint32_t)g.z, 0);   // uint4: no 3-vectors in GPU data
-        NSUInteger bricks = (NSUInteger)grid.x * grid.y * grid.z;
-        // One 32-bit word per brick: lowest | highest << 16 (raw 16-bit steps).
-        id<MTLBuffer> ranges = [_device newBufferWithLength:bricks * sizeof(uint32_t) options:MTLResourceStorageModePrivate];
+        uint32_t grid[3];
+        BKRenderBrickGrid((uint32_t)vt.pixelsWide, (uint32_t)vt.pixelsHigh, (uint32_t)vt.pixelsDeep, BK_BRICK_SIZE, grid);   // plain-C core
+        std::unique_ptr<bkgpu::Texture> volume = bkgpu::BKGPUMetalWrapTexture(*_gpu, vt.texture);
+        if (!volume) return nil;
+        std::unique_ptr<bkgpu::Buffer> ranges = _pass->makeBrickRanges(*volume, grid, nullptr);
         if (!ranges) return nil;
-        id<MTLCommandBuffer> cb = [_queue commandBuffer];
-        id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-        [enc setComputePipelineState:_brickRangePipeline];
-        [enc setTexture:vt.texture atIndex:0];
-        [enc setBuffer:ranges offset:0 atIndex:0];
-        [enc setBytes:&grid length:sizeof(grid) atIndex:1];
-        [enc dispatchThreadgroups:MTLSizeMake((grid.x + 3) / 4, (grid.y + 3) / 4, (grid.z + 3) / 4)
-            threadsPerThreadgroup:MTLSizeMake(4, 4, 4)];
-        [enc endEncoding];
-        [cb commit];
-        [cb waitUntilCompleted];
-        if (cb.status == MTLCommandBufferStatusError) return nil;
-        vt.brickRangeBuffer = ranges;
-        return ranges;
+        vt.brickRangeBuffer = bkgpu::BKGPUMetalBuffer(*ranges);   // the MTLBuffer stays alive through the volume
+        return vt.brickRangeBuffer;
     }
 }
 
 // What: prepares empty-space skipping for one render and tells the shader whether to
 // use it (params->skipEmptySpace). In 3D (composite) mode it also re-decides which
 // bricks are fully see-through whenever the transfer function or volume changed,
-// encoded into `commandBuffer` ahead of the ray casting.
-// Returns the two per-brick lists to bind (placeholders when skipping is off).
+// recorded into `list` ahead of the ray casting. Fills the brick lists of `in` (nullptr = off).
 // Why it can never change the picture: see the shader; skipped samples are exactly the
 // ones whose contribution would have been thrown away.
-- (void)prepareSkippingForParams:(BKRenderParams *)params
-                   commandBuffer:(id<MTLCommandBuffer>)commandBuffer
-                      brickEmpty:(id<MTLBuffer> __strong *)brickEmpty
-                      brickRange:(id<MTLBuffer> __strong *)brickRange
+- (void)prepareSkippingForParams:(BKRenderParams *)params list:(bkgpu::CommandList &)list
+                          inputs:(bkrender::RaycastInputs &)in
+                            keep:(std::vector<std::unique_ptr<bkgpu::Buffer>> &)keep
 {
-    *brickEmpty = _placeholderBuffer;
-    *brickRange = _placeholderBuffer;
     params->skipEmptySpace = 0;
-    // The average along the ray needs every sample, so nothing to skip there.
-    if (!_skipsEmptySpace || _mode == BKRenderModeAverage) return;
-    // Colour scans and fusion (2026-11-24): the bricks describe only a grey first scan, so no skipping (the shader's
-    // colour / fusion path never reads them).
-    if (params->colorVolume != 0 || params->useBlend != 0) return;
-
+    if (!bkrender::RaycastPass::WantsSkipping(_skipsEmptySpace, *params)) return;   // shared rule
     BKVolumeTexture *vt = _volumeTexture;
     id<MTLBuffer> ranges = [self brickRangesForVolume:vt];
     if (!ranges) return;   // could not build the list: just render without skipping
-    params->brickGrid = BKFloat4(BKBrickGrid(vt));
+    uint32_t grid[3];
+    BKRenderBrickGrid((uint32_t)vt.pixelsWide, (uint32_t)vt.pixelsHigh, (uint32_t)vt.pixelsDeep, BK_BRICK_SIZE, grid);
+    params->brickGrid = bk_make_float4((float)grid[0], (float)grid[1], (float)grid[2], 0.0f);
+    keep.push_back(bkgpu::BKGPUMetalWrapBuffer(*_gpu, ranges));
+    bkgpu::Buffer *rangeBuffer = keep.back().get();
 
     if (_mode == BKRenderModeComposite) {
-        if (_classifiedAlphaCount != _alphaCountBuffer || _classifiedVolume != vt || !_brickEmptyBuffer) {
-            NSUInteger bricks = (NSUInteger)params->brickGrid.x * (NSUInteger)params->brickGrid.y * (NSUInteger)params->brickGrid.z;
-            // A new list each time (rare: only when the colours/opacity change), so a
-            // frame still in flight keeps the list it started with.
-            // One 32-bit word per brick (GPU buffers hold only 32-bit words: no optional
-            // 8-bit storage feature needed in Vulkan; a 512^3 scan has 262,144 bricks = 1 MB).
-            id<MTLBuffer> empty = [_device newBufferWithLength:bricks * sizeof(uint32_t) options:MTLResourceStorageModePrivate];
+        if (_classifiedAlphaCount != _alphaCount.get() || _classifiedVolume != vt || !_brickEmpty) {
+            // A new list each time (rare: only when the colours/opacity change), so a frame still in flight keeps
+            // the list it started with.
+            std::unique_ptr<bkgpu::Buffer> empty = _pass->encodeClassify(list, *params, *rangeBuffer, *_alphaCount, nullptr);
             if (!empty) return;
-            id<MTLComputeCommandEncoder> enc = [commandBuffer computeCommandEncoder];
-            [enc setComputePipelineState:_classifyPipeline];
-            [enc setBuffer:ranges offset:0 atIndex:0];
-            [enc setBuffer:_alphaCountBuffer offset:0 atIndex:1];
-            [enc setBuffer:empty offset:0 atIndex:2];
-            [enc setBytes:params length:sizeof(*params) atIndex:3];
-            [enc dispatchThreadgroups:MTLSizeMake(((NSUInteger)params->brickGrid.x + 3) / 4,
-                                                  ((NSUInteger)params->brickGrid.y + 3) / 4,
-                                                  ((NSUInteger)params->brickGrid.z + 3) / 4)
-                threadsPerThreadgroup:MTLSizeMake(4, 4, 4)];
-            [enc endEncoding];
-            _brickEmptyBuffer = empty;
-            _classifiedAlphaCount = _alphaCountBuffer;
+            _brickEmpty = std::move(empty);
+            _classifiedAlphaCount = _alphaCount.get();
             _classifiedVolume = vt;
         }
-        *brickEmpty = _brickEmptyBuffer;
+        in.brickEmpty = _brickEmpty.get();
     }
-    *brickRange = ranges;
+    in.brickRange = rangeBuffer;
     params->skipEmptySpace = 1;
 }
 
@@ -652,33 +605,32 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
                                 valuesOnly:(BOOL)valuesOnly error:(NSError **)error
 {
     BKTransferFunction *tf = [self effectiveTransferFunction];
-    [self updateTransferFunctionTexture:tf];
+    if (![self updateTransferFunctionTexture:tf]) {
+        if (error) *error = BKRendererError(15, @"Not enough memory for the colour table.");
+        return nil;
+    }
 
     BKRenderParams params;
     if (![self fillParams:&params width:width height:height tf:tf error:error]) return nil;
     params.valuesOnly = valuesOnly ? 1 : 0;
 
     id<MTLCommandBuffer> cb = [_queue commandBuffer];
-    id<MTLBuffer> brickEmpty, brickRange;
-    [self prepareSkippingForParams:&params commandBuffer:cb brickEmpty:&brickEmpty brickRange:&brickRange];
-    id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-    [enc setComputePipelineState:_raycastPipeline];
-    [enc setTexture:_volumeTexture.texture atIndex:0];
-    [enc setTexture:_tfTexture atIndex:1];
-    [enc setBytes:&params length:sizeof(params) atIndex:0];
-    [enc setBuffer:colorBuffer offset:0 atIndex:1];
-    [enc setBuffer:valueBuffer offset:0 atIndex:2];
-    [enc setBuffer:brickEmpty offset:0 atIndex:3];
-    [enc setBuffer:brickRange offset:0 atIndex:4];
-    [self bindGeometryToEncoder:enc];   // embedded objects (2026-11-14)
-    [self bindBlendToEncoder:enc];      // fused scan (2026-11-24)
-    // 8x8 tiles: neighbouring rays read neighbouring voxels, which keeps the texture
-    // cache warm. Thread groups are dispatched to cover the image; the kernel skips
-    // threads that fall outside it.
-    MTLSize group = MTLSizeMake(8, 8, 1);
-    MTLSize groups = MTLSizeMake((width + 7) / 8, (height + 7) / 8, 1);
-    [enc dispatchThreadgroups:groups threadsPerThreadgroup:group];
-    [enc endEncoding];
+    {
+        // Recorded through the shared interface into this command buffer (the list ends its encoder when it goes).
+        std::unique_ptr<bkgpu::CommandList> list = bkgpu::BKGPUMetalCommandList(*_gpu, cb);
+        std::vector<std::unique_ptr<bkgpu::Texture>> keepTextures;
+        std::vector<std::unique_ptr<bkgpu::Buffer>> keepBuffers;
+        bkrender::RaycastInputs in = [self inputsKeeping:keepTextures];
+        [self prepareSkippingForParams:&params list:*list inputs:in keep:keepBuffers];
+        keepBuffers.push_back(bkgpu::BKGPUMetalWrapBuffer(*_gpu, colorBuffer));
+        bkgpu::Buffer *colors = keepBuffers.back().get();
+        keepBuffers.push_back(bkgpu::BKGPUMetalWrapBuffer(*_gpu, valueBuffer));
+        bkgpu::Buffer *values = keepBuffers.back().get();
+        if (!in.volume || _pass->encodeRaycast(*list, params, in, *colors, *values) != bkgpu::Status::Ok) {
+            if (error) *error = BKRendererError(16, @"The GPU failed to render the image.");
+            return nil;
+        }
+    }
     [cb commit];
     return cb;
 }
@@ -812,27 +764,26 @@ static simd_float3 BKBrickGrid(BKVolumeTexture *vt)
     }
 
     BKTransferFunction *tf = [self effectiveTransferFunction];
-    [self updateTransferFunctionTexture:tf];
+    if (![self updateTransferFunctionTexture:tf]) {
+        if (error) *error = BKRendererError(15, @"Not enough memory for the colour table.");
+        return NO;
+    }
 
     BKRenderParams params;
     if (![self fillParams:&params width:width height:height tf:tf error:error]) return NO;
 
-    id<MTLBuffer> brickEmpty, brickRange;
-    [self prepareSkippingForParams:&params commandBuffer:commandBuffer brickEmpty:&brickEmpty brickRange:&brickRange];
-    id<MTLComputeCommandEncoder> enc = [commandBuffer computeCommandEncoder];
-    [enc setComputePipelineState:_texturePipeline];
-    [enc setTexture:_volumeTexture.texture atIndex:0];
-    [enc setTexture:_tfTexture atIndex:1];
-    [enc setTexture:texture atIndex:2];
-    [enc setBytes:&params length:sizeof(params) atIndex:0];
-    [enc setBytes:&backgroundColor length:sizeof(backgroundColor) atIndex:1];
-    [enc setBuffer:brickEmpty offset:0 atIndex:2];
-    [enc setBuffer:brickRange offset:0 atIndex:3];
-    [self bindGeometryToEncoder:enc];   // embedded objects (2026-11-14)
-    [self bindBlendToEncoder:enc];      // fused scan (2026-11-24)
-    [enc dispatchThreadgroups:MTLSizeMake((width + 7) / 8, (height + 7) / 8, 1)
-        threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
-    [enc endEncoding];
+    std::unique_ptr<bkgpu::CommandList> list = bkgpu::BKGPUMetalCommandList(*_gpu, commandBuffer);
+    std::vector<std::unique_ptr<bkgpu::Texture>> keepTextures;
+    std::vector<std::unique_ptr<bkgpu::Buffer>> keepBuffers;
+    bkrender::RaycastInputs in = [self inputsKeeping:keepTextures];
+    [self prepareSkippingForParams:&params list:*list inputs:in keep:keepBuffers];
+    keepTextures.push_back(bkgpu::BKGPUMetalWrapTexture(*_gpu, texture));
+    bkgpu::Texture *target = keepTextures.back().get();
+    const float background[4] = { backgroundColor.x, backgroundColor.y, backgroundColor.z, backgroundColor.w };
+    if (!in.volume || !target || _pass->encodeRaycastToTexture(*list, params, in, *target, background) != bkgpu::Status::Ok) {
+        if (error) *error = BKRendererError(16, @"The GPU could not encode the image.");
+        return NO;
+    }
     return YES;
 }
 

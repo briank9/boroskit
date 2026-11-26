@@ -1,0 +1,15 @@
+// BorosKitGPUVulkan: empty-space skipping step 2 (bk_classify_bricks) - thin GLSL entry point; body in
+// BKRaycastShaderBodies.h (shared with Metal). Original BorosKit code; no third-party code. 2026-11-26, "vulkan-engine".
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "bk_raycast_common.glsl"
+layout(std430, set = 0, binding = 0) readonly buffer BKBrickRange { uint brickRange[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BKAlphaCount { uint alphaCount[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer BKBrickEmpty { uint brickEmpty[]; };
+layout(std430, set = 0, binding = 3) readonly buffer BKRenderParamsBlock { BK_RENDER_PARAMS_FIELDS } p;
+BK_RAYCAST_HELPER_BODIES
+void main()
+{
+    uvec3 gid = gl_GlobalInvocationID;
+    BK_CLASSIFY_BRICKS_BODY
+}

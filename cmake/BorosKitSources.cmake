@@ -66,6 +66,7 @@ set(BOROSKIT_CORE_C_SOURCES
 
 set(BOROSKIT_CORE_CXX_SOURCES
     Sources/BorosKitMeshRender/BKMeshPass.cpp     # 2026-11-26: mesh drawing on the shared GPU interface (phase 2)
+    Sources/BorosKitRender/BKRaycastPass.cpp      # 2026-11-26: volume ray caster on the shared GPU interface (7.1 #4b)
     Sources/BorosKitSurface/BKSurfacePass.cpp     # 2026-11-26: surface extraction on the shared GPU interface (7.1 step 3)
     Sources/BorosKitMesh/BKMeshProcessingCore.cpp
     Sources/BorosKitMesh/BKSceneExportCore.cpp
@@ -119,4 +120,8 @@ set(BOROSKIT_GPU_VULKAN_SHADERS
     Sources/BorosKitGPUVulkan/Shaders/bk_surface_blur.comp
     Sources/BorosKitGPUVulkan/Shaders/bk_surface_classify.comp
     Sources/BorosKitGPUVulkan/Shaders/bk_surface_emit.comp
+    # 2026-11-26 (7.1 #4b): the volume ray caster (shared bodies BKRaycastShaderBodies.h; BKRaycastPass)
+    Sources/BorosKitGPUVulkan/Shaders/bk_raycast.comp
+    Sources/BorosKitGPUVulkan/Shaders/bk_brick_ranges.comp
+    Sources/BorosKitGPUVulkan/Shaders/bk_classify_bricks.comp
 )

@@ -30,8 +30,10 @@
 // 2026-11-25 (vulkan-engine M2): plain C now. bk_float4 and BK_MAX_CLIP_PLANES come from BorosKitVec's
 // BKGPUTypes.h instead of Apple <simd/simd.h> + BKClipPlanes.h (which pulled in the LGPL N3Geometry.h).
 // With clang bk_float4 is the same type as simd_float4, so the Objective-C glue is unchanged.
+#ifndef BK_GLSL   // (2026-11-26: GLSL includes this header for the field list; its prelude defines the types)
 #include <stdint.h>
 #include "BKGPUTypes.h"   // bk_float4 (16 bytes / 16-byte alignment in C, Metal and std430), BK_MAX_CLIP_PLANES
+#endif
 
 // Field list (order matters: 16-byte vectors first, then 4-byte scalars, so there is
 // no hidden padding that one compiler might lay out differently from the other).
@@ -109,6 +111,7 @@
 // the "is this brick see-through?" test reads the table exactly as the ray does).
 #define BK_TRANSFER_FUNCTION_ENTRIES 4096
 
+#ifndef BK_GLSL
 typedef struct BKRenderParams {
     BK_RENDER_PARAMS_FIELDS
 } BKRenderParams;
@@ -147,9 +150,13 @@ BK_GPU_ASSERT_OFFSET(BKRenderParams, useBlend, 564);
 BK_GPU_ASSERT_OFFSET(BKRenderParams, colorUsesTable, 580);
 BK_GPU_ASSERT_OFFSET(BKRenderParams, reserved1, 588);
 
+#endif   // !BK_GLSL
+
 // Turns the field list above into a string literal for the shader source.
 // Two levels are needed so the macro is expanded before it is stringified.
+#ifndef BK_GLSL
 #define BK_STRINGIFY_(...) #__VA_ARGS__
 #define BK_STRINGIFY(...) BK_STRINGIFY_(__VA_ARGS__)
+#endif
 
 #endif

@@ -65,7 +65,9 @@ let package = Package(
         ),
         .target(
             name: "BorosKitRender",
-            dependencies: ["BorosKitCore", "BorosKitVec"],
+            // GPU (2026-11-26, Vulkan plan 7.1 #4b): BKRaycastPass runs on the shared GPU interface (BKVolumeRenderer
+            // is its Metal adapter). BorosKitGPU therefore no longer depends on BorosKitRender (no cycle).
+            dependencies: ["BorosKitCore", "BorosKitVec", "BorosKitGPU"],
             path: "Sources/BorosKitRender",
             publicHeadersPath: "include",
             cSettings: [
@@ -158,7 +160,7 @@ let package = Package(
         // never needs the Vulkan SDK. Render: BKMetalDevice (preferred GPU, shader compile options).
         .target(
             name: "BorosKitGPU",
-            dependencies: ["BorosKitRender", "BorosKitVec"],
+            dependencies: ["BorosKitVec"],   // 2026-11-26: no longer BorosKitRender (it now depends on this target)
             path: "Sources/BorosKitGPU",
             publicHeadersPath: "include",
             cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],

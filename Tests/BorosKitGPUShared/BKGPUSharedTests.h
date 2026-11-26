@@ -62,6 +62,22 @@ int TestGoldenFeatures(boroskit::gpu::Device &device, const char *referencesDir,
 // resolution cases, with the double-precision CPU reference BKSurfaceReferenceExtract. Prints exact differences.
 int TestSurfacePass(boroskit::gpu::Device &device, const char *referencesDir, const char *label, bool strict);
 
+// What (2026-11-26, Vulkan plan 7.1 #4c): the eight golden volume cases (composite ortho / perspective / clipped,
+// MIP / MinIP / average slabs, thin oblique MPR, perspective MIP) through BKRaycastPass on this device, with the
+// parameter block from BKRenderParamsFill (portable normalisation) and the same scan storage, tables, skipping and
+// defaults as the golden producer. RenderRaycastCases returns the pictures (for live cross-backend comparisons);
+// TestRaycastPass compares them with the recorded Metal references (golden tolerances) with hardware AND manual
+// filtering, printing exact numbers, and writes them to outDir when given.
+struct RaycastCaseOutput {
+    std::string name;
+    uint32_t width = 0, height = 0;
+    int32_t mode = 0;
+    std::vector<uint8_t> rgba;
+    std::vector<float> values;
+};
+bool RenderRaycastCases(boroskit::gpu::Device &device, bool manualFiltering, std::vector<RaycastCaseOutput> *out);
+int TestRaycastPass(boroskit::gpu::Device &device, const char *referencesDir, const char *outDir, const char *label);
+
 }  // namespace bkshared
 
 #endif

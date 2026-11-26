@@ -51,6 +51,7 @@ int main(int argc, char **argv)
         failures += bkshared::TestGoldenMeshes(*device, refs.c_str(), outDir.c_str(), "vulkan", false);
         failures += bkshared::TestGoldenFeatures(*device, refs.c_str(), outDir.c_str(), "vulkan", false, false);   // 2026-11-26
         failures += bkshared::TestSurfacePass(*device, refs.c_str(), "vulkan", false);   // 2026-11-26: SurfacePass
+        failures += bkshared::TestRaycastPass(*device, refs.c_str(), outDir.c_str(), "vulkan");   // 2026-11-26: RaycastPass
     }
     for (uint32_t i = 0; i < kBKGoldenMeshRenderCaseCount; i++) {
         std::string name = kBKGoldenMeshRenderCases[i].name;

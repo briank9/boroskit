@@ -21,6 +21,13 @@
 
 #import <Foundation/Foundation.h>
 #import "BKShaderTypes.h"
+#import "BKRaycastShaderBodies.h"   // 2026-11-26: the ray caster, shared with the Vulkan GLSL kernels (option C)
+
+// The shared text in source order (helpers, grey trace, colour / fusion helpers and trace, embedded objects).
+#define BK_RAYCAST_SHARED_TEXT \
+    BK_STRINGIFY(BK_RAYCAST_HELPER_BODIES) "\n" BK_STRINGIFY(BK_RAYCAST_TRACE_BODY) "\n" \
+    BK_STRINGIFY(BK_RAYCAST_COLOR_BODIES) "\n" BK_STRINGIFY(BK_RAYCAST_TRACE_EXT_BODY) "\n" \
+    BK_STRINGIFY(BK_RAYCAST_GEOMETRY_BODY) "\n"
 
 // Returns the full shader source: a small prelude, the shared parameter struct (from
 // BKShaderTypes.h, so CPU and GPU can never disagree), and the kernels.
@@ -35,6 +42,41 @@ extern "C" NSString *BKVolumeShaderSource(void)
 #include <metal_stdlib>
 using namespace metal;
 typedef float4   bk_float4;
+// 2026-11-26: the shared-subset names of BKRaycastShaderBodies.h, in Metal (GLSL: bk_raycast_common.glsl).
+#define bk_float2 float2
+#define bk_float3 float3
+#define bk_int3 int3
+#define bk_uint2 uint2
+#define bk_uint3 uint3
+#define bk_uint4 uint4
+#define bk_float3x3 float3x3
+#define bk_texture2d texture2d<float>
+#define bk_texture3d texture3d<float>
+#define bk_sampler sampler
+#define BK_TEX2_READ(t, c) (t).read(c)
+#define BK_TEX3_READ(t, c) (t).read(c)
+#define BK_TEX2_SAMPLE(t, s, c) (t).sample(s, c)
+#define BK_TEX3_SAMPLE(t, s, c) (t).sample(s, c)
+#define BK_TEX2_WIDTH(t) (t).get_width()
+#define BK_TEX2_HEIGHT(t) (t).get_height()
+#define BK_INF INFINITY
+#define bk_fabs fabs
+#define bk_rint rint
+#define bk_all_ge(a, b) all((a) >= (b))
+#define bk_all_le(a, b) all((a) <= (b))
+#define bk_any_ge(a, b) any((a) >= (b))
+#define BK_FN static
+#define BK_OUT(T, n) thread T &n
+#define BK_INOUT(T, n) thread T &n
+#define BK_P_PARAM , constant BKRenderParams &p
+#define BK_P_ARG , p
+#define BK_P_ONLY_PARAM constant BKRenderParams &p
+#define BK_P_ONLY_ARG p
+#define BK_P_PARAM_FIRST constant BKRenderParams &p,
+#define BK_P_ARG_FIRST p,
+#define BK_BRICK_PARAM , device const uint *brickEmpty, device const uint *brickRange
+#define BK_BRICK_ARG , brickEmpty, brickRange
+#define BK_TRACE_SAMPLERS constexpr sampler linearSampler(coord::normalized, filter::linear, address::clamp_to_edge); constexpr sampler tfSampler(coord::normalized, filter::linear, address::clamp_to_edge);
 )METAL";
 
         const char *params = "struct BKRenderParams { " BK_STRINGIFY(BK_RENDER_PARAMS_FIELDS) " };\n"
@@ -51,766 +93,11 @@ constant int BKModeMinIP     = 2;
 constant int BKModeAverage   = 3;
 constant int BKProjPerspective = 1;
 
-// The parameter block stores every 3D quantity in a float4 (std430-friendly, see
-// BKShaderTypes.h); these two helpers rebuild the 3x3 matrix and read .xyz in one place.
-static float3x3 bk_patient_to_voxel(constant BKRenderParams &p)
-{
-    return float3x3(p.patientToVoxelColumns[0].xyz, p.patientToVoxelColumns[1].xyz, p.patientToVoxelColumns[2].xyz);
-}
-
-// Reads the real (CT) value at a position given in voxel index coordinates, with
-// hardware trilinear interpolation. Voxel centres sit at whole numbers, texel centres
-// at (i + 0.5) / size, hence the +0.5.
-// PORTING NOTE: linear filtering of R16_UNORM 3D images is an OPTIONAL Vulkan format
-// feature (VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT). Where it is missing, set
-// p.manualFiltering = 1: the 8 neighbouring voxels are read exactly and blended in 32-bit
-// float. Same clamp-to-edge rule as the hardware path. (The hardware filter on some GPUs
-// uses fewer bits for the blend weights, so the two paths can differ very slightly.)
-static float bk_sample(texture3d<float> volume, sampler s, float3 voxel, constant BKRenderParams &p)
-{
-    if (p.manualFiltering != 0) {
-        float3 last = p.volumeSize.xyz - 1.0f;
-        float3 v = clamp(voxel, float3(0.0f), last);
-        float3 base = floor(v);
-        float3 f = v - base;
-        uint3 a = uint3(base);
-        uint3 b = uint3(min(base + 1.0f, last));
-        float c000 = volume.read(uint3(a.x, a.y, a.z)).r, c100 = volume.read(uint3(b.x, a.y, a.z)).r;
-        float c010 = volume.read(uint3(a.x, b.y, a.z)).r, c110 = volume.read(uint3(b.x, b.y, a.z)).r;
-        float c001 = volume.read(uint3(a.x, a.y, b.z)).r, c101 = volume.read(uint3(b.x, a.y, b.z)).r;
-        float c011 = volume.read(uint3(a.x, b.y, b.z)).r, c111 = volume.read(uint3(b.x, b.y, b.z)).r;
-        float c0 = mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y);
-        float c1 = mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y);
-        return mix(c0, c1, f.z) * p.valueScale + p.valueOffset;
-    }
-    float3 tc = (voxel + 0.5f) / p.volumeSize.xyz;
-    return volume.sample(s, tc).r * p.valueScale + p.valueOffset;
-}
-
-// The colour/opacity of a value from the 4096-entry table, blended between the two nearest
-// entries. PORTING NOTE: linear filtering of 32-bit float textures is optional in Vulkan
-// (and on some iPad GPUs: MTLDevice.supports32BitFloatFiltering); p.manualFiltering = 1
-// does the blend by hand with two exact reads, same position rule as the hardware:
-// texel position = x * entries - 0.5, clamped to the first/last entry.
-static float4 bk_transfer(texture2d<float> transferFn, sampler s, float x, constant BKRenderParams &p)
-{
-    if (p.manualFiltering != 0) {
-        float entries = (float)BKTransferFunctionEntries;
-        float t = clamp(x * entries - 0.5f, 0.0f, entries - 1.0f);
-        float i0 = floor(t);
-        float i1 = min(i0 + 1.0f, entries - 1.0f);
-        float4 c0 = transferFn.read(uint2((uint)i0, 0));
-        float4 c1 = transferFn.read(uint2((uint)i1, 0));
-        return mix(c0, c1, t - i0);
-    }
-    return transferFn.sample(s, float2(x, 0.5f));
-}
-
-// Surface normal for lighting: central differences of the value in voxel space,
-// converted to patient space (grad_patient = A^T * grad_voxel, A = patient->voxel),
-// so anisotropic or tilted voxels still light correctly.
-static float3 bk_gradient(texture3d<float> volume, sampler s, float3 v, constant BKRenderParams &p)
-{
-    float3 g;
-    g.x = bk_sample(volume, s, v + float3(1,0,0), p) - bk_sample(volume, s, v - float3(1,0,0), p);
-    g.y = bk_sample(volume, s, v + float3(0,1,0), p) - bk_sample(volume, s, v - float3(0,1,0), p);
-    g.z = bk_sample(volume, s, v + float3(0,0,1), p) - bk_sample(volume, s, v - float3(0,0,1), p);
-    return transpose(bk_patient_to_voxel(p)) * (0.5f * g);
-}
-
-// Packs a 0..1 colour into 8-bit RGBA inside one 32-bit word (r in the lowest byte, so
-// the bytes in memory are r, g, b, a). Why a uint and not uchar4: GPU buffers here hold
-// only 32-bit words, so a Vulkan device needs no optional 8-bit storage feature.
-static uint bk_pack(float4 c)
-{
-    uint4 q = uint4(clamp(c, 0.0f, 1.0f) * 255.0f + 0.5f);
-    return q.x | (q.y << 8) | (q.z << 16) | (q.w << 24);
-}
-
-// Per-brick value range, packed as (lowest | highest << 16) in one 32-bit word (raw
-// 16-bit stored steps). Same reason: only 32-bit words in GPU buffers.
-static uint2 bk_unpack_range(uint packed)
-{
-    return uint2(packed & 0xffffu, packed >> 16);
-}
-
-// ---- Empty-space skipping helpers -------------------------------------------------
-// See BK_BRICK_SIZE in BKShaderTypes.h for the idea. Brick b covers the voxel-space
-// positions b*BKBrickSize .. (b+1)*BKBrickSize. Its stored value range was measured
-// over one extra voxel on every side, so any sample within half a voxel of the brick
-// (which reads its 8 neighbouring voxels for interpolation) is covered by that range.
-
-// Which brick a voxel-space position lies in (clamped to the grid, so positions on
-// the very edge of the volume use the edge brick).
-static int3 bk_brick_of(float3 v, constant BKRenderParams &p)
-{
-    int3 last = int3(p.brickGrid.xyz) - 1;
-    return clamp(int3(floor(v * (1.0f / (float)BKBrickSize))), int3(0), last);
-}
-
-// Position of brick b in the flat per-brick lists (x fastest, then y, then z).
-static uint bk_brick_index(int3 b, constant BKRenderParams &p)
-{
-    uint3 g = uint3(p.brickGrid.xyz);
-    return ((uint)b.z * g.y + (uint)b.y) * g.x + (uint)b.x;
-}
-
-// What: the number of the first sample (on the ray's normal, unchanged sample grid)
-// that lies at or past the point where the ray leaves brick b.
-// Why: jumping straight to that sample skips the samples inside the brick but keeps
-// every later sample at exactly the position it would have had without skipping,
-// which is what keeps the picture identical. Always moves at least one sample on.
-static int bk_first_sample_after_brick(int3 b, float3 ov, float3 dv, float tLo, float step, int i, int n)
-{
-    float3 lo = float3(b * BKBrickSize);
-    float3 hi = lo + (float)BKBrickSize;
-    // Ray parameter where it crosses the far wall of the brick on each axis (a ray
-    // that does not move along an axis never leaves the brick through that axis).
-    float3 tWall;
-    for (int k = 0; k < 3; k++) {
-        if (dv[k] > 0.0f)      tWall[k] = (hi[k] - ov[k]) / dv[k];
-        else if (dv[k] < 0.0f) tWall[k] = (lo[k] - ov[k]) / dv[k];
-        else                   tWall[k] = INFINITY;
-    }
-    float tExit = min(tWall.x, min(tWall.y, tWall.z));
-    // Sample j sits at tLo + (j + 0.5) * step; we want the first j with t >= tExit.
-    float next = ceil((tExit - tLo) / step - 0.5f);
-    return (int)clamp(next, (float)(i + 1), (float)n);
-}
-
-// The result of tracing one ray: the full-precision value (projected CT value, or the
-// accumulated opacity in composite mode) and the colour (premultiplied by alpha).
-struct BKTraceResult {
-    float value;
-    float4 color;
-};
-
-// Traces the ray of output pixel `gid`. Shared by every kernel below, so the buffer
-// output (exports, tests) and the texture output (on-screen 3D view) can never differ.
-// Builds the ray in patient space, clips it to the volume/crop box (in voxel space; the
-// transform is affine so the ray parameter t is the same in both spaces), to the slab
-// and to the clipping plane, then marches through what is left.
-// brickEmpty / brickRange: the per-brick lists used for empty-space skipping (only
-// read when p.skipEmptySpace is 1).
-// geomT / geomColor: the embedded objects at this pixel (see bk_geometry_at): ray distance (mm,
-// same parameter t as this ray) of the nearest opaque object, +infinity if none, and their colour
-// premultiplied by opacity (0 = none). Without objects: INFINITY and float4(0).
-static BKTraceResult bk_trace(texture3d<float> volume, texture2d<float> transferFn,
-                              constant BKRenderParams &p, uint2 gid,
-                              device const uint *brickEmpty, device const uint *brickRange,
-                              float geomT, float4 geomColor)
-{
-    constexpr sampler linearSampler(coord::normalized, filter::linear, address::clamp_to_edge);
-    constexpr sampler tfSampler(coord::normalized, filter::linear, address::clamp_to_edge);
-
-    // Image-plane coordinates in -0.5..0.5, y up (row 0 is the top of the image).
-    float u = ((float)gid.x + 0.5f) / (float)p.width - 0.5f;
-    float w = 0.5f - ((float)gid.y + 0.5f) / (float)p.height;
-
-    float3 origin, dir;
-    float tLo, tHi;
-    if (p.projection == BKProjPerspective) {
-        origin = p.cameraPosition.xyz;
-        dir = normalize(p.cameraForward.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight));
-        tLo = 0.0f; tHi = INFINITY;
-    } else {
-        origin = p.cameraPosition.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight);
-        dir = p.cameraForward.xyz;
-        tLo = -INFINITY; tHi = INFINITY;
-    }
-
-    // Ray in voxel space.
-    float3x3 patientToVoxel = bk_patient_to_voxel(p);
-    float3 ov = patientToVoxel * origin + p.patientToVoxelTranslation.xyz;
-    float3 dv = patientToVoxel * dir;
-
-    // Slab-test against the box (standard ray/box intersection).
-    float3 inv = 1.0f / dv;
-    float3 boxMin = p.boxMin.xyz, boxMax = p.boxMax.xyz;
-    float3 t0 = (boxMin - ov) * inv;
-    float3 t1 = (boxMax - ov) * inv;
-    float3 tSmall = min(t0, t1), tBig = max(t0, t1);
-    // Axis-parallel rays: inside the box on that axis -> no constraint, outside -> miss.
-    for (int k = 0; k < 3; k++) {
-        if (dv[k] == 0.0f) {
-            bool inside = ov[k] >= boxMin[k] && ov[k] <= boxMax[k];
-            tSmall[k] = inside ? -INFINITY : INFINITY;
-            tBig[k]   = inside ?  INFINITY : -INFINITY;
-        }
-    }
-    tLo = max(tLo, max(tSmall.x, max(tSmall.y, tSmall.z)));
-    tHi = min(tHi, min(tBig.x, min(tBig.y, tBig.z)));
-
-    bool singlePlane = false;
-    // Embedded objects and the slab (2026-11-14): VTK cuts objects with the camera clipping
-    // range, i.e. the slab. An object whose nearest surface lies outside the slab is dropped.
-    // (Crop box / clip planes do NOT cut objects, as in VTK: they only crop the volume.)
-    float slabLo = -INFINITY, slabHi = INFINITY;
-    if (p.useSlab != 0) {
-        // Signed distance from the slab's centre plane along the ray: s(t) = s0 + t*dn.
-        float s0 = dot(origin - p.slabPoint.xyz, p.slabNormal.xyz);
-        float dn = dot(dir, p.slabNormal.xyz);
-        float halfThick = 0.5f * p.slabThickness;
-        if (p.slabThickness <= 0.0f) {
-            // Thin slice: exactly one sample where the ray crosses the plane.
-            if (fabs(dn) < 1e-6f) { tHi = -INFINITY; slabHi = -INFINITY; }
-            else { float t = -s0 / dn; tLo = max(tLo, t); tHi = min(tHi, t); singlePlane = true; slabLo = slabHi = t; }
-        } else if (fabs(dn) < 1e-6f) {
-            if (fabs(s0) > halfThick) { tHi = -INFINITY; slabHi = -INFINITY; }   // ray runs parallel, outside the slab
-        } else {
-            float ta = (-halfThick - s0) / dn, tb = (halfThick - s0) / dn;
-            tLo = max(tLo, min(ta, tb));
-            tHi = min(tHi, max(ta, tb));
-            slabLo = min(ta, tb); slabHi = max(ta, tb);
-        }
-    }
-
-    if (p.useClip != 0) {
-        // Clipping ("scissors") plane: keep only points with dot(x - clipPoint, n) <= 0,
-        // i.e. cut away the side the normal points to. s(t) = c0 + t*cn along the ray.
-        float c0 = dot(origin - p.clipPoint.xyz, p.clipNormal.xyz);
-        float cn = dot(dir, p.clipNormal.xyz);
-        if (fabs(cn) < 1e-6f) {
-            if (c0 > 0.0f) tHi = -INFINITY;               // ray runs parallel, on the cut side
-        } else if (cn > 0.0f) {
-            tHi = min(tHi, -c0 / cn);                    // ray moves into the cut side
-        } else {
-            tLo = max(tLo, -c0 / cn);                    // ray comes out of the cut side
-        }
-    }
-
-    // Extra clipping planes (e.g. the 6 faces of a rotated cropping box), same rule as the
-    // single plane above: cut where dot(n, x) + w > 0. What: shortens [tLo, tHi] to the part
-    // of the ray inside all planes. Why: the 3D window's crop box can be rotated, so an
-    // axis-aligned voxel box is not enough. Plain loop over a fixed-size array (maps 1:1 to
-    // a Vulkan/SPIR-V uniform buffer).
-    for (int i = 0; i < p.clipPlaneCount && i < BKMaxClipPlanes; i++) {
-        float3 n = p.clipPlanes[i].xyz;
-        float c0 = dot(origin, n) + p.clipPlanes[i].w;
-        float cn = dot(dir, n);
-        if (fabs(cn) < 1e-6f) {
-            if (c0 > 0.0f) tHi = -INFINITY;
-        } else if (cn > 0.0f) {
-            tHi = min(tHi, -c0 / cn);
-        } else {
-            tLo = max(tLo, -c0 / cn);
-        }
-    }
-
-    bool composite = (p.mode == BKModeComposite);
-    BKTraceResult r;
-
-    // Embedded objects (2026-11-14, e.g. the 3D window's 3D point balls): drop them outside the
-    // slab (see slabLo / slabHi above); a pixel with only see-through objects (no opaque distance)
-    // is dropped too while a slab is on, since it can't be placed. In 3D (composite) mode the ray
-    // then ends where the nearest opaque object starts, so bone in front hides the object and the
-    // object hides the bone behind it - the classic VTK picture (VTK's GPU ray caster does the same
-    // with the depth of its opaque geometry).
-    if (p.useGeometry != 0 && p.useSlab != 0 && !(geomT >= slabLo && geomT <= slabHi)) {
-        geomT = INFINITY;
-        geomColor = float4(0.0f);
-    }
-    if (composite && geomT < tHi) tHi = geomT;
-
-    if (!(tHi >= tLo) || isinf(tLo) || isinf(tHi)) {
-        // Ray misses the volume (or the slab), or an object lies in front of the volume:
-        // only the object (if any) is seen.
-        r.value = composite ? geomColor.a : p.outOfBoundsValue;
-        r.color = composite ? geomColor : float4(geomColor.rgb + (1.0f - geomColor.a) * float3(0.0f), 1.0f);
-        return r;
-    }
-
-    // Evenly spaced samples in the middle of n equal segments: always at least one,
-    // and the same positions whatever the camera distance.
-    int n = singlePlane ? 1 : max(1, (int)ceil((tHi - tLo) / p.stepSize));
-    float step = singlePlane ? 0.0f : (tHi - tLo) / (float)n;
-
-    // Skipping only makes sense with more than one sample (a single-plane slice has one).
-    bool skip = (p.skipEmptySpace != 0) && !singlePlane;
-    // The brick the current sample is in is worked out once, when the ray enters it,
-    // together with brickEnd = the first sample past it. Samples before brickEnd are in
-    // the same brick, so they need no lookup at all (keeps the per-sample cost tiny).
-    int brickEnd = 0;
-
-    if (composite) {
-        float3 color = float3(0.0f);
-        float alpha = 0.0f;
-        float3 light = -dir;  // head-light: the light sits at the viewer
-        // Opacity correction so the result does not depend on the sample spacing.
-        float exponent = (singlePlane ? p.stepSize : step) / p.opacityUnitDistance;
-        float tfRange = max(p.tfMax - p.tfMin, 1e-6f);
-        bool brickIsEmpty = false;
-        for (int i = 0; i < n && alpha < 0.99f; i++) {   // early ray termination
-            float t = tLo + ((float)i + 0.5f) * step;
-            float3 v = ov + t * dv;
-            if (skip) {
-                if (i >= brickEnd) {   // the ray has entered a new brick
-                    int3 b = bk_brick_of(v, p);
-                    brickEnd = bk_first_sample_after_brick(b, ov, dv, tLo, step, i, n);
-                    brickIsEmpty = brickEmpty[bk_brick_index(b, p)] != 0;
-                }
-                // Fully transparent brick: every sample in it would be thrown away by
-                // the "c.a <= 0" test below anyway, so jump to the first sample after it.
-                if (brickIsEmpty) {
-                    i = brickEnd - 1;  // the loop adds 1
-                    continue;
-                }
-            }
-            float value = bk_sample(volume, linearSampler, v, p);
-            float4 c = bk_transfer(transferFn, tfSampler, (value - p.tfMin) / tfRange, p);
-            if (c.a <= 0.0f) continue;
-            float a = 1.0f - pow(1.0f - min(c.a, 0.9999f), exponent);
-            float3 rgb = c.rgb;
-            if (p.shading != 0) {
-                // Phong lighting from the value gradient (the "surface" normal), with
-                // the light at the viewer: ambient + diffuse * cos + specular * cos^power.
-                float3 g = bk_gradient(volume, linearSampler, v, p);
-                float len = length(g);
-                if (len > 1e-3f) {
-                    float ndl = fabs(dot(g / len, light));
-                    rgb = rgb * (p.ambient + p.diffuse * ndl) + p.specular * pow(ndl, p.specularPower);
-                } else {
-                    rgb = rgb * (p.ambient + p.diffuse);  // flat region: no direction to light
-                }
-            }
-            color += (1.0f - alpha) * a * rgb;   // front-to-back compositing
-            alpha += (1.0f - alpha) * a;
-        }
-        // The embedded objects lie behind everything the ray passed (it stopped at them):
-        // laid under the volume's colour with the same front-to-back rule (colour premultiplied).
-        color += (1.0f - alpha) * geomColor.rgb;
-        alpha += (1.0f - alpha) * geomColor.a;
-        r.value = alpha;
-        r.color = float4(color, alpha);
-        return r;
-    }
-
-    // MIP / MinIP / Average.
-    float result = (p.mode == BKModeMIP) ? -INFINITY : (p.mode == BKModeMinIP ? INFINITY : 0.0f);
-    // MIP / MinIP may skip a brick whose values cannot beat the result found so far
-    // (MIP: its highest value is not above the current maximum; MinIP: its lowest is not
-    // below the current minimum). The average needs every sample, so it never skips.
-    bool skipProjection = skip && (p.mode == BKModeMIP || p.mode == BKModeMinIP);
-    float brickLow = 0.0f, brickHigh = 0.0f;
-    for (int i = 0; i < n; i++) {
-        float t = tLo + ((float)i + 0.5f) * step;
-        if (skipProjection) {
-            if (i >= brickEnd) {   // the ray has entered a new brick
-                int3 b = bk_brick_of(ov + t * dv, p);
-                brickEnd = bk_first_sample_after_brick(b, ov, dv, tLo, step, i, n);
-                // Stored range -> real values. One 16-bit step of margin on each side so
-                // that GPU rounding of an interpolated sample can never step outside it.
-                uint2 raw = bk_unpack_range(brickRange[bk_brick_index(b, p)]);
-                brickLow  = (max((float)raw.x - 1.0f, 0.0f) / 65535.0f) * p.valueScale + p.valueOffset;
-                brickHigh = (min((float)raw.y + 1.0f, 65535.0f) / 65535.0f) * p.valueScale + p.valueOffset;
-            }
-            bool cannotChange = (p.mode == BKModeMIP) ? (brickHigh <= result) : (brickLow >= result);
-            if (cannotChange) {
-                i = brickEnd - 1;  // the loop adds 1
-                continue;
-            }
-        }
-        float value = bk_sample(volume, linearSampler, ov + t * dv, p);
-        if (p.mode == BKModeMIP) result = max(result, value);
-        else if (p.mode == BKModeMinIP) result = min(result, value);
-        else result += value;
-    }
-    if (p.mode == BKModeAverage) result /= (float)n;
-
-    float gray = clamp((result - (p.windowCenter - 0.5f * p.windowWidth)) / max(p.windowWidth, 1e-6f), 0.0f, 1.0f);
-    r.value = result;
-    // MIP / MinIP / average have no depth: embedded objects are laid over the picture (as the
-    // overlay drew them before 2026-11-14). The value (export) is never changed by objects.
-    r.color = float4(geomColor.rgb + (1.0f - geomColor.a) * float3(gray), 1.0f);
-    return r;
-}
-
-// ---- Colour (RGB) scans and fusion (Boros 6, 2026-11-24, vr-colour-fusion) -------------------------
-// The rules are those of BKVolumeFusionCore.h; the C functions there are the CPU reference these GPU helpers mirror
-// line by line (bk_table = BKFusionTableLookup, bk_step_opacity = BKFusionStepOpacity, bk_color_step =
-// BKColorVoxelStep, bk_mix_steps = BKFusionMixSamples, bk_box_interval = BKFusionRayBoxInterval).
-// The plain grey path (bk_trace above) is untouched: these run only when p.colorVolume or p.useBlend is 1.
-// PORTING NOTE: everything here is core Vulkan: sampled 3D images (R16_UNORM / RGBA8_UNORM), a second table image,
-// plain loops; no subgroup operations, no optional formats beyond those bk_sample already documents.
-
-// All four channels of a 3D texture at voxel position `voxel` (voxel centres at whole numbers): the hardware filter,
-// or with manual filtering 8 exact reads blended in 32-bit float (same clamp-to-edge rule as bk_sample).
-static float4 bk_sample4(texture3d<float> volume, sampler s, float3 voxel, float3 size, int manual)
-{
-    if (manual != 0) {
-        float3 last = size - 1.0f;
-        float3 v = clamp(voxel, float3(0.0f), last);
-        float3 base = floor(v);
-        float3 f = v - base;
-        uint3 a = uint3(base);
-        uint3 b = uint3(min(base + 1.0f, last));
-        float4 c000 = volume.read(uint3(a.x, a.y, a.z)), c100 = volume.read(uint3(b.x, a.y, a.z));
-        float4 c010 = volume.read(uint3(a.x, b.y, a.z)), c110 = volume.read(uint3(b.x, b.y, a.z));
-        float4 c001 = volume.read(uint3(a.x, a.y, b.z)), c101 = volume.read(uint3(b.x, a.y, b.z));
-        float4 c011 = volume.read(uint3(a.x, b.y, b.z)), c111 = volume.read(uint3(b.x, b.y, b.z));
-        float4 c0 = mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y);
-        float4 c1 = mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y);
-        return mix(c0, c1, f.z);
-    }
-    return volume.sample(s, (voxel + 0.5f) / size);
-}
-
-// A table lookup for a value, the table spread over [lo, hi] (BKFusionTableLookup).
-static float4 bk_table(texture2d<float> fn, sampler s, float value, float lo, float hi, constant BKRenderParams &p)
-{
-    return bk_transfer(fn, s, (value - lo) / max(hi - lo, 1e-6f), p);
-}
-
-// One step's opacity from a table opacity (BKFusionStepOpacity).
-static float bk_step_opacity(float tableOpacity, float exponent)
-{
-    if (!(tableOpacity > 0.0f)) return 0.0f;
-    return 1.0f - pow(1.0f - min(tableOpacity, 0.9999f), exponent);
-}
-
-// One step of a colour scan (BKColorVoxelStep): rgb = channels 0..255; returns premultiplied RGB + opacity.
-static float4 bk_color_step(float3 rgb, texture2d<float> fn, sampler s, float lo, float hi, float exponent,
-                            int useTable, constant BKRenderParams &p)
-{
-    float3 premult = float3(0.0f);
-    float alpha = 0.0f;
-    for (int c = 0; c < 3; c++) {
-        float4 e = bk_table(fn, s, rgb[c], lo, hi, p);
-        float a = bk_step_opacity(e.a, exponent);
-        if (!(a > 0.0f)) continue;
-        float3 colour = float3(0.0f);
-        if (useTable != 0) colour = e.rgb;
-        else colour[c] = clamp(rgb[c] / 255.0f, 0.0f, 1.0f);
-        premult += a * colour;
-        alpha += a;
-    }
-    alpha = min(alpha, 1.0f);
-    return float4(min(premult, float3(alpha)), alpha);
-}
-
-// Two steps at the same spot mixed (BKFusionMixSamples).
-static float4 bk_mix_steps(float4 a, float4 b)
-{
-    if (!(b.a > 0.0f)) return (a.a > 0.0f) ? a : float4(0.0f);   // one side empty: the other unchanged
-    if (!(a.a > 0.0f)) return b;
-    float sum = a.a + b.a;
-    float alpha = 1.0f - (1.0f - a.a) * (1.0f - b.a);
-    return float4((a.rgb + b.rgb) * (alpha / sum), alpha);
-}
-
-// Inside a voxel box (with a tiny margin for rounding at the box's faces).
-static bool bk_inside(float3 v, float3 lo, float3 hi)
-{
-    return all(v >= lo - 1e-3f) && all(v <= hi + 1e-3f);
-}
-
-// Shortens [tLo, tHi] to the part of the ray ov + t * dv inside the voxel box [lo, hi] (BKFusionRayBoxInterval; the
-// same arithmetic as the box test inside bk_trace).
-static void bk_box_interval(float3 ov, float3 dv, float3 boxMin, float3 boxMax, thread float &tLo, thread float &tHi)
-{
-    float3 inv = 1.0f / dv;
-    float3 t0 = (boxMin - ov) * inv;
-    float3 t1 = (boxMax - ov) * inv;
-    float3 tSmall = min(t0, t1), tBig = max(t0, t1);
-    for (int k = 0; k < 3; k++) {
-        if (dv[k] == 0.0f) {
-            bool inside = ov[k] >= boxMin[k] && ov[k] <= boxMax[k];
-            tSmall[k] = inside ? -INFINITY : INFINITY;
-            tBig[k]   = inside ?  INFINITY : -INFINITY;
-        }
-    }
-    tLo = max(tLo, max(tSmall.x, max(tSmall.y, tSmall.z)));
-    tHi = min(tHi, min(tBig.x, min(tBig.y, tBig.z)));
-}
-
-// The head-light terms for a value gradient g: x = ambient + diffuse * cos, y = specular * cos^power (flat region:
-// ambient + diffuse, 0) - the same lighting as bk_trace's composite loop.
-static float2 bk_light_terms(float3 g, float3 light, constant BKRenderParams &p)
-{
-    float len = length(g);
-    if (len > 1e-3f) {
-        float ndl = fabs(dot(g / len, light));
-        return float2(p.ambient + p.diffuse * ndl, p.specular * pow(ndl, p.specularPower));
-    }
-    return float2(p.ambient + p.diffuse, 0.0f);
-}
-
-// A colour scan's surface normal for lighting: the gradient of its grey value (R + G + B) / 3 (central differences,
-// converted to patient space like bk_gradient).
-static float3 bk_gradient_rgb(texture3d<float> volume, sampler s, float3 v, constant BKRenderParams &p)
-{
-    float3 size = p.volumeSize.xyz;
-    int m = p.manualFiltering;
-    const float3 third = float3(1.0f / 3.0f);
-    float3 g;
-    g.x = dot(bk_sample4(volume, s, v + float3(1,0,0), size, m).rgb - bk_sample4(volume, s, v - float3(1,0,0), size, m).rgb, third);
-    g.y = dot(bk_sample4(volume, s, v + float3(0,1,0), size, m).rgb - bk_sample4(volume, s, v - float3(0,1,0), size, m).rgb, third);
-    g.z = dot(bk_sample4(volume, s, v + float3(0,0,1), size, m).rgb - bk_sample4(volume, s, v - float3(0,0,1), size, m).rgb, third);
-    return transpose(bk_patient_to_voxel(p)) * (0.5f * p.valueScale * g);
-}
-
-// One 3D-mode step of the FIRST scan (grey or colour) at voxel position v: premultiplied RGB + opacity, lit.
-static float4 bk_main_step(texture3d<float> volume, texture2d<float> transferFn, sampler vs, sampler ts, float3 v,
-                           float exponent, float3 light, constant BKRenderParams &p)
-{
-    if (p.colorVolume != 0) {
-        float3 rgb = bk_sample4(volume, vs, v, p.volumeSize.xyz, p.manualFiltering).rgb * p.valueScale + p.valueOffset;
-        float4 st = bk_color_step(rgb, transferFn, ts, p.tfMin, p.tfMax, exponent, p.colorUsesTable, p);
-        if (!(st.a > 0.0f)) return float4(0.0f);
-        if (p.shading != 0) {
-            float2 l = bk_light_terms(bk_gradient_rgb(volume, vs, v, p), light, p);
-            st.rgb = st.rgb * l.x + st.a * l.y;   // premultiplied form of rgb * light + specular
-        }
-        return st;
-    }
-    float value = bk_sample(volume, vs, v, p);
-    float4 c = bk_table(transferFn, ts, value, p.tfMin, p.tfMax, p);
-    float a = bk_step_opacity(c.a, exponent);
-    if (!(a > 0.0f)) return float4(0.0f);
-    float3 rgb = c.rgb;
-    if (p.shading != 0) {
-        float2 l = bk_light_terms(bk_gradient(volume, vs, v, p), light, p);
-        rgb = rgb * l.x + l.y;
-    }
-    return float4(a * rgb, a);
-}
-
-// One 3D-mode step of the FUSED scan at its voxel position vb: premultiplied RGB + opacity (not lit, as classic).
-static float4 bk_blend_step(texture3d<float> blendVolume, texture2d<float> blendFn, sampler vs, sampler ts, float3 vb,
-                            float exponent, constant BKRenderParams &p)
-{
-    float4 texel = bk_sample4(blendVolume, vs, vb, p.blendVolumeSize.xyz, p.manualFiltering);
-    if (p.blendColorVolume != 0)
-        return bk_color_step(texel.rgb * p.blendValueScale + p.blendValueOffset, blendFn, ts, p.blendTfMin, p.blendTfMax, exponent, 0, p);
-    float4 c = bk_table(blendFn, ts, texel.r * p.blendValueScale + p.blendValueOffset, p.blendTfMin, p.blendTfMax, p);
-    float a = bk_step_opacity(c.a, exponent);
-    return float4(a * c.rgb, a);
-}
-
-// What: the ray of output pixel `gid` for a colour first scan and / or with a fused scan (see the section comment).
-// Same camera, slab, clip, crop-plane and embedded-object rules as bk_trace. The ray covers the first scan's box AND
-// the fused scan's box (each scan only contributes where the ray is inside it), so a fused scan larger than the first
-// one still shows around it. Empty-space skipping is not used here (the bricks only describe the first, grey scan).
-// 3D: both scans sampled at the same points, mixed per step. MIP / MinIP / mean: the first scan's projection gives
-// the picture (grey window; colour scan: each channel windowed) and the value; the fused scan's own projection
-// (BKFusionProjection*) is laid over it through its table. The value output never includes the fused scan
-// (16-bit exports are the first scan's values, as classic).
-static BKTraceResult bk_trace_ext(texture3d<float> volume, texture2d<float> transferFn,
-                                  texture3d<float> blendVolume, texture2d<float> blendFn,
-                                  constant BKRenderParams &p, uint2 gid, float geomT, float4 geomColor)
-{
-    constexpr sampler linearSampler(coord::normalized, filter::linear, address::clamp_to_edge);
-    constexpr sampler tfSampler(coord::normalized, filter::linear, address::clamp_to_edge);
-
-    float u = ((float)gid.x + 0.5f) / (float)p.width - 0.5f;
-    float w = 0.5f - ((float)gid.y + 0.5f) / (float)p.height;
-    float3 origin, dir;
-    float tBase0, tBase1;
-    if (p.projection == BKProjPerspective) {
-        origin = p.cameraPosition.xyz;
-        dir = normalize(p.cameraForward.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight));
-        tBase0 = 0.0f; tBase1 = INFINITY;
-    } else {
-        origin = p.cameraPosition.xyz + p.cameraRight.xyz * (u * p.viewWidth) + p.cameraUp.xyz * (w * p.viewHeight);
-        dir = p.cameraForward.xyz;
-        tBase0 = -INFINITY; tBase1 = INFINITY;
-    }
-
-    // The first scan's part of the ray (voxel space).
-    float3x3 patientToVoxel = bk_patient_to_voxel(p);
-    float3 ov = patientToVoxel * origin + p.patientToVoxelTranslation.xyz;
-    float3 dv = patientToVoxel * dir;
-    float mLo = tBase0, mHi = tBase1;
-    bk_box_interval(ov, dv, p.boxMin.xyz, p.boxMax.xyz, mLo, mHi);
-    bool hasMain = (mHi >= mLo) && !isinf(mLo) && !isinf(mHi);
-
-    // The fused scan's part (its own voxel space; the transform is affine so t is the same parameter).
-    float3 ob = float3(0.0f), db = float3(0.0f);
-    float3 blendMax = p.blendVolumeSize.xyz - 1.0f;
-    bool hasBlend = false;
-    if (p.useBlend != 0) {
-        float3x3 toBlend = float3x3(p.blendPatientToVoxelColumns[0].xyz, p.blendPatientToVoxelColumns[1].xyz, p.blendPatientToVoxelColumns[2].xyz);
-        ob = toBlend * origin + p.blendPatientToVoxelTranslation.xyz;
-        db = toBlend * dir;
-        float bLo = tBase0, bHi = tBase1;
-        bk_box_interval(ob, db, float3(0.0f), blendMax, bLo, bHi);
-        hasBlend = (bHi >= bLo) && !isinf(bLo) && !isinf(bHi);
-        if (hasBlend && hasMain) { mLo = min(mLo, bLo); mHi = max(mHi, bHi); }
-        else if (hasBlend) { mLo = bLo; mHi = bHi; }
-    }
-    float tLo = mLo, tHi = mHi;
-    if (!hasMain && !hasBlend) { tLo = 0.0f; tHi = -INFINITY; }
-
-    // Slab, clipping plane and extra planes: the same rules as bk_trace (they cut both scans).
-    bool singlePlane = false;
-    float slabLo = -INFINITY, slabHi = INFINITY;
-    if (p.useSlab != 0) {
-        float s0 = dot(origin - p.slabPoint.xyz, p.slabNormal.xyz);
-        float dn = dot(dir, p.slabNormal.xyz);
-        float halfThick = 0.5f * p.slabThickness;
-        if (p.slabThickness <= 0.0f) {
-            if (fabs(dn) < 1e-6f) { tHi = -INFINITY; slabHi = -INFINITY; }
-            else { float t = -s0 / dn; tLo = max(tLo, t); tHi = min(tHi, t); singlePlane = true; slabLo = slabHi = t; }
-        } else if (fabs(dn) < 1e-6f) {
-            if (fabs(s0) > halfThick) { tHi = -INFINITY; slabHi = -INFINITY; }
-        } else {
-            float ta = (-halfThick - s0) / dn, tb = (halfThick - s0) / dn;
-            tLo = max(tLo, min(ta, tb));
-            tHi = min(tHi, max(ta, tb));
-            slabLo = min(ta, tb); slabHi = max(ta, tb);
-        }
-    }
-    if (p.useClip != 0) {
-        float c0 = dot(origin - p.clipPoint.xyz, p.clipNormal.xyz);
-        float cn = dot(dir, p.clipNormal.xyz);
-        if (fabs(cn) < 1e-6f) { if (c0 > 0.0f) tHi = -INFINITY; }
-        else if (cn > 0.0f) tHi = min(tHi, -c0 / cn);
-        else tLo = max(tLo, -c0 / cn);
-    }
-    for (int i = 0; i < p.clipPlaneCount && i < BKMaxClipPlanes; i++) {
-        float3 n = p.clipPlanes[i].xyz;
-        float c0 = dot(origin, n) + p.clipPlanes[i].w;
-        float cn = dot(dir, n);
-        if (fabs(cn) < 1e-6f) { if (c0 > 0.0f) tHi = -INFINITY; }
-        else if (cn > 0.0f) tHi = min(tHi, -c0 / cn);
-        else tLo = max(tLo, -c0 / cn);
-    }
-
-    bool composite = (p.mode == BKModeComposite);
-    BKTraceResult r;
-    if (p.useGeometry != 0 && p.useSlab != 0 && !(geomT >= slabLo && geomT <= slabHi)) {
-        geomT = INFINITY;
-        geomColor = float4(0.0f);
-    }
-    if (composite && geomT < tHi) tHi = geomT;
-    if (!(tHi >= tLo) || isinf(tLo) || isinf(tHi)) {
-        r.value = composite ? geomColor.a : p.outOfBoundsValue;
-        r.color = composite ? geomColor : float4(geomColor.rgb + (1.0f - geomColor.a) * float3(0.0f), 1.0f);
-        return r;
-    }
-    int n = singlePlane ? 1 : max(1, (int)ceil((tHi - tLo) / p.stepSize));
-    float step = singlePlane ? 0.0f : (tHi - tLo) / (float)n;
-
-    if (composite) {
-        float3 color = float3(0.0f);
-        float alpha = 0.0f;
-        float3 light = -dir;
-        float len = singlePlane ? p.stepSize : step;
-        float expMain = len / p.opacityUnitDistance;
-        float expBlend = len / max(p.blendOpacityUnitDistance, 1e-6f);
-        for (int i = 0; i < n && alpha < 0.99f; i++) {
-            float t = tLo + ((float)i + 0.5f) * step;
-            float4 s = float4(0.0f);
-            float3 v = ov + t * dv;
-            if (hasMain && bk_inside(v, p.boxMin.xyz, p.boxMax.xyz))
-                s = bk_main_step(volume, transferFn, linearSampler, tfSampler, v, expMain, light, p);
-            if (hasBlend) {
-                float3 vb = ob + t * db;
-                if (bk_inside(vb, float3(0.0f), blendMax))
-                    s = bk_mix_steps(s, bk_blend_step(blendVolume, blendFn, linearSampler, tfSampler, vb, expBlend, p));
-            }
-            if (!(s.a > 0.0f)) continue;
-            color += (1.0f - alpha) * s.rgb;   // front-to-back compositing (premultiplied)
-            alpha += (1.0f - alpha) * s.a;
-        }
-        color += (1.0f - alpha) * geomColor.rgb;
-        alpha += (1.0f - alpha) * geomColor.a;
-        r.value = alpha;
-        r.color = float4(color, alpha);
-        return r;
-    }
-
-    // MIP / MinIP / mean.
-    bool isMax = (p.mode == BKModeMIP), isMin = (p.mode == BKModeMinIP);
-    float start = isMax ? -INFINITY : (isMin ? INFINITY : 0.0f);
-    float result = start;
-    float3 resultRGB = float3(start);
-    int mainCount = 0;
-    bool blendMaxMode = (p.blendProjection == 1);
-    float bres = blendMaxMode ? -INFINITY : INFINITY;
-    float3 bresRGB = float3(bres);
-    int blendCount = 0;
-    for (int i = 0; i < n; i++) {
-        float t = tLo + ((float)i + 0.5f) * step;
-        float3 v = ov + t * dv;
-        if (hasMain && bk_inside(v, p.boxMin.xyz, p.boxMax.xyz)) {
-            if (p.colorVolume != 0) {
-                float3 rgb = bk_sample4(volume, linearSampler, v, p.volumeSize.xyz, p.manualFiltering).rgb * p.valueScale + p.valueOffset;
-                if (isMax) resultRGB = max(resultRGB, rgb);
-                else if (isMin) resultRGB = min(resultRGB, rgb);
-                else resultRGB += rgb;
-            } else {
-                float value = bk_sample(volume, linearSampler, v, p);
-                if (isMax) result = max(result, value);
-                else if (isMin) result = min(result, value);
-                else result += value;
-            }
-            mainCount++;
-        }
-        if (hasBlend) {
-            float3 vb = ob + t * db;
-            if (bk_inside(vb, float3(0.0f), blendMax)) {
-                float4 texel = bk_sample4(blendVolume, linearSampler, vb, p.blendVolumeSize.xyz, p.manualFiltering);
-                if (p.blendColorVolume != 0) {
-                    float3 rgb = texel.rgb * p.blendValueScale + p.blendValueOffset;
-                    bresRGB = blendMaxMode ? max(bresRGB, rgb) : min(bresRGB, rgb);
-                } else {
-                    float value = texel.r * p.blendValueScale + p.blendValueOffset;
-                    bres = blendMaxMode ? max(bres, value) : min(bres, value);
-                }
-                blendCount++;
-            }
-        }
-    }
-    float3 under = float3(0.0f);
-    float lowEnd = p.windowCenter - 0.5f * p.windowWidth, width = max(p.windowWidth, 1e-6f);
-    if (mainCount == 0) {
-        r.value = p.outOfBoundsValue;
-    } else if (p.colorVolume != 0) {
-        if (!isMax && !isMin) resultRGB /= (float)mainCount;
-        r.value = (resultRGB.r + resultRGB.g + resultRGB.b) / 3.0f;
-        under = clamp((resultRGB - lowEnd) / width, 0.0f, 1.0f);
-    } else {
-        if (!isMax && !isMin) result /= (float)mainCount;
-        r.value = result;
-        under = float3(clamp((result - lowEnd) / width, 0.0f, 1.0f));
-    }
-    if (blendCount > 0) {
-        float4 over;
-        if (p.blendColorVolume != 0) over = bk_color_step(bresRGB, blendFn, tfSampler, p.blendTfMin, p.blendTfMax, 1.0f, 0, p);
-        else {
-            float4 c = bk_table(blendFn, tfSampler, bres, p.blendTfMin, p.blendTfMax, p);
-            float a = bk_step_opacity(c.a, 1.0f);
-            over = float4(a * c.rgb, a);
-        }
-        under = over.rgb + (1.0f - over.a) * under;   // BKFusionOverlay
-    }
-    r.color = float4(geomColor.rgb + (1.0f - geomColor.a) * under, 1.0f);
-    return r;
-}
-
-// What: the embedded objects under output pixel `gid` (see bk_trace): their ray distance (mm)
-// and premultiplied colour, read from the geometry pictures. Those may be bigger than the output
-// (e.g. full size while the volume is ray-cast at reduced size during a drag): the texel under
-// the output pixel's centre is used. p.useGeometry == 0: no objects (INFINITY, 0).
-// PORTING NOTE: plain image reads (no sampler), R32F + RGBA8/RGBA16F: core Vulkan formats.
-static void bk_geometry_at(constant BKRenderParams &p, uint2 gid,
-                           texture2d<float> geometryColor, texture2d<float> geometryDistance,
-                           thread float &geomT, thread float4 &geomColor)
-{
-    geomT = INFINITY;
-    geomColor = float4(0.0f);
-    if (p.useGeometry == 0) return;
-    uint gw = geometryDistance.get_width(), gh = geometryDistance.get_height();
-    if (gw == 0 || gh == 0) return;
-    uint gx = min((uint)(((float)gid.x + 0.5f) * (float)gw / (float)p.width), gw - 1);
-    uint gy = min((uint)(((float)gid.y + 0.5f) * (float)gh / (float)p.height), gh - 1);
-    geomT = geometryDistance.read(uint2(gx, gy)).r;
-    geomColor = geometryColor.read(uint2(gx, gy));
-}
-
+// 2026-11-26 (agent "vulkan-engine", Vulkan plan 7.1 #4b): the helpers and traces now live in
+// BKRaycastShaderBodies.h, shared with the Vulkan GLSL kernels; pasted in below.
+)METAL" BK_RAYCAST_SHARED_TEXT R"METAL(
 // One thread = one output pixel, written to CPU-readable buffers (8-bit RGBA + float).
-// Used by -renderWithWidth:height:error: (exports, MPR slabs, tests).
+// Used by -renderWithWidth:height:error: (exports, MPR slabs, tests). Body: BK_RAYCAST_KERNEL_BODY (shared).
 kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
                        texture2d<float> transferFn   [[texture(1)]],
                        constant BKRenderParams &p    [[buffer(0)]],
@@ -824,20 +111,13 @@ kernel void bk_raycast(texture3d<float> volume       [[texture(0)]],
                        texture2d<float> blendFn          [[texture(6)]],  /* fused scan's colour / opacity table */
                        uint2 gid                     [[thread_position_in_grid]])
 {
-    if (gid.x >= p.width || gid.y >= p.height) return;
-    uint index = gid.y * p.width + gid.x;
-    float geomT; float4 geomColor;
-    bk_geometry_at(p, gid, geometryColor, geometryDistance, geomT, geomColor);
-    BKTraceResult r = (p.colorVolume != 0 || p.useBlend != 0)
-        ? bk_trace_ext(volume, transferFn, blendVolume, blendFn, p, gid, geomT, geomColor)   /* colour / fusion (2026-11-24) */
-        : bk_trace(volume, transferFn, p, gid, brickEmpty, brickRange, geomT, geomColor);
-    valueOut[index] = r.value;
-    if (p.valuesOnly == 0) colorOut[index] = bk_pack(r.color);   /* slabs: values only (less memory traffic) */
+)METAL" BK_STRINGIFY(BK_RAYCAST_KERNEL_BODY) R"METAL(
 }
 
 // One thread = one output pixel, written straight into a GPU texture (e.g. the screen's
 // drawable) so the 3D view never copies pixels back to the CPU. The colour is laid over
-// an opaque background colour, so the result can be shown as is.
+// an opaque background colour, so the result can be shown as is. (Metal-only entry point: the
+// Vulkan on-screen path is planned as storage image + copy, audit finding 5.)
 kernel void bk_raycast_texture(texture3d<float> volume                      [[texture(0)]],
                                texture2d<float> transferFn                  [[texture(1)]],
                                texture2d<float, access::write> target       [[texture(2)]],
@@ -884,21 +164,8 @@ kernel void bk_brick_ranges(texture3d<float> volume      [[texture(0)]],
                             constant uint4 &grid4        [[buffer(1)]],   /* xyz = brick counts (uint4: no 3-vectors in GPU buffers) */
                             uint3 gid                    [[thread_position_in_grid]])
 {
-    uint3 grid = grid4.xyz;
-    if (any(gid >= grid)) return;
-    int3 last = int3(volume.get_width(), volume.get_height(), volume.get_depth()) - 1;
-    int3 lo = max(int3(gid) * BKBrickSize - 1, int3(0));
-    int3 hi = min(int3(gid) * BKBrickSize + BKBrickSize + 1, last);
-    float mn = 1.0f, mx = 0.0f;
-    for (int z = lo.z; z <= hi.z; z++)
-        for (int y = lo.y; y <= hi.y; y++)
-            for (int x = lo.x; x <= hi.x; x++) {
-                float v = volume.read(uint3(x, y, z)).r;
-                mn = min(mn, v);
-                mx = max(mx, v);
-            }
-    uint index = (gid.z * grid.y + gid.y) * grid.x + gid.x;
-    brickRange[index] = uint(rint(mn * 65535.0f)) | (uint(rint(mx * 65535.0f)) << 16);
+    int3 volumeSize3 = int3(volume.get_width(), volume.get_height(), volume.get_depth());
+)METAL" BK_STRINGIFY(BK_BRICK_RANGES_BODY) R"METAL(
 }
 
 // Empty-space skipping, step 2 (whenever the colour/opacity rule changes): one thread
@@ -914,25 +181,7 @@ kernel void bk_classify_bricks(device const uint *brickRange     [[buffer(0)]],
                                constant BKRenderParams &p       [[buffer(3)]],
                                uint3 gid                        [[thread_position_in_grid]])
 {
-    uint3 g = uint3(p.brickGrid.xyz);
-    if (any(gid >= g)) return;
-    uint index = (gid.z * g.y + gid.y) * g.x + gid.x;
-    uint2 raw = bk_unpack_range(brickRange[index]);
-    float tfRange = max(p.tfMax - p.tfMin, 1e-6f);
-    float lowValue  = ((float)raw.x / 65535.0f) * p.valueScale + p.valueOffset;
-    float highValue = ((float)raw.y / 65535.0f) * p.valueScale + p.valueOffset;
-    // Same position formula as the hardware lookup: texel = x * entries - 0.5; it blends
-    // entries floor(texel) and floor(texel) + 1.
-    float entries = (float)BKTransferFunctionEntries;
-    float texLow  = (lowValue  - p.tfMin) / tfRange * entries - 0.5f;
-    float texHigh = (highValue - p.tfMin) / tfRange * entries - 0.5f;
-    // Clamp before converting to whole numbers (huge values would overflow).
-    int first = (int)floor(clamp(texLow,  -4.0f, entries + 4.0f)) - 1;
-    int last  = (int)floor(clamp(texHigh, -4.0f, entries + 4.0f)) + 2;
-    first = clamp(first, 0, BKTransferFunctionEntries - 1);
-    last  = clamp(last,  0, BKTransferFunctionEntries - 1);
-    bool empty = (alphaCount[last + 1] - alphaCount[first]) == 0;
-    brickEmpty[index] = empty ? 1 : 0;
+)METAL" BK_STRINGIFY(BK_CLASSIFY_BRICKS_BODY) R"METAL(
 }
 
 // Test helper: reports the size of the parameter block as the GPU sees it, so a unit

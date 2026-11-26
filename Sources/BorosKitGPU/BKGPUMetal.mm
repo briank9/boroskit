@@ -7,7 +7,6 @@
 // same pixels (strict golden). Compute pipelines + dispatch since 2026-11-26 (phase 3/4).
 
 #import "BKGPUMetal.h"
-#import "BKMetalDevice.h"
 
 #include <map>
 #include <string>
@@ -552,7 +551,9 @@ private:
 Status makeMetalDevice(id<MTLDevice> device, std::unique_ptr<Device> *out)
 {
     if (!out) return Status::InvalidArgument;
-    id<MTLDevice> d = device ?: [BKMetalDevice preferredDevice];
+    // 2026-11-26: nil = the system default GPU (BorosKitGPU no longer depends on BorosKitRender's BKMetalDevice; every
+    // BorosKit class passes its own, user-chosen device).
+    id<MTLDevice> d = device ?: MTLCreateSystemDefaultDevice();
     if (!d) return Status::NotFound;
     out->reset(new MetalDevice(d));
     return Status::Ok;

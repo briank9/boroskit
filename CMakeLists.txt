@@ -165,6 +165,7 @@ if(BK_VULKAN_INCLUDE_DIR AND BK_GLSLC AND BK_SPIRV_VAL)
                     -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitGPUVulkan/Shaders"
                     -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitMeshRender/include"
                     -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitSurface/include"
+                    -I "${CMAKE_CURRENT_SOURCE_DIR}/Sources/BorosKitRender"
                     -MD -MF "${spv}.d" -o "${spv}" "${CMAKE_CURRENT_SOURCE_DIR}/${shader}"
             COMMAND ${BK_SPIRV_VAL} --target-env vulkan1.2 "${spv}"
             DEPENDS "${shader}" DEPFILE "${spv}.d"
@@ -226,7 +227,8 @@ if(BK_VULKAN_INCLUDE_DIR AND BK_GLSLC AND BK_SPIRV_VAL)
             Sources/BorosKitGPU/BKGPUMetal.mm
             Sources/BorosKitRender/BKMetalDevice.m
             Sources/BorosKitMeshRender/BKMeshShaderSource.mm
-            Sources/BorosKitSurface/BKSurfaceShaderSource.mm)   # 2026-11-26: surface MSL (SurfacePass on Metal)
+            Sources/BorosKitSurface/BKSurfaceShaderSource.mm    # 2026-11-26: surface MSL (SurfacePass on Metal)
+            Sources/BorosKitRender/BKShaderSource.mm)           # 2026-11-26: volume MSL (RaycastPass on Metal)
         target_include_directories(boroskit_gpu_metal PUBLIC Sources/BorosKitGPU/include)
         target_compile_options(boroskit_gpu_metal PRIVATE -fobjc-arc)
         target_link_libraries(boroskit_gpu_metal PUBLIC boroskit_gpu boroskit_cores "-framework Metal" "-framework Foundation")

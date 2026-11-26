@@ -32,7 +32,8 @@
 namespace boroskit {
 namespace gpu {
 
-// What: a Device for an existing id<MTLDevice> (nil = BKMetalDevice's preferred GPU). Status::NotFound if none.
+// What: a Device for an existing id<MTLDevice> (nil = the system default GPU; BorosKit classes pass their user-chosen
+// device, see BKMetalDevice). Status::NotFound if none.
 Status makeMetalDevice(id<MTLDevice> device, std::unique_ptr<Device> *out);
 // What (2026-11-26): the same, submitting to an existing queue of `device` (nil = a new one).
 Status makeMetalDevice(id<MTLDevice> device, id<MTLCommandQueue> queue, std::unique_ptr<Device> *out);

@@ -9,6 +9,9 @@
 #include "BKMeshShaderTypes.h"
 #include "BKSurfacePass.h"     // 2026-11-26: surface extraction on the shared interface
 #include "BKRenderCore.h"      // the 16-bit storage of the scan (same as BKVolumeTexture)
+// 2026-11-26 (7.1 #4): the ray caster - private headers of BorosKitRender, by path (also compiled in the XCTest target)
+#include "../../Sources/BorosKitRender/BKRaycastPass.h"
+#include "../../Sources/BorosKitRender/BKRenderParamsCore.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -597,6 +600,191 @@ int TestSurfacePass(Device &device, const char *referencesDir, const char *label
         bk_golden_mesh_free(&sink.mesh);
     }
     bk_golden_volume_free(&vol);
+    return failures;
+}
+
+// ---- Volume ray casting (2026-11-26, Vulkan plan 7.1 #4c) ----------------------------------------------------------
+
+bool RenderRaycastCases(Device &device, bool manualFiltering, std::vector<RaycastCaseOutput> *out)
+{
+    out->clear();
+    BKGoldenVolume vol;
+    std::memset(&vol, 0, sizeof vol);
+    if (bk_golden_make_head_phantom(&vol) != 0) return false;
+    const size_t n = (size_t)vol.width * vol.height * vol.depth;
+    float lo = INFINITY, hi = -INFINITY;
+    for (size_t i = 0; i < n; i++) { lo = std::fmin(lo, vol.voxels[i]); hi = std::fmax(hi, vol.voxels[i]); }
+    // Stored exactly like BKVolumeTexture (the golden test testVolumeStorageMatchesCore proves it).
+    BKRenderQuantization q = BKRenderQuantizationForRange(lo, hi, BKRenderAllIntegral(vol.voxels, n));
+    std::vector<uint16_t> steps(n);
+    BKRenderQuantizeToSteps(vol.voxels, n, q, steps.data());
+    bool ok = false;
+    do {
+        TextureDesc td;
+        td.type = TextureType::Texture3D;
+        td.format = Format::R16Unorm;
+        td.width = vol.width; td.height = vol.height; td.depth = vol.depth;
+        td.usage = UsageSampled | UsageCopyDestination;
+        td.label = "raycast test scan";
+        std::unique_ptr<Texture> scan = device.makeTexture(td, nullptr);
+        std::unique_ptr<CommandList> list = scan ? device.begin(nullptr) : nullptr;
+        if (!list || list->upload(*scan, steps.data(), vol.width * 2, vol.width * vol.height * 2, 0, vol.depth) != Status::Ok ||
+            device.submit(*list, true) != Status::Ok) break;
+        boroskit::render::RaycastPass pass(device);
+        if (pass.prepare() != Status::Ok) break;
+
+        // The two tables: the golden "bone + soft tissue" function, and the default grey ramp over the scan's range.
+        BKRenderTFPoint color[16], opacity[16];
+        size_t nc = 0, no = 0;
+        for (uint32_t i = 0; i < kBKGoldenColorPointCount; i++) {
+            const BKGoldenColorPoint &c = kBKGoldenColorPoints[i];
+            BKRenderTFPoint pt = { c.value, { c.red, c.green, c.blue } };
+            nc = BKRenderTFInsertPoint(color, nc, 16, pt);
+        }
+        for (uint32_t i = 0; i < kBKGoldenOpacityPointCount; i++) {
+            BKRenderTFPoint pt = { kBKGoldenOpacityPoints[i].value, { kBKGoldenOpacityPoints[i].opacity, 0, 0 } };
+            no = BKRenderTFInsertPoint(opacity, no, 16, pt);
+        }
+        BKRenderTFPoint rampColor[2] = { { lo, { 0, 0, 0 } }, { hi, { 1, 1, 1 } } }, rampOpacity[2] = { { lo, { 0, 0, 0 } }, { hi, { 1, 0, 0 } } };
+        std::vector<float> rgbaGolden(BK_TRANSFER_FUNCTION_ENTRIES * 4), rgbaRamp(BK_TRANSFER_FUNCTION_ENTRIES * 4);
+        BKRenderTFBake(color, nc, opacity, no, rgbaGolden.data(), BK_TRANSFER_FUNCTION_ENTRIES);
+        BKRenderTFBake(rampColor, 2, rampOpacity, 2, rgbaRamp.data(), BK_TRANSFER_FUNCTION_ENTRIES);
+        std::unique_ptr<Texture> tableGolden, tableRamp;
+        std::unique_ptr<Buffer> countGolden, countRamp;
+        if (pass.makeTable(rgbaGolden.data(), &tableGolden, &countGolden) != Status::Ok ||
+            pass.makeTable(rgbaRamp.data(), &tableRamp, &countRamp) != Status::Ok) break;
+        uint32_t grid[3];
+        BKRenderBrickGrid(vol.width, vol.height, vol.depth, BK_BRICK_SIZE, grid);
+        std::unique_ptr<Buffer> ranges = pass.makeBrickRanges(*scan, grid, nullptr);
+        if (!ranges) break;
+
+        ok = true;
+        for (uint32_t i = 0; i < kBKGoldenVolumeCaseCount && ok; i++) {
+            const BKGoldenVolumeCase &c = kBKGoldenVolumeCases[i];
+            // The settings exactly as the golden producer (BKGoldenMetal.m) gives them to BKVolumeRenderer.
+            BKRenderSettings st;
+            std::memset(&st, 0, sizeof st);
+            st.volumeSize[0] = vol.width; st.volumeSize[1] = vol.height; st.volumeSize[2] = vol.depth;
+            std::memcpy(st.patientToVoxel, vol.patientToVoxel, sizeof st.patientToVoxel);
+            st.minPixelSpacing = vol.minSpacing;
+            st.valueScale = q.valueScale; st.valueOffset = q.valueOffset; st.outOfBoundsValue = vol.outOfBoundsValue;
+            st.mode = c.mode; st.projection = c.projection;
+            for (int a = 0; a < 3; a++) {
+                st.cameraPosition[a] = c.cameraPosition[a]; st.cameraDirection[a] = c.cameraDirection[a]; st.cameraUp[a] = c.cameraUp[a];
+                st.slabPoint[a] = c.slabPoint[a]; st.slabNormal[a] = c.slabNormal[a];
+                st.cropMax[a] = (double)st.volumeSize[a] - 1.0;   // a fresh volume: the whole scan
+            }
+            st.clipNormal[2] = 1.0;
+            st.viewWidth = c.viewWidth; st.viewHeight = c.viewHeight; st.fieldOfView = c.fieldOfView;
+            st.sampleSpacing = c.sampleSpacing;
+            st.slabEnabled = c.slabEnabled; st.slabThickness = c.slabThickness;
+            for (int32_t k = 0; k < c.clipPlaneCount && k < 2; k++) {   // BKClipPlanesPack: unit normal (double), w = -n.point
+                const double *pl = c.clipPlanes[k];
+                double len = std::sqrt(pl[3] * pl[3] + pl[4] * pl[4] + pl[5] * pl[5]);
+                double nx = pl[3] / len, ny = pl[4] / len, nz = pl[5] / len;
+                st.clipPlanes[4 * k + 0] = (float)nx; st.clipPlanes[4 * k + 1] = (float)ny; st.clipPlanes[4 * k + 2] = (float)nz;
+                st.clipPlanes[4 * k + 3] = (float)(-(nx * pl[0] + ny * pl[1] + nz * pl[2]));
+                st.clipPlaneCount++;
+            }
+            const bool golden = c.useTransferFunction != 0;
+            st.tfMin = golden ? BKRenderTFMinimumValue(color, nc, opacity, no) : BKRenderTFMinimumValue(rampColor, 2, rampOpacity, 2);
+            st.tfMax = golden ? BKRenderTFMaximumValue(color, nc, opacity, no) : BKRenderTFMaximumValue(rampColor, 2, rampOpacity, 2);
+            st.windowCenter = c.windowCenter; st.windowWidth = c.windowWidth;
+            st.missValue = NAN;
+            st.opacityUnitDistance = c.opacityUnitDistance;
+            st.shading = c.shading;
+            st.ambient = 0.2f; st.diffuse = 0.8f; st.specular = 0.2f; st.specularPower = 10;   // BKVolumeRenderer defaults
+            st.manualFiltering = manualFiltering ? 1 : 0;
+            st.blendOpacityUnitDistance = 1;
+            BKRenderParams p;
+            if (BKRenderParamsFill(&st, c.width, c.height, &p) != BKRenderParamsOK) { ok = false; break; }
+
+            boroskit::render::RaycastInputs in;
+            in.volume = scan.get();
+            in.table = golden ? tableGolden.get() : tableRamp.get();
+            std::unique_ptr<CommandList> cl = device.begin(nullptr);
+            if (!cl) { ok = false; break; }
+            std::unique_ptr<Buffer> empty;
+            if (c.skipEmptySpace && boroskit::render::RaycastPass::WantsSkipping(true, p)) {
+                p.brickGrid = bk_make_float4((float)grid[0], (float)grid[1], (float)grid[2], 0.0f);
+                if (p.mode == 0) {
+                    empty = pass.encodeClassify(*cl, p, *ranges, golden ? *countGolden : *countRamp, nullptr);
+                    if (!empty) { ok = false; break; }
+                    in.brickEmpty = empty.get();
+                }
+                in.brickRange = ranges.get();
+                p.skipEmptySpace = 1;
+            }
+            const uint32_t pixels = c.width * c.height;
+            std::unique_ptr<Buffer> colors = device.makeBuffer(pixels * 4, Memory::Readback, UsageStorage, nullptr);
+            std::unique_ptr<Buffer> values = device.makeBuffer(pixels * 4, Memory::Readback, UsageStorage, nullptr);
+            if (!colors || !values || pass.encodeRaycast(*cl, p, in, *colors, *values) != Status::Ok ||
+                device.submit(*cl, true) != Status::Ok) { ok = false; break; }
+            RaycastCaseOutput o;
+            o.name = c.name;
+            o.width = c.width; o.height = c.height; o.mode = c.mode;
+            const uint8_t *rgba = (const uint8_t *)colors->map();
+            const float *v = (const float *)values->map();
+            o.rgba.assign(rgba, rgba + pixels * 4);
+            o.values.assign(v, v + pixels);
+            colors->unmap();
+            values->unmap();
+            out->push_back(std::move(o));
+        }
+    } while (false);
+    bk_golden_volume_free(&vol);
+    return ok;
+}
+
+int TestRaycastPass(Device &device, const char *referencesDir, const char *outDir, const char *label)
+{
+    int failures = 0;
+    const std::string refs = referencesDir;
+    for (int manual = 0; manual < 2; manual++) {
+        std::vector<RaycastCaseOutput> cases;
+        if (!RenderRaycastCases(device, manual != 0, &cases)) {
+            std::printf("RAYCAST | %s | FAIL: could not render\n", label);
+            return failures + 1;
+        }
+        for (const RaycastCaseOutput &o : cases) {
+            BKGoldenImage mine = { o.width, o.height, 4, BKGoldenFormatU8, (void *)o.rgba.data() };
+            BKGoldenImage mineV = { o.width, o.height, 1, BKGoldenFormatF32, (void *)o.values.data() };
+            if (outDir) {
+                std::string stem = std::string(outDir) + "/" + o.name + "." + label + (manual ? ".manual" : "");
+                bk_golden_write_pam((stem + ".rgba.pam").c_str(), &mine);
+                bk_golden_write_pfm((stem + ".values.pfm").c_str(), &mineV);
+            }
+            BKGoldenImage ref, refV;
+            std::memset(&ref, 0, sizeof ref);
+            std::memset(&refV, 0, sizeof refV);
+            if (bk_golden_read_pam((refs + "/" + o.name + ".rgba.pam").c_str(), &ref) != 0 ||
+                bk_golden_read_pfm((refs + "/" + o.name + ".values.pfm").c_str(), &refV) != 0) {
+                std::printf("RAYCAST | %s | FAIL: reference missing\n", o.name.c_str());
+                bk_golden_image_free(&ref);
+                failures++;
+                continue;
+            }
+            // The golden tolerances: colour +-1 grey level (0.5 % outliers); values: composite one 8-bit step of
+            // opacity, projections 1 HU. Manual filtering vs the (hardware-filtered) references: the "different
+            // filter" allowance of testManualFilteringMatchesReferences (2 steps / 1/256 of the value range).
+            float vlo = INFINITY, vhi = -INFINITY;
+            const float *rv = (const float *)refV.data;
+            for (uint32_t k = 0; k < o.width * o.height; k++) if (std::isfinite(rv[k])) { vlo = std::fmin(vlo, rv[k]); vhi = std::fmax(vhi, rv[k]); }
+            double range = vhi > vlo ? (double)vhi - vlo : 1.0;
+            BKGoldenImageTolerance vt = manual ? BKGoldenImageTolerance{ o.mode == 0 ? 2.0 / 255.0 : range / 256.0, 0.005 }
+                                               : BKGoldenImageTolerance{ o.mode == 0 ? 1.0 / 255.0 : 1.0, 0.005 };
+            BKGoldenImageReport rc = bk_golden_compare_images(&ref, &mine, bk_golden_tolerance_u8());
+            BKGoldenImageReport rd = bk_golden_compare_images(&refV, &mineV, vt);
+            char a[256], b[256];
+            bk_golden_describe_image_report(&rc, a, sizeof a);
+            bk_golden_describe_image_report(&rd, b, sizeof b);
+            std::printf("RAYCAST | %s | %s%s vs Metal reference: colour %s; values %s\n", o.name.c_str(), label,
+                        manual ? " (manual filtering)" : "", a, b);
+            if (!rc.pass || !rd.pass) failures++;
+            bk_golden_image_free(&ref);
+            bk_golden_image_free(&refV);
+        }
+    }
     return failures;
 }
 

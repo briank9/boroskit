@@ -1,0 +1,27 @@
+// BorosKitGPUVulkan: the volume ray caster (bk_raycast) - thin GLSL entry point; the maths is BKRaycastShaderBodies.h
+// (shared with Metal). One thread = one output pixel into the readable buffers (RGBA8 packed + float value).
+// Original BorosKit code written for this project; contains no third-party code. 2026-11-26, agent "vulkan-engine".
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "bk_raycast_common.glsl"
+layout(std430, set = 0, binding = 0) readonly buffer BKRenderParamsBlock { BK_RENDER_PARAMS_FIELDS } p;
+layout(std430, set = 0, binding = 1) writeonly buffer BKColorOut { uint colorOut[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer BKValueOut { float valueOut[]; };
+layout(std430, set = 0, binding = 3) readonly buffer BKBrickEmpty { uint brickEmpty[]; };
+layout(std430, set = 0, binding = 4) readonly buffer BKBrickRange { uint brickRange[]; };
+layout(set = 0, binding = 16) uniform texture3D volume;
+layout(set = 0, binding = 17) uniform texture2D transferFn;
+layout(set = 0, binding = 19) uniform texture2D geometryColor;
+layout(set = 0, binding = 20) uniform texture2D geometryDistance;
+layout(set = 0, binding = 21) uniform texture3D blendVolume;
+layout(set = 0, binding = 22) uniform texture2D blendFn;
+BK_RAYCAST_HELPER_BODIES
+BK_RAYCAST_TRACE_BODY
+BK_RAYCAST_COLOR_BODIES
+BK_RAYCAST_TRACE_EXT_BODY
+BK_RAYCAST_GEOMETRY_BODY
+void main()
+{
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    BK_RAYCAST_KERNEL_BODY
+}

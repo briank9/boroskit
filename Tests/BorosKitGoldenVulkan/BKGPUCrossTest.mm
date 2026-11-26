@@ -15,8 +15,60 @@
 #include "BKPNGWrite.h"
 #include <cmath>
 #include <string>
+#include <algorithm>
 
 using namespace bktest;
+
+// What (2026-11-26, 7.1 #4c): Vulkan vs Metal ray casts of the eight golden cases (hardware and manual filtering),
+// same parameter blocks on both; golden tolerances; one side-by-side PNG (rows = cases: Metal | Vulkan | diff x 40).
+static int CompareRaycasts(const std::vector<bkshared::RaycastCaseOutput> m[2], const std::vector<bkshared::RaycastCaseOutput> v[2],
+                           const std::string &outDir)
+{
+    int failures = 0;
+    for (int f = 0; f < 2; f++) {
+        if (m[f].size() != v[f].size() || m[f].empty()) { std::printf("FAIL: ray-cast case lists differ\n"); failures++; continue; }
+        for (size_t i = 0; i < m[f].size(); i++) {
+            const bkshared::RaycastCaseOutput &a = m[f][i], &b = v[f][i];
+            BKGoldenImage ma = { a.width, a.height, 4, BKGoldenFormatU8, (void *)a.rgba.data() }, vb = { b.width, b.height, 4, BKGoldenFormatU8, (void *)b.rgba.data() };
+            BKGoldenImage mv = { a.width, a.height, 1, BKGoldenFormatF32, (void *)a.values.data() }, vv = { b.width, b.height, 1, BKGoldenFormatF32, (void *)b.values.data() };
+            BKGoldenImageReport rc = bk_golden_compare_images(&ma, &vb, bk_golden_tolerance_u8());
+            BKGoldenImageReport rv = bk_golden_compare_images(&mv, &vv, BKGoldenImageTolerance{ a.mode == 0 ? 1.0 / 255.0 : 1.0, 0.005 });
+            char t1[256], t2[256];
+            bk_golden_describe_image_report(&rc, t1, sizeof t1);
+            bk_golden_describe_image_report(&rv, t2, sizeof t2);
+            std::printf("CROSS | %s%s | Vulkan vs Metal: colour %s; values %s\n", a.name.c_str(), f ? " (manual)" : "", t1, t2);
+            if (!rc.pass || !rv.pass) failures++;
+        }
+    }
+    if (m[0].empty() || m[0].size() != v[0].size()) return failures;
+    const uint32_t s = 2, gap = 6;
+    uint32_t W = 0, H = 0;
+    for (const bkshared::RaycastCaseOutput &a : m[0]) { W = std::max(W, a.width); H += a.height * s + gap; }
+    const uint32_t OW = 3 * W * s + 2 * gap;
+    std::vector<uint8_t> img((size_t)OW * H * 4, 255);
+    uint32_t y0 = 0;
+    for (size_t i = 0; i < m[0].size(); i++) {
+        const bkshared::RaycastCaseOutput &a = m[0][i], &b = v[0][i];
+        for (uint32_t panel = 0; panel < 3; panel++)
+            for (uint32_t y = 0; y < a.height; y++)
+                for (uint32_t x = 0; x < a.width; x++) {
+                    const uint8_t *p = &a.rgba[(y * a.width + x) * 4], *q = &b.rgba[(y * a.width + x) * 4];
+                    for (uint32_t sy = 0; sy < s; sy++)
+                        for (uint32_t sx = 0; sx < s; sx++) {
+                            uint8_t *o = &img[((size_t)(y0 + y * s + sy) * OW + panel * (W * s + gap) + x * s + sx) * 4];
+                            for (int k = 0; k < 3; k++) {
+                                if (panel == 2) { int d = std::abs((int)p[k] - (int)q[k]) * 40; o[k] = (uint8_t)(d > 255 ? 255 : d); }
+                                else { const uint8_t *c = panel ? q : p; o[k] = c[k]; }
+                            }
+                            o[3] = 255;
+                        }
+                }
+        y0 += a.height * s + gap;
+    }
+    std::string png = outDir + "/raycast_metal_vs_vulkan.png";
+    if (bk_png_write_rgba8(png.c_str(), img.data(), OW, H) == 0) std::printf("picture: %s\n", png.c_str());
+    return failures;
+}
 
 int main(int argc, char **argv)
 {
@@ -33,6 +85,10 @@ int main(int argc, char **argv)
         failures += bkshared::TestComputeScan(*metal);
         failures += bkshared::TestGoldenFeatures(*metal, refs, nullptr, "metal", true, false);   // Metal: strict
         failures += bkshared::TestSurfacePass(*metal, refs, "metal", true);
+        // 2026-11-26 (7.1 #4c): the ray caster on both devices with the SAME parameter blocks, compared live.
+        std::vector<bkshared::RaycastCaseOutput> mRay[2], vRay[2];
+        for (int m = 0; m < 2; m++)
+            if (!bkshared::RenderRaycastCases(*metal, m != 0, &mRay[m])) { std::printf("FAIL: ray casting on Metal\n"); failures++; }
         std::vector<uint8_t> mRGBA, vRGBA;
         std::vector<float> mDist, vDist;
         if (!bkshared::RenderFeatureScene(*metal, &mRGBA, &mDist)) { std::printf("FAIL: feature scene on Metal\n"); failures++; }
@@ -47,6 +103,8 @@ int main(int argc, char **argv)
             failures += bkshared::TestWinding(*vulkan);
             failures += bkshared::TestComputeScan(*vulkan);
             failures += bkshared::TestSurfacePass(*vulkan, refs, "vulkan", false);
+            for (int m = 0; m < 2; m++)
+                if (!bkshared::RenderRaycastCases(*vulkan, m != 0, &vRay[m])) { std::printf("FAIL: ray casting on Vulkan\n"); failures++; }
             if (!bkshared::RenderFeatureScene(*vulkan, &vRGBA, &vDist)) { std::printf("FAIL: feature scene on Vulkan\n"); failures++; }
         }
         if (mRGBA.size() == vRGBA.size() && !mRGBA.empty()) {
@@ -85,6 +143,7 @@ int main(int argc, char **argv)
         } else {
             failures++;
         }
+        failures += CompareRaycasts(mRay, vRay, outDir);
         std::printf("validation messages: %d errors, %d warnings\n", messages.errors, messages.warnings);
         if (messages.errors || messages.warnings) failures++;
         std::printf("%s Metal + Vulkan cross test\n", failures ? "FAILED" : "PASSED");
