@@ -97,3 +97,56 @@ version - verify on the page. The SDK tools are build-time only, licences per de
    side by side.
 3. Open small follow-ups: XCTest targets could call the plain-C test functions (needs a .m shim because
    of the module rule above); run CMake/ctest on a Linux or Windows PC (D6).
+
+## 2026-11-25 (later) - D3 applied everywhere (user decision: option (a), "we need it to be universal")
+
+### What changed
+- `Package.swift`: `-ffp-contract=off` for every BorosKit library target (Vec, Core, Render, Display, Mesh,
+  MeshRender, Surface), C, Objective-C and C++ files alike; no fast-math anywhere. Same flag as CMake.
+- `BKROICore.c`: the two places where the recorded Horos build's compiler had fused a multiply-add are now
+  written as an explicit `fma()` / `fmaf()` (oval outline point `x + w*cos`, the area shoelace sum). fma is
+  correctly rounded by every C99 library, so this is the same on every platform AND keeps the outlines and
+  areas bit-identical to the recorded Horos values (no tolerance needed there).
+- `BKROICoreTests.m` inside-pixel rule (documented in the test): (1) the mask built from the RECORDED curve
+  must give the recorded pixels exactly (zero tolerance; statistics of that mask exact as before); (2) every
+  corner of our own curve must fall in the same whole pixel as the recorded corner, except a corner that lies
+  within 1e-9 pixel of a pixel boundary (a floating-point tie; the curves agree to ~1e-14). Horos builds the
+  mask from whole-pixel corners, so only such tie corners can move a pixel; nothing else was loosened.
+  Effect today: polygon-concave 2 tie corners (own mask 1259 pixels, Horos 1262), polygon-self-crossing 4
+  tie corners (999 vs 1004); all other ROIs identical. The probe test (1e-9 on-outline rule) is unchanged.
+- New ctest `golden_cpu_numbers` / `golden_cpu_meshes` (Tests/BorosKitCoreTestsC/BKGoldenCPUCoresTest.cpp):
+  the CMake build recomputes the colour-table bake, the surface plan, Taubin smoothing and decimation (1 and
+  all threads) and compares them with ZERO tolerance (raw bytes for meshes) with the Mac-recorded references.
+
+### Golden references re-recorded ONCE (reason: D3, user decision 2026-11-25)
+Caused by D3 (CPU maths no longer fused):
+| File | Old | New |
+|---|---|---|
+| numbers_core.txt | tf_table_hash 3378587455/1769865870 (high/low32); tf_entry_1000_ch1 0.53311973810195923; camera_up_x -0.018028311236297209, camera_up_z 0.92541657839832336, camera_focal_y -1.8833548014929038 | 251569618/1776313157; 0.53311967849731445 (one float step); -0.018028311236297195, 0.92541657839832347, -1.8833548014929034 (~1e-16) |
+| scene_export_scene.obj / .wrl / .iv (byte sizes 4570 / 5120 / 5289, unchanged) | e.g. vertex `7.85410166`, `6.14589834` | `7.85410213`, `6.14589787` (8th digit, float rounding of the moved box) |
+| scene_export_scene.rib (4553 -> 4540 bytes) | transform term `6.16492489e-19`, translation `-1.15093295e-14 5.32907052e-15` | exact `0`, `1.42108547e-14 7.10542736e-15` |
+| scene_export_scene.mtl | unchanged | unchanged |
+GPU drift that already existed since the 2026-11-14 Relaxed-math switch (the 9 strict differences of the base,
+folded into this one re-record so strict mode is zero again; all were inside tolerance):
+| File | Change old -> new |
+|---|---|
+| surface_bone_300 / surface_skin_m500 / surface_bone_res05_smooth1_manual .bkmesh | same counts, identical triangles, positions max 1.9e-6 mm, normals 0 |
+| slice_linear_lut_rotated.rgba.pam | 2 channels, max 4 grey levels |
+| vr_ortho_anterior / vr_ortho_left_clipped_unlit / vr_persp_oblique .values.pfm (accumulated opacity) | 680 / 338 / 303 values, max 4.8e-7 / 2.9e-7 / 2.8e-5 |
+| mip_persp_full.values.pfm | 2 of 7680 values, max 0.108 HU (D3 + drift; its .rgba.pam now matches the old file exactly, not re-recorded) |
+Follow-on (input surface above + D3):
+| mesh_smooth_taubin10.bkmesh / mesh_decimate_50.bkmesh | same counts, identical triangles; positions max 5.7e-6 / 8.2e-5 mm, normals max 3.9e-6 / 2.0e-5 |
+MANIFEST.txt updated with the new sizes / hashes.
+
+### Test results after D3
+- `swift test -c release` with `BK_GOLDEN_STRICT=1`: all suites pass (Surface 21, Render 197, Mesh 88,
+  Golden 12, Display 62, Core 28, Accuracy 13). Golden strict: every comparison max difference 0.
+- `docs/tools/check-portable-cores.sh`: all cores clean.
+- CMake + ctest: 21/21 passed; CPU cores bit-identical to the SwiftPM build (73 strict checks: phantom,
+  colour table, surface plan, smoothing, decimation).
+- Boros 6 impact when it picks up this BorosKit: CPU results change in the last digits as listed (colour
+  tables, exports, mesh smoothing/decimation), and the two ROI shapes above can include/exclude a pixel whose
+  corner sits exactly on a pixel boundary. Nothing visible otherwise.
+
+### Where to resume
+Vulkan SDK is being installed by the user. Next: check `vulkaninfo --summary`, then M6 (see above).

@@ -42,6 +42,8 @@ void bk_test_mesh_depth_range(void);
 void bk_test_once_single_thread(void);
 void bk_test_once_many_threads(void);
 void bk_test_golden_phantom(void);
+void bk_test_golden_cpu_numbers(void);
+void bk_test_golden_cpu_meshes(void);
 
 static const struct { const char *name; BKCoreTestFunction run; } kTests[] = {
     { "vec_basics", bk_test_vec_basics },
@@ -61,6 +63,8 @@ static const struct { const char *name; BKCoreTestFunction run; } kTests[] = {
     { "once_single_thread", bk_test_once_single_thread },
     { "once_many_threads", bk_test_once_many_threads },
     { "golden_phantom", bk_test_golden_phantom },
+    { "golden_cpu_numbers", bk_test_golden_cpu_numbers },
+    { "golden_cpu_meshes", bk_test_golden_cpu_meshes },
 };
 static const int kTestCount = (int)(sizeof kTests / sizeof kTests[0]);
 

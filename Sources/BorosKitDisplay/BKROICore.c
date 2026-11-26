@@ -64,8 +64,12 @@ BKROIPointList BKROIOutline(const BKROIShape *roi)
         for (uint32_t i = 0; l.points && i < BK_ROI_OVAL_POINTS; i++) {
             // The step angle is held as a float before cos/sin (this matches the recorded points).
             float angle = (float)((double)(i * 2) * BK_ROI_PI / BK_ROI_OVAL_POINTS);
-            l.points[i].x = roi->rectX + roi->rectW * cos((double)angle);
-            l.points[i].y = roi->rectY + roi->rectH * sin((double)angle);
+            // 2026-11-25 (D3, -ffp-contract=off everywhere): "x + w * cos" is written as ONE fused
+            // multiply-add, fma(w, cos, x), on purpose. The recorded Horos build let the compiler fuse
+            // exactly this step; spelling it out keeps the recorded points bit for bit, and fma() is
+            // correctly rounded by every C99 library, so the result is the same on every platform.
+            l.points[i].x = fma(roi->rectW, cos((double)angle), roi->rectX);
+            l.points[i].y = fma(roi->rectH, sin((double)angle), roi->rectY);
         }
         return l;
     }
@@ -199,8 +203,10 @@ float BKROIPolygonAreaPixels(const BKROIPoint *pts, uint32_t n)
     for (uint32_t i = 0; pts && i < n; i++) {
         uint32_t j = (i + 1) % n;
         float xi = (float)pts[i].x, yi = (float)pts[i].y, xj = (float)pts[j].x, yj = (float)pts[j].y;
-        area += xi * yj;
-        area -= yi * xj;
+        // 2026-11-25 (D3): each step is one explicit fused multiply-add (what the recorded Horos build's
+        // compiler did implicitly); fmaf is correctly rounded everywhere, so this is platform-independent.
+        area = fmaf(xi, yj, area);
+        area = fmaf(-yi, xj, area);
     }
     area *= 0.5f;
     return fabsf(area);

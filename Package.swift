@@ -6,6 +6,13 @@
 // also shared by macOS and iOS.
 import PackageDescription
 
+// CPU floating-point rule for ALL BorosKit library code (2026-11-25, Vulkan engine kickoff, user decision D3):
+// -ffp-contract=off = never fuse a*b+c into one rounding step (FMA). Apple clang fuses by default, GCC /
+// MSVC behave differently, so without this the cores (mesh smoothing / decimation, transfer-function bake,
+// camera maths ...) could differ in the last bit between the Mac build and a Windows / Linux (CMake) build
+// and flip decisions. CMakeLists.txt uses the same flag. No fast-math anywhere.
+let bkFloatingPoint = "-ffp-contract=off"
+
 let package = Package(
     name: "BorosKit",
     platforms: [.macOS(.v12), .iOS(.v16)],
@@ -27,7 +34,8 @@ let package = Package(
         .target(
             name: "BorosKitVec",
             path: "Sources/BorosKitVec",
-            publicHeadersPath: "include"
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags([bkFloatingPoint])]
         ),
         .target(
             name: "BorosKitCore",
@@ -38,7 +46,7 @@ let package = Package(
             cSettings: [
                 // The code comes from Horos, which uses manual retain/release.
                 // Keep it that way so behaviour is unchanged.
-                .unsafeFlags(["-fno-objc-arc"]),
+                .unsafeFlags(["-fno-objc-arc", bkFloatingPoint]),
             ],
             linkerSettings: [
                 .linkedFramework("Foundation"),
@@ -54,10 +62,10 @@ let package = Package(
             publicHeadersPath: "include",
             cSettings: [
                 // New code: automatic reference counting (unlike the Horos-derived core).
-                .unsafeFlags(["-fobjc-arc"]),
+                .unsafeFlags(["-fobjc-arc", bkFloatingPoint]),
             ],
             cxxSettings: [
-                .unsafeFlags(["-fobjc-arc"]),
+                .unsafeFlags(["-fobjc-arc", bkFloatingPoint]),
             ],
             linkerSettings: [
                 .linkedFramework("Metal"),
@@ -91,10 +99,10 @@ let package = Package(
             publicHeadersPath: "include",
             cSettings: [
                 // New code: automatic reference counting.
-                .unsafeFlags(["-fobjc-arc"]),
+                .unsafeFlags(["-fobjc-arc", bkFloatingPoint]),
             ],
             cxxSettings: [
-                .unsafeFlags(["-fobjc-arc"]),
+                .unsafeFlags(["-fobjc-arc", bkFloatingPoint]),
             ],
             linkerSettings: [
                 .linkedFramework("Metal"),
@@ -133,8 +141,8 @@ let package = Package(
             dependencies: ["BorosKitCore", "BorosKitVec"],
             path: "Sources/BorosKitMesh",
             publicHeadersPath: "include",
-            cSettings: [.unsafeFlags(["-fobjc-arc"])],
-            cxxSettings: [.unsafeFlags(["-fobjc-arc"])],
+            cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
             linkerSettings: [.linkedFramework("Foundation")]
         ),
         .target(
@@ -143,8 +151,8 @@ let package = Package(
             dependencies: ["BorosKitMesh", "BorosKitRender", "BorosKitCore", "BorosKitVec"],
             path: "Sources/BorosKitMeshRender",
             publicHeadersPath: "include",
-            cSettings: [.unsafeFlags(["-fobjc-arc"])],
-            cxxSettings: [.unsafeFlags(["-fobjc-arc"])],
+            cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
             linkerSettings: [.linkedFramework("Metal"), .linkedFramework("Foundation"),
                              .linkedFramework("CoreText"), .linkedFramework("CoreGraphics")]   // system-font cube letters (2026-11-14)
         ),
@@ -164,8 +172,8 @@ let package = Package(
             dependencies: ["BorosKitCore", "BorosKitRender", "BorosKitMesh", "BorosKitVec"],
             path: "Sources/BorosKitSurface",
             publicHeadersPath: "include",
-            cSettings: [.unsafeFlags(["-fobjc-arc"])],
-            cxxSettings: [.unsafeFlags(["-fobjc-arc"])],
+            cSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
+            cxxSettings: [.unsafeFlags(["-fobjc-arc", bkFloatingPoint])],
             linkerSettings: [.linkedFramework("Metal"), .linkedFramework("QuartzCore"), .linkedFramework("Foundation")]
         ),
         .testTarget(

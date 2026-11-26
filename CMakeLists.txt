@@ -9,8 +9,8 @@
 #     Vulkan engine, which never appears in Package.swift, so Boros 6 never needs the Vulkan SDK).
 #   - Compiler: clang everywhere is the plan (Apple clang here, clang on Linux, clang-cl on Windows), so the
 #     C maths behaves the same; GCC is accepted for the cores. Not yet tried on Windows / Linux (to verify).
-#   - Floating point (user decision D3): -ffp-contract=off, never fast-math. The SwiftPM build does not pin
-#     this yet - see VULKAN-ENGINE-PROGRESS.md (it changes the ROI core's results; awaiting the user).
+#   - Floating point (user decision D3, 2026-11-25): -ffp-contract=off, never fast-math - the same flag as
+#     Package.swift, so the CPU cores give identical bits in both builds (ctest golden_cpu_* proves it).
 #
 # Use (from the BorosKit folder; the build folder build-cmake/ is git-ignored):
 #   cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
@@ -99,6 +99,7 @@ add_executable(bk_core_tests
     Tests/BorosKitCoreTestsC/BKMeshDrawCoreTests.c
     Tests/BorosKitCoreTestsC/BKOnceTests.cpp
     Tests/BorosKitCoreTestsC/BKGoldenPhantomTest.c
+    Tests/BorosKitCoreTestsC/BKGoldenCPUCoresTest.cpp
 )
 target_link_libraries(bk_core_tests PRIVATE boroskit_cores bk_golden_core)
 target_compile_definitions(bk_core_tests PRIVATE
@@ -112,7 +113,7 @@ set(BK_CORE_TEST_NAMES
     mesh_facing_rule mesh_texture_expand_rule mesh_texture_sample_rule mesh_camera_axes
     mesh_uniforms_fill mesh_uniforms_model_and_colour mesh_depth_range
     once_single_thread once_many_threads
-    golden_phantom
+    golden_phantom golden_cpu_numbers golden_cpu_meshes
 )
 foreach(name IN LISTS BK_CORE_TEST_NAMES)
     add_test(NAME core.${name} COMMAND bk_core_tests ${name})

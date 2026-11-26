@@ -132,7 +132,20 @@ static BOOL NearFloat(double a, double recorded)
             XCTAssertTrue(SameFloat(v, Num(st[@"mean"])) && SameFloat(v, Num(st[@"total"])), @"%@", name);
             XCTAssertTrue(isnan(Num(st[@"dev"])), @"%@ dev", name);
         } else {
-            BKROIRunList runs = BKROIInsideRuns(curve.points, curve.count, W, H);
+            // Inside pixels. The pixel mask is built from the curve's WHOLE-PIXEL corners ((long) cut
+            // towards zero), exactly as Horos did. Rule (2026-11-25, D3 = -ffp-contract=off, user decision):
+            //  (1) the mask built from the RECORDED curve must give the recorded pixels exactly (order,
+            //      positions) - this checks the mask algorithm with zero tolerance;
+            //  (2) every corner of OUR curve must cut to the same whole pixel as the recorded corner, except a
+            //      corner that lies within 1e-9 pixel of a pixel boundary (a floating-point tie: the curves agree
+            //      to ~1e-14 but the cut can fall either way). Only such corners may move a pixel; nothing else
+            //      is loosened. Why: our curve is computed without fused multiply-adds (the same on every
+            //      platform), the recorder's build fused some, so a value sitting exactly on a boundary can
+            //      land a hair either side.
+            NSArray *rsCurve = r[@"splinePoints"];
+            BKROIPoint *recorded = malloc(sizeof(BKROIPoint) * (rsCurve.count ? rsCurve.count : 1));
+            for (NSUInteger i = 0; i < rsCurve.count; i++) { recorded[i].x = [rsCurve[i][0] doubleValue]; recorded[i].y = [rsCurve[i][1] doubleValue]; }
+            BKROIRunList runs = BKROIInsideRuns(recorded, (uint32_t)rsCurve.count, W, H);
             uint32_t k = 0, bad = 0;
             NSString *firstBad = nil;
             for (uint32_t i = 0; i < runs.count; i++)
@@ -145,6 +158,26 @@ static BOOL NearFloat(double a, double recorded)
                 }
             XCTAssertEqual(k, (uint32_t)locs.count, @"%@ inside count", name);
             XCTAssertEqual(bad, 0u, @"%@ inside pixels at other places (first: %@)", name, firstBad);
+            uint32_t ties = 0, moved = 0;
+            for (uint32_t i = 0; i < curve.count && i < rsCurve.count; i++) {
+                double mine[2] = { curve.points[i].x, curve.points[i].y }, rec[2] = { recorded[i].x, recorded[i].y };
+                for (int c = 0; c < 2; c++) {
+                    if ((long)mine[c] == (long)rec[c]) continue;
+                    if (fabs(rec[c] - nearbyint(rec[c])) <= 1e-9) ties++;
+                    else moved++;
+                }
+            }
+            XCTAssertEqual(moved, 0u, @"%@ curve corners in another whole pixel (not a tie)", name);
+            if (ties) {
+                BKROIRunList own = BKROIInsideRuns(curve.points, curve.count, W, H);
+                uint32_t ownCount = 0;
+                for (uint32_t i = 0; i < own.count; i++) ownCount += (uint32_t)(own.runs[i].x1 - own.runs[i].x0 + 1);
+                NSLog(@"BKROI %@: %u corner(s) exactly on a pixel boundary cut the other way (allowed); own mask %u pixels, recorded %lu",
+                      name, ties, ownCount, (unsigned long)locs.count);
+                BKROIRunListFree(&own);
+            }
+            free(recorded);
+            // Statistics of the recorded mask: exact as before.
             BKROIStats S = BKROIStatsOfRuns(&runs, image, W, H);
             XCTAssertTrue(SameFloat(S.mean, Num(st[@"mean"])), @"%@ mean %.9g vs %.9g", name, S.mean, Num(st[@"mean"]));
             XCTAssertTrue(SameFloat(S.total, Num(st[@"total"])), @"%@ total %.9g vs %.9g", name, S.total, Num(st[@"total"]));
