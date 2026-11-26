@@ -399,6 +399,69 @@ static BKGoldenMetalProducer *gProducer;
     }
 }
 
+#pragma mark - Curved reformat (2026-11-26, Vulkan plan 7.1 #5)
+
+// What: the reformat parameters of a golden case on the head phantom's stored scan (same in the C++ shared test).
+static BKReformatParams BKGoldenReformatParams(const BKGoldenReformatCase *c, BKVolumeTexture *volume)
+{
+    BKReformatParams p;
+    memset(&p, 0, sizeof p);
+    p.width = c->width; p.height = c->height; p.depth = c->depth;
+    p.interpolation = c->interpolation; p.projection = c->projection;
+    p.outOfBoundsValue = volume.outOfBoundsValue;
+    p.radiographK = BKReformatRadiographK(0.75, 0.5);
+    p.valueScale = volume.valueScale; p.valueOffset = volume.valueOffset;
+    p.volumeWide = (uint32_t)volume.pixelsWide; p.volumeHigh = (uint32_t)volume.pixelsHigh; p.volumeDeep = (uint32_t)volume.pixelsDeep;
+    p.rowCentre = (c->height - 1) / 2.0f;
+    p.slabCentre = (c->depth - 1) / 2.0f;
+    p.bandEnabled = c->band ? 1u : 0u; p.bandLow = c->bandLow; p.bandHigh = c->bandHigh; p.bandOutsideValue = -3000.0f;
+    p.clipEnabled = c->clip; p.clipNormalZ = 1.0f; p.clipLow = c->clipLow; p.clipHigh = c->clipHigh;
+    return p;
+}
+
+// Golden pictures of the curved reformat (both height limits included), the CPU reference vs the GPU, and the
+// export row range of the band (BKReformatBandRows).
+- (void)testCurvedReformats
+{
+    if (![self requireGPU]) return;
+    NSError *error = nil;
+    BKCurvedReformat *gen = [[BKCurvedReformat alloc] initWithDevice:gProducer.device error:&error];
+    XCTAssertNotNil(gen, @"%@", error);
+    BKVolumeTexture *volume = gProducer.volumeTexture;
+    NSData *steps = [gProducer storedVolumeStepsWithError:&error];
+    XCTAssertNotNil(steps, @"%@", error);
+    size_t n = (size_t)gPhantom.width * gPhantom.height * gPhantom.depth;
+    float *voxels = malloc(n * sizeof(float));   // the stored scan as real values (what the GPU reads)
+    const float *st = steps.bytes;
+    for (size_t i = 0; i < n; i++) voxels[i] = st[i] / 65535.0f * volume.valueScale + volume.valueOffset;
+    for (uint32_t i = 0; i < kBKGoldenReformatCaseCount; i++) {
+        const BKGoldenReformatCase *c = &kBKGoldenReformatCases[i];
+        BKReformatFrame *frames = malloc(sizeof(BKReformatFrame) * c->width);
+        bk_golden_reformat_frames(c, (float *)frames);
+        BKReformatParams p = BKGoldenReformatParams(c, volume);
+        float *gpu = malloc(sizeof(float) * c->width * c->height), *cpu = malloc(sizeof(float) * c->width * c->height);
+        XCTAssertTrue([gen renderParams:p frames:frames volume:volume into:gpu capacity:sizeof(float) * c->width * c->height error:&error],
+                      @"%s: %@", c->name, error);
+        BKGoldenImage values = {c->width, c->height, 1, BKGoldenFormatF32, gpu};   // (gpu is freed below)
+        [self checkImage:&values file:[@(c->name) stringByAppendingString:@".values.pfm"] tolerance:(BKGoldenImageTolerance){1.0, 0.005}];
+        BKReformatComputeRows(&p, frames, voxels, 0, c->height, cpu);
+        double worst = 0;
+        for (size_t k = 0; k < (size_t)c->width * c->height; k++) worst = fmax(worst, fabs(gpu[k] - cpu[k]));
+        NSLog(@"GOLDEN | %s | CPU reference vs Metal: max difference %.4g", c->name, worst);
+        XCTAssertLessThan(worst, 0.5, @"%s: CPU reference vs Metal %.4g", c->name, worst);
+        if (c->band) {
+            int32_t first = 0;
+            uint32_t rows = BKReformatBandRows(frames, c->width, c->height, p.rowCentre, p.slabCentre, c->bandLow, c->bandHigh, &first);
+            // Heights are 0 mm at the centre row, -1 mm per row: rows with height in [low, high].
+            int32_t expectFirst = (int32_t)ceil(p.rowCentre - c->bandHigh), expectLast = (int32_t)floor(p.rowCentre - c->bandLow);
+            XCTAssertEqual(first, expectFirst, @"%s", c->name);
+            XCTAssertEqual((int32_t)rows, expectLast - expectFirst + 1, @"%s", c->name);
+        }
+        free(frames); free(gpu); free(cpu);
+    }
+    free(voxels);
+}
+
 #pragma mark - Surfaces, mesh processing, mesh rendering
 
 - (void)testSurfaces

@@ -779,3 +779,26 @@ const BKGoldenMeshRenderCase kBKGoldenMeshRenderCases[] = {
      {0.90f, 0.85f, 0.70f}, 0.6f},
 };
 const uint32_t kBKGoldenMeshRenderCaseCount = sizeof(kBKGoldenMeshRenderCases) / sizeof(kBKGoldenMeshRenderCases[0]);
+
+// ---- Curved reformat cases (2026-11-26, agent "vulkan-engine", Vulkan plan 7.1 #5) ---------------------------------
+
+const BKGoldenReformatCase kBKGoldenReformatCases[] = {
+    {"reformat_pano_cubic_mean",           2, 3, 96, 64, 11, 0, 0, 0, 0, 0, 0},
+    {"reformat_pano_linear_mip_band",      1, 1, 96, 64, 11, 1, -20.0f, 15.0f, 0, 0, 0},
+    {"reformat_pano_nearest_xray_clip",    0, 4, 96, 64, 11, 0, 0, 0, 1, 14.1f, 33.9f},
+    {"reformat_pano_cubic_first_both",     2, 0, 96, 64, 1, 1, -25.0f, 25.0f, 1, 12.1f, 35.9f},
+    {"reformat_pano_linear_minip_both",    1, 2, 96, 64, 11, 1, -10.0f, 20.0f, 1, 10.1f, 30.9f},
+};
+const uint32_t kBKGoldenReformatCaseCount = sizeof(kBKGoldenReformatCases) / sizeof(kBKGoldenReformatCases[0]);
+
+void bk_golden_reformat_frames(const BKGoldenReformatCase *c, float *frames)
+{
+    for (uint32_t i = 0; i < c->width; i++) {
+        double t = -1.0 + 2.0 * i / (double)(c->width - 1);
+        double tx = 22.0, ty = 36.0 * t, len = sqrt(tx * tx + ty * ty);   // tangent of the curve
+        float *f = frames + 12 * i;
+        f[0] = (float)(32.0 + 22.0 * t); f[1] = (float)(20.0 + 18.0 * t * t); f[2] = 24.0f; f[3] = 0.0f;   // base, height 0 mm
+        f[4] = 0.0f; f[5] = 0.0f; f[6] = -0.8f; f[7] = -1.0f;                                              // one row down: 1 mm
+        f[8] = (float)(-ty / len * 0.5); f[9] = (float)(tx / len * 0.5); f[10] = 0.0f; f[11] = 0.0f;       // slab across the curve
+    }
+}

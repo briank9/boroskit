@@ -299,6 +299,28 @@ typedef struct {
 extern const BKGoldenMeshRenderCase kBKGoldenMeshRenderCases[];
 extern const uint32_t kBKGoldenMeshRenderCaseCount;
 
+// Curved reformat (curved MPR / panorex) of the head phantom (2026-11-26, agent "vulkan-engine", Vulkan plan 7.1 #5):
+// a panoramic curve (parabola in an axial plane, voxel space x = 32 + 22 t, y = 20 + 18 t^2, z = 24) with the
+// slab across the curve (0.5 voxel per sample) and rows going down (1 mm = 0.8 voxel per row). Both height limits
+// can be switched on: the Mac band (column height function: 0 mm at the centre row, -1 mm per row; limits in mm)
+// and the Boros Mobile clip band (voxel z between clipLow and clipHigh). No sample sits exactly on a limit.
+typedef struct {
+    const char *name;            // also the reference file name stem (.values.pfm)
+    int32_t interpolation;       // BKReformatInterpolation: 0 nearest, 1 linear, 2 cubic
+    int32_t projection;          // BKReformatProjection: 0 first sample, 1 MIP, 2 MinIP, 3 mean, 4 radiograph
+    uint32_t width, height, depth;
+    int32_t band;                // 1 = Mac height band [bandLow, bandHigh] mm
+    float bandLow, bandHigh;
+    int32_t clip;                // 1 = clip band clipLow <= voxel z <= clipHigh
+    float clipLow, clipHigh;
+} BKGoldenReformatCase;
+
+extern const BKGoldenReformatCase kBKGoldenReformatCases[];
+extern const uint32_t kBKGoldenReformatCaseCount;
+
+// What: the column frames of a case, 12 floats per column (base, row, slab, each xyzw = BKReformatFrame).
+void bk_golden_reformat_frames(const BKGoldenReformatCase *c, float *frames);
+
 #ifdef __cplusplus
 }
 #endif

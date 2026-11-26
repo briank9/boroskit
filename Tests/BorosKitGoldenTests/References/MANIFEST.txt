@@ -26,6 +26,11 @@ mpr_thin_oblique.rgba.pam  36931  779974a769aae5a2
 mpr_thin_oblique.values.pfm  36878  c42d49dff1dd289c
 numbers_core.txt  1476  29b6a5f9ead6ef43
 numbers_phantom.txt  167  b9478b73ef4ace35
+reformat_pano_cubic_first_both.values.pfm  24590  9b5380f20ee0b5fd
+reformat_pano_cubic_mean.values.pfm  24590  84f263ff3096a7e0
+reformat_pano_linear_minip_both.values.pfm  24590  a31ad9a97356bab5
+reformat_pano_linear_mip_band.values.pfm  24590  8e5f4097e089dcae
+reformat_pano_nearest_xray_clip.values.pfm  24590  c5b0a5da6b4343be
 scene_export_scene.iv  7015  88ab48c12d53eb9d
 scene_export_scene.mtl  311  2fe8480615fe36a7
 scene_export_scene.obj  6214  7d89d559dee58902
@@ -43,4 +48,4 @@ vr_ortho_left_clipped_unlit.rgba.pam  36931  b71f0253cc53926b
 vr_ortho_left_clipped_unlit.values.pfm  36878  1bce5c496c86fade
 vr_persp_oblique.rgba.pam  30787  e052c678b3c5ec94
 vr_persp_oblique.values.pfm  30734  61ca72393c0a90d4
-# total 2190171 bytes
+# total 2313121 bytes
