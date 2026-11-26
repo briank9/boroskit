@@ -10,11 +10,10 @@
 //   - Plain C99, no Apple simd / Objective-C / Horos-derived N3 types: Vulkan and the Windows / Linux build use it.
 //   - User-visible geometry comes in as double (precision rule, BOROSCMF-FRAMEWORK.md section 8); the block itself
 //     is float (GPU picture). Every double -> float conversion happens exactly where the old Objective-C code did it.
-//   - Vector normalisation is the one place where the Mac differs: Apple's simd_normalize uses the CPU's hardware
-//     reciprocal-square-root estimate (NEON / SSE), which no portable formula reproduces bit for bit. The
-//     Objective-C adapter therefore passes its own normalise function (BKRenderSettings.normalize3f) so the Mac
-//     stays bit-identical; everyone else uses BKRenderNormalize3fPortable (double precision, deterministic on
-//     every platform). Switching the Mac to the portable one is a deliberate golden re-record (user decision).
+//   - Vector normalisation: BKRenderNormalize3fPortable (double precision, rounded to float once) on EVERY platform,
+//     the Mac included (user decision 2026-11-26, "universal" like D3). Apple's simd_normalize was used before; it
+//     relies on the CPU's hardware 1/sqrt estimate and differed in the last bit for oblique cameras, so the
+//     affected volume golden references were re-recorded once (see VULKAN-ENGINE-PROGRESS.md).
 //
 //   - Private header (next to BKShaderTypes.h, which it needs); not part of the public module.
 //
@@ -33,10 +32,7 @@
 extern "C" {
 #endif
 
-// What: makes v (3 floats) unit length in place. The caller has checked its length is not ~0.
-typedef void (*BKRenderNormalize3f)(float v[3]);
-
-// What: the portable normalisation: length and division in double, rounded to float once (deterministic).
+// What: the portable normalisation (v unit length in place; the caller has checked its length is not ~0): length and division in double, rounded to float once (deterministic).
 void BKRenderNormalize3fPortable(float v[3]);
 
 // Everything BKRenderParamsFill needs, as plain numbers (the renderer's settings + the volume's facts).
@@ -85,8 +81,6 @@ typedef struct {
     float blendValueScale, blendValueOffset, blendTfMin, blendTfMax;
     int32_t blendColorVolume;
 
-    // NULL = BKRenderNormalize3fPortable (see PORTING NOTES).
-    BKRenderNormalize3f normalize3f;
 } BKRenderSettings;
 
 // Result codes of BKRenderParamsFill (the renderer's NSError codes 11 / 12).

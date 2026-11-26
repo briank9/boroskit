@@ -48,12 +48,12 @@ static bk_float4 BKF4(const float v[3])
 }
 
 // What: a unit normal from a double normal, or (0, 0, 1) when it is (nearly) zero (slab / clip plane rule).
-static bk_float4 BKUnitNormalOrZ(const double n[3], BKRenderNormalize3f normalize3f)
+static bk_float4 BKUnitNormalOrZ(const double n[3])
 {
     float v[3];
     BKToFloat3(n, v);
     if (BKLength3f(v) > 1e-6f) {
-        normalize3f(v);
+        BKRenderNormalize3fPortable(v);
         return BKF4(v);
     }
     return bk_make_float4(0.0f, 0.0f, 1.0f, 0.0f);
@@ -68,7 +68,6 @@ static float BKClampf(float x, float lo, float hi)
 int BKRenderParamsFill(const BKRenderSettings *s, uint32_t width, uint32_t height, BKRenderParams *p)
 {
     memset(p, 0, sizeof(*p));
-    BKRenderNormalize3f normalize3f = s->normalize3f ? s->normalize3f : BKRenderNormalize3fPortable;
     const double *m = s->patientToVoxel;
 
     // patient -> voxel: columns of the 3x3 part + translation (column 3).
@@ -93,10 +92,10 @@ int BKRenderParamsFill(const BKRenderSettings *s, uint32_t width, uint32_t heigh
     BKToFloat3(s->cameraDirection, forward);
     BKToFloat3(s->cameraUp, up);
     if (BKLength3f(forward) < 1e-6f) return BKRenderParamsZeroDirection;
-    normalize3f(forward);
+    BKRenderNormalize3fPortable(forward);
     BKCross3f(forward, up, right);
     if (BKLength3f(right) < 1e-6f) return BKRenderParamsUpParallel;
-    normalize3f(right);
+    BKRenderNormalize3fPortable(right);
     BKCross3f(right, forward, up);
     float position[3];
     BKToFloat3(s->cameraPosition, position);
@@ -117,13 +116,13 @@ int BKRenderParamsFill(const BKRenderSettings *s, uint32_t width, uint32_t heigh
     float slabPoint[3], clipPoint[3];
     BKToFloat3(s->slabPoint, slabPoint);
     p->slabPoint = BKF4(slabPoint);
-    p->slabNormal = BKUnitNormalOrZ(s->slabNormal, normalize3f);
+    p->slabNormal = BKUnitNormalOrZ(s->slabNormal);
     p->slabThickness = (float)(s->slabThickness < 0.0 ? 0.0 : s->slabThickness);   // = MAX(t, 0.0) incl. NaN
     p->useSlab = s->slabEnabled ? 1 : 0;
 
     BKToFloat3(s->clipPoint, clipPoint);
     p->clipPoint = BKF4(clipPoint);
-    p->clipNormal = BKUnitNormalOrZ(s->clipNormal, normalize3f);
+    p->clipNormal = BKUnitNormalOrZ(s->clipNormal);
     p->useClip = s->clipPlaneEnabled ? 1 : 0;
 
     uint32_t planes = s->clipPlaneCount < BK_MAX_CLIP_PLANES ? s->clipPlaneCount : BK_MAX_CLIP_PLANES;

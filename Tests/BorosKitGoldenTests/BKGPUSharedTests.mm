@@ -74,12 +74,15 @@
                                              strict && strict[0] == '1'), 0);
 }
 
-// 2026-11-26 (7.1 #4): BKRaycastPass straight on the MetalDevice (the code the Vulkan program runs; parameter
-// block with the portable normalisation, so within the golden tolerances, not strict - BKVolumeRenderer's own
-// strict check is BKGoldenTests.testVolumeRenders).
+// 2026-11-26 (7.1 #4): BKRaycastPass straight on the MetalDevice (the code the Vulkan program runs). Since the
+// portable-normalise switch the parameter blocks equal BKVolumeRenderer's, so the hardware-filtered run is strict
+// with BK_GOLDEN_STRICT=1.
 - (void)testRaycastPass
 {
-    if ([self haveDevice]) XCTAssertEqual(bkshared::TestRaycastPass(*_device, [self referencesFolder].fileSystemRepresentation, nullptr, "metal"), 0);
+    if (![self haveDevice]) return;
+    const char *strict = getenv("BK_GOLDEN_STRICT");
+    XCTAssertEqual(bkshared::TestRaycastPass(*_device, [self referencesFolder].fileSystemRepresentation, nullptr, "metal",
+                                             strict && strict[0] == '1'), 0);
 }
 
 - (void)testFeatureSceneRenders

@@ -736,7 +736,7 @@ bool RenderRaycastCases(Device &device, bool manualFiltering, std::vector<Raycas
     return ok;
 }
 
-int TestRaycastPass(Device &device, const char *referencesDir, const char *outDir, const char *label)
+int TestRaycastPass(Device &device, const char *referencesDir, const char *outDir, const char *label, bool strict)
 {
     int failures = 0;
     const std::string refs = referencesDir;
@@ -773,7 +773,8 @@ int TestRaycastPass(Device &device, const char *referencesDir, const char *outDi
             double range = vhi > vlo ? (double)vhi - vlo : 1.0;
             BKGoldenImageTolerance vt = manual ? BKGoldenImageTolerance{ o.mode == 0 ? 2.0 / 255.0 : range / 256.0, 0.005 }
                                                : BKGoldenImageTolerance{ o.mode == 0 ? 1.0 / 255.0 : 1.0, 0.005 };
-            BKGoldenImageReport rc = bk_golden_compare_images(&ref, &mine, bk_golden_tolerance_u8());
+            if (strict && !manual) vt = BKGoldenImageTolerance{ 0, 0 };
+            BKGoldenImageReport rc = bk_golden_compare_images(&ref, &mine, strict && !manual ? BKGoldenImageTolerance{ 0, 0 } : bk_golden_tolerance_u8());
             BKGoldenImageReport rd = bk_golden_compare_images(&refV, &mineV, vt);
             char a[256], b[256];
             bk_golden_describe_image_report(&rc, a, sizeof a);

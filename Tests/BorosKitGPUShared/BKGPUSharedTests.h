@@ -76,7 +76,9 @@ struct RaycastCaseOutput {
     std::vector<float> values;
 };
 bool RenderRaycastCases(boroskit::gpu::Device &device, bool manualFiltering, std::vector<RaycastCaseOutput> *out);
-int TestRaycastPass(boroskit::gpu::Device &device, const char *referencesDir, const char *outDir, const char *label);
+// strict (2026-11-26, after the portable-normalise switch): zero tolerance for the hardware-filtered run (Metal).
+int TestRaycastPass(boroskit::gpu::Device &device, const char *referencesDir, const char *outDir, const char *label,
+                    bool strict = false);
 
 }  // namespace bkshared
 

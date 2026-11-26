@@ -376,6 +376,25 @@ every platform), like D3.
   pictures, surface building. Everything should look exactly as before.
 
 ### Where to resume
-1. User decision on the portable normalisation (re-record once) - then the Mac adapter drops its simd hook.
+1. (done 2026-11-26: portable normalisation everywhere, references re-recorded once.)
 2. On-screen Vulkan path (plan above) together with BKGPU.h Surface (phase 8).
 3. Next modules onto the interface: BKImageLayerRenderer (2D), BKOverlayRenderer; BKCurvedReformat (slab pictures).
+
+### 2026-11-26 (later) - USER DECISION: portable normalise everywhere ("universal", like D3) - re-recorded ONCE
+- BKRenderParamsFill now always uses BKRenderNormalize3fPortable (double, rounded to float once); the Mac's Apple
+  simd_normalize hook (hardware 1/sqrt estimate) is removed. Identical parameter blocks on every platform.
+- Re-recorded from Metal (only these 4 of all references changed; every other file byte-identical):
+  - vr_persp_oblique.rgba.pam: 3 channels, +-1 grey level: px(42,31) G 88->87, px(41,33) G 90->91, px(40,34) B 88->89.
+  - vr_persp_oblique.values.pfm: 462 of 7680 pixels, max 6.6e-05 opacity, e.g. 0.495539 -> 0.495606.
+  - mpr_thin_oblique.values.pfm: 3 of 9216 pixels, max 0.16 HU: -974.449 -> -974.611, -991.887 -> -991.778,
+    -983.872 -> -983.818.
+  - mip_persp_full.values.pfm: 12 of 7680 pixels, max 5.69 HU (edge pixels of the perspective MIP):
+    1480.91 -> 1475.22, 1384.46 -> 1385.59, -979.81 -> -979.70.
+  (Pixel y = row in the PFM file, which is stored bottom-up.) Reason: the camera / slab vectors differ in the last
+  float bit between the two normalisations, moving a few rays by ~1e-7.
+- Metal golden strict 0 against the new references (472 tests), and BKRaycastPass on Metal is now ALSO strict 0 (the
+  shared test uses the same parameter blocks as BKVolumeRenderer).
+- Vulkan vs the new references = exactly the live Vulkan-vs-Metal numbers: colour max 1 grey level; values MIP /
+  MinIP identical, composite <= 9.7e-05, average 6.1e-05 HU, thin oblique MPR 0.108 HU (was 0.163 vs the old
+  references), perspective full MIP 5.69 HU in 3 edge pixels (7664 of 7680 identical, was 7660). What remains is the
+  shader compilers' float rounding, not the parameters. ctest 40/40, 0 validation messages.

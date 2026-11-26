@@ -394,15 +394,6 @@ static NSData *BKDataWrappingBuffer(id<MTLBuffer> buffer, NSUInteger length)
     return _blendVolumeTexture && _blendTransferFunction && _blendVolumeTexture.texture.device == _device;
 }
 
-// What: Apple's simd_normalize, handed to the plain-C params builder so the Mac keeps its exact numbers.
-// Why (2026-11-26, agent "vulkan-engine"): simd_normalize uses the CPU's hardware 1/sqrt estimate, which no portable
-// formula reproduces bit for bit (see BKRenderParamsCore.h); other platforms use BKRenderNormalize3fPortable.
-static void BKSimdNormalize3f(float v[3])
-{
-    simd_float3 n = simd_normalize(simd_make_float3(v[0], v[1], v[2]));
-    v[0] = n.x; v[1] = n.y; v[2] = n.z;
-}
-
 // What: an N3AffineTransform (row-vector convention, voxel.x = p.x*m11 + p.y*m21 + p.z*m31 + m41) as the column-major
 // matrix of the plain-C core: column c = row c of the N3 matrix.
 static void BKColumnMajor(N3AffineTransform m, double out[16])
@@ -490,7 +481,6 @@ static void BKVector3(N3Vector v, double out[3])
         s.blendTfMax = btf.maximumValue;
         s.blendColorVolume = bt.color ? 1 : 0;
     }
-    s.normalize3f = BKSimdNormalize3f;   // the Mac's exact numbers (see BKRenderParamsCore.h)
 
     int code = BKRenderParamsFill(&s, (uint32_t)width, (uint32_t)height, p);
     if (code == BKRenderParamsZeroDirection) {

@@ -21,9 +21,9 @@ minip_axial_slab10.values.pfm  36878  645877564fa8fc63
 mip_axial_slab10.rgba.pam  36931  dd4352b185897db3
 mip_axial_slab10.values.pfm  36878  4a6b1128ab48ed15
 mip_persp_full.rgba.pam  30787  20bd48f5fb2019fb
-mip_persp_full.values.pfm  30734  6e51b48ac407e122
+mip_persp_full.values.pfm  30734  0086f66e06a3dcb1
 mpr_thin_oblique.rgba.pam  36931  779974a769aae5a2
-mpr_thin_oblique.values.pfm  36878  ce715338d5242ee6
+mpr_thin_oblique.values.pfm  36878  c42d49dff1dd289c
 numbers_core.txt  1476  29b6a5f9ead6ef43
 numbers_phantom.txt  167  b9478b73ef4ace35
 scene_export_scene.iv  7015  88ab48c12d53eb9d
@@ -41,6 +41,6 @@ vr_ortho_anterior.rgba.pam  36931  bc5a65f1f958441d
 vr_ortho_anterior.values.pfm  36878  d523a765a56efafd
 vr_ortho_left_clipped_unlit.rgba.pam  36931  b71f0253cc53926b
 vr_ortho_left_clipped_unlit.values.pfm  36878  1bce5c496c86fade
-vr_persp_oblique.rgba.pam  30787  9bac4f9fa42ae485
-vr_persp_oblique.values.pfm  30734  ae5613eb39e544e6
+vr_persp_oblique.rgba.pam  30787  e052c678b3c5ec94
+vr_persp_oblique.values.pfm  30734  61ca72393c0a90d4
 # total 2190171 bytes
