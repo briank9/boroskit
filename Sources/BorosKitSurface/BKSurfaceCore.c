@@ -22,7 +22,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+#include "BKOnce.h"   // portable run-once (2026-11-25, replaces pthread_once: not on Windows)
 
 const char *BKSurfaceStatusMessage(BKSurfaceStatus status)
 {
@@ -116,7 +116,7 @@ static const int kFaces[6][4] = {
  * exceeded, and a unit test checks the whole table).
  */
 static BKSurfaceCase gCases[256];
-static pthread_once_t gTableOnce = PTHREAD_ONCE_INIT;
+static BKOnceFlag gTableOnce = BK_ONCE_INIT;   // tables are built on first use, exactly once
 
 // What: bit mask of the (up to two) faces that contain cube edge e.
 static int BKEdgeFaces(int e)
@@ -256,13 +256,13 @@ static void BKBuildTables(void)
 
 const BKSurfaceEdge *BKSurfaceEdges(void)
 {
-    pthread_once(&gTableOnce, BKBuildTables);
+    BKOnceRun(&gTableOnce, BKBuildTables);
     return gEdges;
 }
 
 const BKSurfaceCase *BKSurfaceCaseTable(void)
 {
-    pthread_once(&gTableOnce, BKBuildTables);
+    BKOnceRun(&gTableOnce, BKBuildTables);
     return gCases;
 }
 

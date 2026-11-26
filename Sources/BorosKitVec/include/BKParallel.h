@@ -1,4 +1,4 @@
-// BorosKitMesh: BKParallel (internal helper, not a public header)
+// BorosKitVec: BKParallel - the one parallel-for helper of BorosKit (C++ only)
 // Original BorosKit code written for this project; contains no third-party code.
 //
 // What it is: one tiny function, BKParallelFor, that splits a long job ("do this for
@@ -17,8 +17,20 @@
 //   - the result must not depend on how the work was split into chunks. Every caller in
 //     BorosKit follows this, which is why the mesh results are identical whether 1 or
 //     16 threads are used (checked by a test).
+//
+// PORTING NOTES (Vulkan / Windows / Linux), 2026-11-25 agent "vulkan-engine", step M1:
+//   - Moved here from BorosKitMesh (VULKAN-PORT-PLAN.md rule 6 / step R5) so every core can use the
+//     same helper; BorosKitVec is the portable base layer every core already depends on.
+//   - C++ only (templates + lambdas). The whole file is inside `#ifdef __cplusplus`, because this
+//     folder is also a C module (SwiftPM builds one module from all headers here, and C / Objective-C
+//     files that include BKVec.h must not see C++ code). Plain-C cores that need one-time set-up use
+//     BKOnce.h; a plain-C parallel entry point can be added here later if a C core needs threads.
+//   - Apple: Grand Central Dispatch. Everywhere else (or with -DBK_PARALLEL_USE_STD_THREAD=1):
+//     std::thread. Both give identical results because callers never depend on the chunking.
 
 #pragma once
+
+#ifdef __cplusplus
 
 #include <cstddef>
 #include <algorithm>
@@ -96,3 +108,5 @@ inline void BKParallelFor(size_t count, size_t grain, const Body &body)
     for (auto &th : pool) th.join();
 #endif
 }
+
+#endif // __cplusplus
