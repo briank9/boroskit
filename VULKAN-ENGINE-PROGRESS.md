@@ -446,3 +446,26 @@ picked plugs in BEFORE BKOverlayCore (mask images); OverlayPass and the shaders 
 1. On-screen Vulkan path (storage image + copy, plan in the volume-render section) with BKGPU.h Surface (phase 8).
 2. Decision D4 (glyph source) when Windows / Linux UI work starts.
 3. Remaining Metal-only code: BKMeshRenderer extras, stereo compose (N4), the 3D view's upscale kernel.
+
+## 2026-11-26 - GPU ENGINE TEST SWITCH (agent/vk-toggle from main 29f83b7) - Boros 6 "Metal default / Vulkan via MoltenVK"
+
+User request: "mac should stay on native metal but we need the switch to test". Commits de05146, 1996174, f6b0017 (+ notes);
+Boros 6 agent/vk-toggle eb628b891 (worktree ~/boros6-agents.noindex/vk-toggle). Pushed, NOT merged.
+
+- BKGPUEngine (BorosKitGPU): preferred engine for renderers made afterwards; Metal default. BKGPUEngineBridge.h: the shared
+  test device (once per process, serialised), cached Metal -> Vulkan copies, read-backs, blits into Metal textures, the
+  "Vulkan (MoltenVK)" marker, "Boros GPU engine:" log lines (frame times once per second).
+- BorosKitGPUVulkan is a SwiftPM product now; BKGPUVulkanTestEngineInstall() registers it (factory + a no-load probe).
+  Loader search: VULKAN_SDK/lib, newest ~/VulkanSDK/<v>/macOS/lib, /usr/local/lib; MoltenVK ICD selected unless the
+  caller chose a driver; MVK fast math off. Headers only from the installed SDK; without them a stub (BKVulkanStub.cpp).
+- SPIR-V for Xcode: the GENERATED table of our own GLSL is committed (BKVulkanShaderTable.generated.cpp); ctest
+  vulkan.committed_shader_table_up_to_date + docs/tools/update-vulkan-shaders.sh keep it in step (decision: committed
+  generated files, because SwiftPM / Xcode cannot run glslc and Boros 6 must build without the SDK).
+- Adapters with a test branch: BKSurfaceExtractor, BKCurvedReformat, BKVolumeRenderer (buffers, values-only slabs,
+  on-screen via CPU compose + blit), BKMeshRenderer (fresh pictures only), BKImageLayerRenderer (image + fusion layer),
+  BKOverlayRenderer (list on Vulkan, laid into the caller's encoder as one picture). Not on Vulkan: meshes over an
+  existing picture, LOD upscale, stereo mixing.
+- BKEngineSwitchTests: Metal vs Vulkan test engine through the real adapters - volume colour max 1, values as the shared
+  tests; on-screen BGRA8 max 1; surfaces identical triangles; mesh, slices, overlay identical; reformat <= 0.0005 HU.
+- Boros 6 needs: framebufferOnly = NO in Vulkan test mode for blit targets (done in agent/vk-toggle for the 2D viewer,
+  3D overlay view, ROI volume view); products BorosKitGPU + BorosKitGPUVulkan linked.
