@@ -1,88 +1,20 @@
-// BorosKitGPUVulkan: surface kernel 4 - emit (twin of bk_surface_emit in BKSurfaceShaderSource.mm): same rows as
-// classify; vertices on each point's crossed edges (linear interpolation + gradient normals, into output
-// coordinates), then each cell's triangles with shared vertex numbers (no duplicates, no cracks).
-// Original BorosKit code written for this project; contains no third-party code. 2026-11-26, agent "vulkan-engine".
+// BorosKitGPUVulkan: surface kernel 4 (emit) - thin GLSL entry point; the body is BK_SURFACE_EMIT_BODY in
+// BKSurfaceShaderBodies.h (shared with Metal). Original BorosKit code; no third-party code. 2026-11-26, "vulkan-engine".
 #version 450
 #extension GL_GOOGLE_include_directive : require
-layout(std430, set = 0, binding = 1) readonly buffer BKField { uint w[]; } bkField;
-#define BK_SURFACE_READS_FIELD 1
-#define BK_SURFACE_ROW_KERNEL 1
 #include "bk_surface_common.glsl"
-layout(std430, set = 0, binding = 2) readonly buffer BKPacked { uint w[]; } bkPacked;
-layout(std430, set = 0, binding = 3) readonly buffer BKRowVertexStart { uint w[]; } bkRowVertexStart;
-layout(std430, set = 0, binding = 4) readonly buffer BKRowTriangleStart { uint w[]; } bkRowTriangleStart;
-layout(std430, set = 0, binding = 5) readonly buffer BKTable { uint w[]; } bkTable;
-layout(std430, set = 0, binding = 6) writeonly buffer BKPositions { vec4 v[]; } bkPositions;
-layout(std430, set = 0, binding = 7) writeonly buffer BKNormals { vec4 v[]; } bkNormals;
-layout(std430, set = 0, binding = 8) writeonly buffer BKIndices { uint w[]; } bkIndices;
+layout(std430, set = 0, binding = 1) readonly buffer BKFieldBlock { uint fieldWords[]; };
+layout(std430, set = 0, binding = 2) readonly buffer BKPackedBlock { uint packedWords[]; };
+layout(std430, set = 0, binding = 3) readonly buffer BKRowVerticesBlock { uint rowVertexWords[]; };
+layout(std430, set = 0, binding = 4) readonly buffer BKRowTrianglesBlock { uint rowTriangleWords[]; };
+layout(std430, set = 0, binding = 5) readonly buffer BKTableBlock { uint tableWords[]; };
+layout(std430, set = 0, binding = 6) writeonly buffer BKPositionsBlock { vec4 positionsOut[]; };
+layout(std430, set = 0, binding = 7) writeonly buffer BKNormalsBlock { vec4 normalsOut[]; };
+layout(std430, set = 0, binding = 8) writeonly buffer BKIndicesBlock { uint indexWords[]; };
+BK_SURFACE_HELPER_BODIES
 void main()
 {
+    const uvec3 group = gl_WorkGroupID;
     const uint lid = gl_LocalInvocationID.x, n = gl_WorkGroupSize.x;
-    const uint y = gl_WorkGroupID.x, z = gl_WorkGroupID.y;
-    const uint W = P.gridSize[0], H = P.gridSize[1];
-    const uint row = y + z * H;
-    const float T = P.thresholdSteps;
-    const mat4 M = mat4(vec4(P.gridToOutput[0], P.gridToOutput[1], P.gridToOutput[2], P.gridToOutput[3]),
-                        vec4(P.gridToOutput[4], P.gridToOutput[5], P.gridToOutput[6], P.gridToOutput[7]),
-                        vec4(P.gridToOutput[8], P.gridToOutput[9], P.gridToOutput[10], P.gridToOutput[11]),
-                        vec4(P.gridToOutput[12], P.gridToOutput[13], P.gridToOutput[14], P.gridToOutput[15]));
-    const mat3 N = mat3(vec3(P.normalMatrix[0], P.normalMatrix[1], P.normalMatrix[2]),
-                        vec3(P.normalMatrix[4], P.normalMatrix[5], P.normalMatrix[6]),
-                        vec3(P.normalMatrix[8], P.normalMatrix[9], P.normalMatrix[10]));
-    const uint vertexStart = bkRowVertexStart.w[row];
-    const uint triangleStart = bkRowTriangleStart.w[row];
-    uint carry = 0u;   // triangles of the chunks already done
-    for (uint x0 = 0u; x0 < W; x0 += n) {
-        uint x = x0 + lid;
-        uvec3 p = uvec3(x, y, z);
-        uint cs = 256u, triangles = 0u;
-        if (x < W) {
-            // a) vertices on this point's own crossed edges
-            uint pk = BK_READ16(bkPacked.w, bk_index(p));
-            uint mask = pk & 7u;
-            if (mask != 0u) {
-                uint v = vertexStart + (pk >> 3);
-                float v0 = bk_value(p);
-                vec3 g0 = bk_gradient(p);
-                for (uint a = 0u; a < 3u; a++) {
-                    if ((mask & (1u << a)) == 0u) continue;
-                    uvec3 q = p;
-                    q[a] += 1u;
-                    float v1 = bk_value(q);
-                    float t = (T - v0) / (v1 - v0);
-                    vec3 gp = vec3(p);
-                    gp[a] += t;
-                    vec3 g = g0 + (bk_gradient(q) - g0) * t;
-                    vec3 outward = -(N * g);
-                    float len = length(outward);
-                    bkPositions.v[v] = vec4((M * vec4(gp, 1.0)).xyz, 0.0);
-                    bkNormals.v[v] = vec4(len > 0.0 ? outward / len : vec3(0.0), 0.0);
-                    v++;
-                }
-            }
-            cs = bk_cell_case(p);
-            if (cs < 256u) triangles = bkTable.w[cs * BK_SURFACE_CASE_STRIDE];
-        }
-        // b) triangles
-        uint total;
-        uint before = bk_workgroup_exclusive_scan(triangles, lid, n, total);
-        if (triangles != 0u) {
-            uint outIndex = (triangleStart + carry + before) * 3u;
-            for (uint t = 0u; t < triangles; t++) {
-                uint id[3];
-                for (uint j = 0u; j < 3u; j++) {
-                    uint e = bkTable.w[cs * BK_SURFACE_CASE_STRIDE + 1u + 3u * t + j];
-                    uint ed = bkTable.w[BK_SURFACE_EDGE_TABLE_OFFSET + e];
-                    uvec3 owner = p + uvec3(ed & 0xffu, (ed >> 8) & 0xffu, (ed >> 16) & 0xffu);
-                    uint axis = ed >> 24;
-                    uint opk = BK_READ16(bkPacked.w, bk_index(owner));
-                    id[j] = bkRowVertexStart.w[owner.y + owner.z * H] + (opk >> 3) + uint(bitCount(opk & 7u & ((1u << axis) - 1u)));
-                }
-                bkIndices.w[outIndex + 3u * t + 0u] = id[0];
-                bkIndices.w[outIndex + 3u * t + 1u] = P.flipWinding != 0u ? id[2] : id[1];
-                bkIndices.w[outIndex + 3u * t + 2u] = P.flipWinding != 0u ? id[1] : id[2];
-            }
-        }
-        carry += total;
-    }
+    BK_SURFACE_EMIT_BODY
 }

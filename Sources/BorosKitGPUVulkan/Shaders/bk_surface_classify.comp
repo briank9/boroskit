@@ -1,51 +1,18 @@
-// BorosKitGPUVulkan: surface kernel 3 - classify (twin of bk_surface_classify in BKSurfaceShaderSource.mm):
-// one workgroup per grid row (group = (y, z)); per point the 3-bit crossed-edge mask and its first vertex number
-// in the row ((vertex << 3) | mask, 16 bits); per row the vertex and triangle counts.
-// Original BorosKit code written for this project; contains no third-party code. 2026-11-26, agent "vulkan-engine".
+// BorosKitGPUVulkan: surface kernel 3 (classify) - thin GLSL entry point; the body is BK_SURFACE_CLASSIFY_BODY in
+// BKSurfaceShaderBodies.h (shared with Metal). Original BorosKit code; no third-party code. 2026-11-26, "vulkan-engine".
 #version 450
 #extension GL_GOOGLE_include_directive : require
-layout(std430, set = 0, binding = 1) readonly buffer BKField { uint w[]; } bkField;
-#define BK_SURFACE_READS_FIELD 1
-#define BK_SURFACE_ROW_KERNEL 1
 #include "bk_surface_common.glsl"
-layout(std430, set = 0, binding = 2) writeonly buffer BKPacked { uint w[]; } bkPacked;
-layout(std430, set = 0, binding = 3) writeonly buffer BKRowVertices { uint w[]; } bkRowVertices;
-layout(std430, set = 0, binding = 4) writeonly buffer BKRowTriangles { uint w[]; } bkRowTriangles;
-layout(std430, set = 0, binding = 5) readonly buffer BKTable { uint w[]; } bkTable;
+layout(std430, set = 0, binding = 1) readonly buffer BKFieldBlock { uint fieldWords[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer BKPackedBlock { uint packedWords[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer BKRowVerticesBlock { uint rowVertexWords[]; };
+layout(std430, set = 0, binding = 4) writeonly buffer BKRowTrianglesBlock { uint rowTriangleWords[]; };
+layout(std430, set = 0, binding = 5) readonly buffer BKTableBlock { uint tableWords[]; };
 shared uint bkValues16[gl_WorkGroupSize.x];
+BK_SURFACE_HELPER_BODIES
 void main()
 {
+    const uvec3 group = gl_WorkGroupID;
     const uint lid = gl_LocalInvocationID.x, n = gl_WorkGroupSize.x;
-    const uint y = gl_WorkGroupID.x, z = gl_WorkGroupID.y;
-    const uint W = P.gridSize[0], H = P.gridSize[1], D = P.gridSize[2];
-    const float T = P.thresholdSteps;
-    uint carry = 0u;   // packed counts of the chunks already done
-    for (uint x0 = 0u; x0 < P.gridSize[3]; x0 += n) {
-        uint x = x0 + lid;
-        uint mask = 0u, triangles = 0u;
-        if (x < W) {
-            uvec3 p = uvec3(x, y, z);
-            bool in0 = bk_value(p) >= T;
-            if (x + 1u < W && (bk_value(p + uvec3(1, 0, 0)) >= T) != in0) mask |= 1u;
-            if (y + 1u < H && (bk_value(p + uvec3(0, 1, 0)) >= T) != in0) mask |= 2u;
-            if (z + 1u < D && (bk_value(p + uvec3(0, 0, 1)) >= T) != in0) mask |= 4u;
-            uint cs = bk_cell_case(p);
-            if (cs < 256u) triangles = bkTable.w[cs * BK_SURFACE_CASE_STRIDE];
-        }
-        uint vertices = uint(bitCount(mask));
-        uint total;
-        uint before = bk_workgroup_exclusive_scan(vertices | (triangles << 16), lid, n, total) + carry;
-        // Two neighbouring points share one 32-bit word: gather in shared memory, the even thread writes the pair.
-        bkValues16[lid] = ((before & 0xffffu) << 3) | mask;
-        barrier();
-        if ((lid & 1u) == 0u && x < P.gridSize[3])
-            bkPacked.w[bk_index(uvec3(x, y, z)) >> 1] = bkValues16[lid] | (bkValues16[lid + 1u] << 16);
-        barrier();
-        carry += total;
-    }
-    if (lid == 0u) {
-        uint row = y + z * H;
-        bkRowVertices.w[row] = carry & 0xffffu;
-        bkRowTriangles.w[row] = carry >> 16;
-    }
+    BK_SURFACE_CLASSIFY_BODY
 }

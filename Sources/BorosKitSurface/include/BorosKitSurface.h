@@ -13,4 +13,5 @@
 #import "BKSurfaceExtractor.h"
 #import "BKSurfaceCore.h"
 #import "BKSurfaceShaderTypes.h"
+#import "BKSurfaceShaderBodies.h"   // only #defines (the shared kernel text)
 #import "BKSurfacePass.h"
