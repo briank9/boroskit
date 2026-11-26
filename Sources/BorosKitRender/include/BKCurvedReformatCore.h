@@ -39,6 +39,10 @@
 // [bandLow, bandHigh] is never read and does not take part in the projection (MIP / MinIP / mean over the
 // samples inside only; the radiograph sums only inside samples). A pixel with no sample inside the band
 // gets bandOutsideValue. With bandEnabled = 0 every result is bit-identical to the definition above.
+//
+// Height band (optional, clipEnabled): only the slab samples with clipLow <= clipNormal . voxel <= clipHigh
+// take part in the projection (MIP / MinIP / mean over those samples only; the radiograph sums only those;
+// "first sample" = the first one inside); a pixel with none inside is outOfBoundsValue.
 
 #ifndef BK_CURVED_REFORMAT_CORE_H
 #define BK_CURVED_REFORMAT_CORE_H
@@ -86,17 +90,31 @@ typedef enum {
     float slabCentre;          /* (depth-1)/2 */ \
     float reserved0; \
     float reserved1; \
+    /* Both height limits can be used together (merged 2026-11-25): a sample counts only if it passes */ \
+    /* the Mac's band (bandEnabled) AND Boros Mobile's clip band (clipEnabled). */ \
     /* Height cut-off (Boros 6 2026-11-25, cpr-cutoff; BKHeightBandCore.h): */ \
     uint32_t bandEnabled;      /* 1 = only samples whose height is in [bandLow, bandHigh] count */ \
     float bandLow;             /* mm, lower limit (inclusive) */ \
     float bandHigh;            /* mm, upper limit (inclusive) */ \
-    float bandOutsideValue;    /* value of a pixel without any sample inside the band (shown black) */
+    float bandOutsideValue;    /* value of a pixel without any sample inside the band (shown black) */ \
+    /* Height band (2026-11-25, Boros Mobile "Height limits"): when clipEnabled != 0, a slab sample at */ \
+    /* voxel position v is used only if clipLow <= clipNormal . v <= clipHigh; samples outside the band */ \
+    /* are left out of the projection, and a pixel with no sample inside is outOfBoundsValue. */ \
+    /* All zero (memset) = no band, the picture is unchanged. */ \
+    float clipNormalX;         /* band axis in voxel index space (not necessarily unit length) */ \
+    float clipNormalY; \
+    float clipNormalZ; \
+    float clipLow;             /* band limits along clipNormal (same units as clipNormal . v) */ \
+    float clipHigh; \
+    int32_t clipEnabled;       /* 0 = no band */ \
+    float reserved2;           /* keeps the block a multiple of 16 bytes (112) */ \
+    float reserved3;
 
 typedef struct BKReformatParams {
     BK_REFORMAT_PARAMS_FIELDS
 } BKReformatParams;
 // Layout pins (2026-11-25, vulkan-engine M2): 20 four-byte scalars, field n at 4 * n.
-BK_GPU_STATIC_ASSERT(sizeof(BKReformatParams) == 80, "BKReformatParams must stay 80 bytes");
+BK_GPU_STATIC_ASSERT(sizeof(BKReformatParams) == 112, "BKReformatParams must stay 112 bytes (80 + Boros Mobile clip band 32, merged 2026-11-25)");
 BK_GPU_ASSERT_OFFSET(BKReformatParams, outOfBoundsValue, 20);
 BK_GPU_ASSERT_OFFSET(BKReformatParams, volumeWide, 36);
 BK_GPU_ASSERT_OFFSET(BKReformatParams, rowCentre, 48);
@@ -139,6 +157,13 @@ void BKReformatComputeRows(const BKReformatParams *params, const BKReformatFrame
 // ignored. CPU only (Boros glue sizes the export picture with it).
 uint32_t BKReformatBandRows(const BKReformatFrame *frames, uint32_t width, uint32_t height, float rowCentre, float slabCentre,
                             float low, float high, int32_t *firstRow);
+
+// What: 1 when a slab sample at voxel coordinate (x, y, z) is inside the params' height band (always 1
+// when clipEnabled == 0), else 0. The kernel's bkr_in_band() is the same test.
+// Why (2026-11-25, Boros Mobile panoramic "Height limits"): the skull above and the neck below the jaw must
+// be LEFT OUT of thick projections (Mean / MIP / X-ray), not painted over afterwards, so the test is made
+// per slab sample, for any column orientation.
+int BKReformatInBand(const BKReformatParams *params, double x, double y, double z);
 
 // What: one interpolated value at voxel coordinate (x, y, z) (CPU reference of the kernel's sampling).
 float BKReformatSample(const BKReformatParams *params, const float *voxels, double x, double y, double z);

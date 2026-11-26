@@ -19,6 +19,12 @@ set(BOROSKIT_CORE_C_SOURCES
     Sources/BorosKitCore/BKKnotInterpCore.c
     Sources/BorosKitCore/BKRigidFitCore.c
     Sources/BorosKitCore/BKTiffCore.c
+    # BorosKitDICOM (licence-free DICOM + ZIP readers from the Boros Mobile work, merged 2026-11-25)
+    Sources/BorosKitDICOM/BKDicomCore.c
+    Sources/BorosKitDICOM/BKDicomSeriesCore.c
+    Sources/BorosKitDICOM/BKJpegLosslessCore.c
+    Sources/BorosKitDICOM/BKRleCore.c
+    Sources/BorosKitDICOM/BKZipCore.c
     # BorosKitDisplay
     Sources/BorosKitDisplay/BKAngleCore.c
     Sources/BorosKitDisplay/BKOverlayCore.c
@@ -39,6 +45,7 @@ set(BOROSKIT_CORE_C_SOURCES
     Sources/BorosKitRender/BKCurvedReformatCore.c
     Sources/BorosKitRender/BKGPUChoiceCore.c
     Sources/BorosKitRender/BKHeightBandCore.c
+    Sources/BorosKitRender/BKMPRGeometryCore.c
     Sources/BorosKitRender/BKOrientationCubeCore.c
     Sources/BorosKitRender/BKRenderCore.c
     Sources/BorosKitRender/BKScanGeometryCore.c
@@ -66,6 +73,8 @@ set(BOROSKIT_CORE_CXX_SOURCES
 set(BOROSKIT_CORE_INCLUDE_DIRS
     Sources/BorosKitVec/include
     Sources/BorosKitCore/include
+    Sources/BorosKitDICOM/include
+    Sources/BorosKitDICOM
     Sources/BorosKitDisplay/include
     Sources/BorosKitDisplay
     Sources/BorosKitMesh

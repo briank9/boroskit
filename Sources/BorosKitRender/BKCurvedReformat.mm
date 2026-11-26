@@ -92,6 +92,14 @@ static float bkr_sample(texture3d<float, access::read> vol, constant BKReformatP
     return sum;
 }
 
+// Same as BKReformatInBand() in BKCurvedReformatCore.c: the height band test for one slab sample.
+static bool bkr_in_band(constant BKReformatParams &p, float3 c)
+{
+    if (p.clipEnabled == 0) return true;
+    float t = p.clipNormalX * c.x + p.clipNormalY * c.y + p.clipNormalZ * c.z;
+    return t >= p.clipLow && t <= p.clipHigh;
+}
+
 // One thread per output pixel (GLSL: layout(local_size_x = 8, local_size_y = 8) in; same body).
 kernel void bk_curved_reformat(texture3d<float, access::read> vol [[texture(0)]],
                                constant BKReformatParams &p [[buffer(0)]],
@@ -104,14 +112,16 @@ kernel void bk_curved_reformat(texture3d<float, access::read> vol [[texture(0)]]
     float3 base = b4.xyz, row = r4.xyz, slab = s4.xyz;
     float ry = float(gid.y) - p.rowCentre;
     float acc = 0.0f;
-    uint n = 0;   // samples taken (= z without the cut-off)
+    uint n = 0;   // samples taken (both height limits: Mac band + Boros Mobile clip band)
     for (uint z = 0; z < p.depth; z++) {
         float rz = float(z) - p.slabCentre;
-        if (p.bandEnabled != 0u) {   // height cut-off (BKHeightBandInside): outside samples are never read
+        if (p.bandEnabled != 0u) {   // Mac height cut-off (BKHeightBandInside): outside samples are never read
             float h = b4.w + r4.w * ry + s4.w * rz;
             if (!(h >= p.bandLow && h <= p.bandHigh)) continue;
         }
-        float value = bkr_sample(vol, p, base + row * ry + slab * rz);
+        float3 c = base + row * ry + slab * rz;
+        if (!bkr_in_band(p, c)) continue;   // Boros Mobile clip band: left out of the projection
+        float value = bkr_sample(vol, p, c);
         if (p.projection == 1)      acc = (n == 0 || value > acc) ? value : acc;                     // MIP
         else if (p.projection == 2) acc = (n == 0 || value < acc) ? value : acc;                     // MinIP
         else if (p.projection == 3) acc = (n == 0) ? value : (acc * float(n) + value) / float(n + 1); // running mean
@@ -119,7 +129,8 @@ kernel void bk_curved_reformat(texture3d<float, access::read> vol [[texture(0)]]
         else if (n == 0) acc = value;   // no projection: the first slab sample (classic)
         n++;
     }
-    if (p.bandEnabled != 0u && n == 0) acc = p.bandOutsideValue;   // the whole pixel is cut off
+    if (p.bandEnabled != 0u && n == 0) acc = p.bandOutsideValue;   // the whole pixel is cut off (Mac band)
+    else if (n == 0) acc = p.outOfBoundsValue;                      // the whole slab is outside the clip band
     else if (p.projection == 4) acc = 3000.0f - 4000.0f * exp(-acc);
     outValues[gid.y * p.width + gid.x] = acc;
 }
@@ -201,7 +212,9 @@ static BKReformatParams BKReformatWithVolume(BKReformatParams params, BKVolumeTe
         return NO;
     }
     NSUInteger page = (NSUInteger)getpagesize();
-    BOOL direct = ((uintptr_t)destination % page) == 0 && capacityBytes % page == 0;
+    // iOS Simulator (2026-11-24, Boros Mobile): its Metal driver traps on newBufferWithBytesNoCopy over app memory
+    // (XPC shared-memory misuse), so the simulator always takes the copy path. Devices and Macs are unchanged.
+    BOOL direct = !TARGET_OS_SIMULATOR && ((uintptr_t)destination % page) == 0 && capacityBytes % page == 0;
     id<MTLBuffer> valueBuffer = direct
         ? [_device newBufferWithBytesNoCopy:destination length:capacityBytes options:MTLResourceStorageModeShared deallocator:nil]
         : [_device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
@@ -224,8 +237,9 @@ static BKReformatParams BKReformatWithVolume(BKReformatParams params, BKVolumeTe
                                 into:(float *)destination capacity:(NSUInteger)capacityBytes error:(NSError **)error
 {
     NSUInteger bytes = (NSUInteger)params.width * params.height * sizeof(float), page = (NSUInteger)getpagesize();
-    if (destination == NULL || capacityBytes < bytes || bytes == 0 || ((uintptr_t)destination % page) != 0 || capacityBytes % page != 0) {
-        if (error) *error = BKReformatError(7, @"Drawing ahead needs page-aligned memory of whole pages.");
+    if (destination == NULL || capacityBytes < bytes || bytes == 0 || ((uintptr_t)destination % page) != 0 || capacityBytes % page != 0 || TARGET_OS_SIMULATOR) {
+        // (The iOS Simulator cannot wrap app memory in a Metal buffer: callers use -renderParams: there.)
+        if (error) *error = BKReformatError(7, @"Drawing ahead needs page-aligned memory of whole pages (not available in the iOS Simulator).");
         return nil;
     }
     id<MTLBuffer> valueBuffer = [_device newBufferWithBytesNoCopy:destination length:capacityBytes options:MTLResourceStorageModeShared deallocator:nil];

@@ -54,6 +54,6 @@ void bk_test_gpu_types_layout(void)
     BK_CHECK(sizeof(BKOverlayVertex) == 32);
     BK_CHECK(sizeof(BKDisplayParams) == 80);
     BK_CHECK(sizeof(BKSurfaceParams) == 336 && offsetof(BKSurfaceParams, gridSize) == 272);
-    BK_CHECK(sizeof(BKReformatParams) == 80 && sizeof(BKReformatFrame) == 48);
+    BK_CHECK(sizeof(BKReformatParams) == 112 && sizeof(BKReformatFrame) == 48);
     BK_CHECK(BK_MAX_CLIP_PLANES == 6);
 }
