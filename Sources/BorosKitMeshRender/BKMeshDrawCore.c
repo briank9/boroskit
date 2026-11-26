@@ -4,6 +4,7 @@
 
 #include "BKMeshDrawCore.h"
 #include <math.h>
+#include <string.h>   // memset
 
 // Small RGBA helpers (component-wise, same order of operations as before).
 static BKVec4f BKMeshV4Scale(BKVec4f a, float s) { return BKV4f(a.x * s, a.y * s, a.z * s, a.w * s); }
@@ -99,4 +100,132 @@ void BKMeshPointSquare(float cx, float cy, float pointSize, BKVec2f *min, BKVec2
     float h = 0.5f * fmaxf(pointSize, 0.0f);
     if (min) *min = BKV2f(cx - h, cy - h);
     if (max) *max = BKV2f(cx + h, cy + h);
+}
+
+// ---- GPU settings block (2026-11-25, agent "vulkan-engine", step M3) -----------------------------------
+// What: everything BKMeshUniforms holds, filled in plain C (see the header). Why: the Objective-C renderer
+// used to compute the camera frame, view sizes, depth range and normal matrix itself with Apple simd; a
+// Vulkan engine could not reuse that and its copy would drift. Now Metal and Vulkan call these functions.
+// Written from the maths (orthonormal frame by cross products; inverse-transpose by cofactors).
+
+
+// pi as a literal (M_PI is not part of strict C99); (float) of it is the same value M_PI gave.
+#define BK_MESH_PI 3.14159265358979323846
+
+int32_t BKMeshCameraAxes(const BKMeshCamera *camera, BKVec3d *right, BKVec3d *up, BKVec3d *forward)
+{
+    // Same two checks (and thresholds) as the renderer had: a zero direction, and an up vector that is
+    // parallel to the direction (their cross product, before normalising, nearly zero). Written as
+    // "not >=" so a NaN camera is refused too (the old float code let it through and drew nothing useful).
+    double dirLength = BKV3dLength(camera->direction);
+    if (!(dirLength >= 1e-6)) return BKMeshCameraZeroDirection;
+    BKVec3d f = BKV3dDiv(camera->direction, dirLength);
+    if (!(BKV3dLength(BKV3dCross(f, camera->up)) >= 1e-6)) return BKMeshCameraUpParallel;
+    // right = unit(forward x up): exactly BKCameraMath's BKCameraRight (same operations, same order; the
+    // plain-C core tests check the two give identical bits). It is not called directly because a C file of
+    // this SwiftPM target cannot include BorosKitRender's headers: with modules on, that imports the whole
+    // Objective-C BorosKitRender module, which a C file cannot load.
+    BKVec3d r = BKV3dNormalize(BKV3dCross(f, camera->up));
+    if (right) *right = r;
+    if (up) *up = BKV3dCross(r, f);     // unit: r and f are unit and perpendicular
+    if (forward) *forward = f;
+    return BKMeshCameraOK;
+}
+
+void BKMeshCameraHalfSize(const BKMeshCamera *camera, float areaWidth, float areaHeight,
+                          float *halfWidth, float *halfHeight)
+{
+    float hw, hh;
+    if (camera->projection == 1) {
+        // Vertical angle given, horizontal follows the drawing area (as in the volume renderer).
+        hh = tanf(0.5f * (float)camera->fieldOfView * (float)BK_MESH_PI / 180.0f);
+        hw = hh * (areaWidth / areaHeight);
+    } else {
+        hw = 0.5f * (float)camera->viewWidth;
+        hh = 0.5f * (float)camera->viewHeight;
+    }
+    if (halfWidth) *halfWidth = hw;
+    if (halfHeight) *halfHeight = hh;
+}
+
+void BKMeshDepthRange(float nearest, float farthest, int32_t perspective, float *nearDistance, float *farDistance)
+{
+    // Comparisons written like Foundation's MAX(a, b) = a < b ? b : a, which the renderer used before.
+    float extent = farthest - nearest;
+    float margin = 1.0f + 0.01f * (extent < 0.0f ? 0.0f : extent);
+    float n = nearest - margin, f = farthest + margin;
+    if (perspective) {
+        if (f < 1e-3f) f = 1e-3f;
+        if (n < f * 1e-4f) n = f * 1e-4f;
+    }
+    *nearDistance = n;
+    *farDistance = f;
+}
+
+int32_t BKMeshUniformsFill(BKMeshUniforms *u, const BKMeshCamera *camera, float areaWidth, float areaHeight,
+                           float nearDistance, float farDistance, BKMeshLighting lighting)
+{
+    memset(u, 0, sizeof *u);
+    BKVec3d r, up, f;
+    int32_t status = BKMeshCameraAxes(camera, &r, &up, &f);
+    if (status != BKMeshCameraOK) return status;
+    // Vectors go to the GPU as float4 with w = 1 for the point and 0 for directions (rounded once here).
+    u->cameraPosition = bk_make_float4((float)camera->position.x, (float)camera->position.y, (float)camera->position.z, 1.0f);
+    u->cameraRight = bk_make_float4((float)r.x, (float)r.y, (float)r.z, 0.0f);
+    u->cameraUp = bk_make_float4((float)up.x, (float)up.y, (float)up.z, 0.0f);
+    u->cameraForward = bk_make_float4((float)f.x, (float)f.y, (float)f.z, 0.0f);
+    BKMeshCameraHalfSize(camera, areaWidth, areaHeight, &u->halfWidth, &u->halfHeight);
+    if (!(u->halfWidth > 0) || !(u->halfHeight > 0)) {
+        memset(u, 0, sizeof *u);
+        return BKMeshCameraZeroFieldOfView;
+    }
+    u->nearDistance = nearDistance;
+    u->farDistance = farDistance;
+    u->ambient = lighting.ambient;
+    u->diffuse = lighting.diffuse;
+    u->specular = lighting.specular;
+    u->specularPower = lighting.specularPower;
+    u->projection = camera->projection;
+    u->lit = 1;
+    u->viewportWidth = areaWidth;
+    u->viewportHeight = areaHeight;
+    return BKMeshCameraOK;
+}
+
+void BKMeshUniformsSetModel(BKMeshUniforms *u, const float model[16], int32_t withNormalMatrix)
+{
+    for (int c = 0; c < 4; c++)
+        u->model.columns[c] = bk_make_float4(model[c * 4 + 0], model[c * 4 + 1], model[c * 4 + 2], model[c * 4 + 3]);
+    // a(r, c) = row r, column c of the model's 3x3 (linear) part.
+#define BK_A(r, c) ((double)model[(c) * 4 + (r)])
+    double n[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };   // n[r][c]
+    if (withNormalMatrix) {
+        // Inverse-transpose = cofactor matrix / determinant (adjugate rule written out).
+        double cof[3][3];
+        cof[0][0] =   BK_A(1, 1) * BK_A(2, 2) - BK_A(1, 2) * BK_A(2, 1);
+        cof[0][1] = -(BK_A(1, 0) * BK_A(2, 2) - BK_A(1, 2) * BK_A(2, 0));
+        cof[0][2] =   BK_A(1, 0) * BK_A(2, 1) - BK_A(1, 1) * BK_A(2, 0);
+        cof[1][0] = -(BK_A(0, 1) * BK_A(2, 2) - BK_A(0, 2) * BK_A(2, 1));
+        cof[1][1] =   BK_A(0, 0) * BK_A(2, 2) - BK_A(0, 2) * BK_A(2, 0);
+        cof[1][2] = -(BK_A(0, 0) * BK_A(2, 1) - BK_A(0, 1) * BK_A(2, 0));
+        cof[2][0] =   BK_A(0, 1) * BK_A(1, 2) - BK_A(0, 2) * BK_A(1, 1);
+        cof[2][1] = -(BK_A(0, 0) * BK_A(1, 2) - BK_A(0, 2) * BK_A(1, 0));
+        cof[2][2] =   BK_A(0, 0) * BK_A(1, 1) - BK_A(0, 1) * BK_A(1, 0);
+        double det = BK_A(0, 0) * cof[0][0] + BK_A(0, 1) * cof[0][1] + BK_A(0, 2) * cof[0][2];
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                n[r][c] = det != 0 ? cof[r][c] / det : BK_A(r, c);   // singular: the 3x3 part as it is
+    }
+#undef BK_A
+    for (int c = 0; c < 3; c++)
+        u->normalMatrix.columns[c] = bk_make_float4((float)n[0][c], (float)n[1][c], (float)n[2][c], 0.0f);
+    u->normalMatrix.columns[3] = bk_make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+}
+
+void BKMeshUniformsSetColor(BKMeshUniforms *u, float r, float g, float b, float opacity)
+{
+    // MIN(MAX(o, 0), 1) with Foundation's definitions: MAX(a, b) = a < b ? b : a, MIN(a, b) = a < b ? a : b.
+    float o = opacity < 0.0f ? 0.0f : opacity;
+    o = o < 1.0f ? o : 1.0f;
+    u->color = bk_make_float4(r, g, b, o);
 }

@@ -27,11 +27,19 @@
 //   in the core OpenGL profile), depth-tested like surfaces. Built from two triangles per point
 //   in the vertex shader, because GPU point primitives have API-dependent size limits.
 // - Flags are int32_t (never bool) so they could be shared with shader structs.
+// - 2026-11-25 (vulkan-engine M3): the GPU settings block BKMeshUniforms (BKMeshShaderTypes.h, now a public
+//   plain-C header) is filled HERE, not in Objective-C: camera frame (via BKCameraMath), half view sizes,
+//   depth range, lighting, colour, placement and normal matrix. BKMeshRenderer (Metal) calls these; a
+//   Vulkan mesh pass calls the very same functions, so both engines get identical bytes.
+//   Precision: the camera frame is built in double (same formula as BKCameraMath) and rounded to float once. (Before, Objective-C built it
+//   in float with Apple simd, whose normalize uses Apple's own approximate 1/sqrt - not reproducible in
+//   portable C; the golden harness reports the effect.)
 
 #ifndef BK_MESH_DRAW_CORE_H
 #define BK_MESH_DRAW_CORE_H
 
 #include "BKVec.h"   // BorosKit neutral vectors (no Apple simd: VULKAN-PORT-PLAN rule 1)
+#include "BKMeshShaderTypes.h"   // BKMeshUniforms, the GPU settings block (plain C since 2026-11-25)
 #include <stdint.h>
 #include <stddef.h>
 
@@ -83,6 +91,62 @@ BKVec4f BKMeshTextureModulate(BKVec4f litColor, BKVec4f texel);
 // pixel position (cx, cy) (any origin; the square is centred there): min and max corners.
 // Pixels whose CENTRE lies inside [min, max) are covered (the GPU's fill rule).
 void BKMeshPointSquare(float cx, float cy, float pointSize, BKVec2f *min, BKVec2f *max);
+
+// ---- GPU settings block (2026-11-25, vulkan-engine M3) -------------------------------------------------
+
+// What: the camera the mesh pictures are drawn with (the same numbers BKMeshRenderer stores).
+typedef struct {
+    int32_t projection;         // 0 orthographic, 1 perspective (BKProjection)
+    BKVec3d position;           // patient mm: ortho = centre of the image plane; perspective = the eye
+    BKVec3d direction;          // viewing direction (any length > 0)
+    BKVec3d up;                 // roughly up on the screen (any length; made perpendicular here)
+    double viewWidth;           // orthographic: picture width in mm
+    double viewHeight;          // orthographic: picture height in mm
+    double fieldOfView;         // perspective: full VERTICAL opening angle, degrees
+} BKMeshCamera;
+
+// Results of the functions below (0 = fine). BKMeshRenderer turns them into its error messages.
+enum {
+    BKMeshCameraOK = 0,
+    BKMeshCameraZeroDirection = 1,     // direction shorter than 1e-6
+    BKMeshCameraUpParallel = 2,        // up (almost) parallel to the direction
+    BKMeshCameraZeroFieldOfView = 3,   // half width / half height not > 0
+};
+
+// What: the camera's orthonormal frame - forward = unit direction, right = unit(forward x up) (the same
+// formula as BKCameraMath's BKCameraRight, checked by a test), up = right x forward. Returns
+// BKMeshCameraOK, or why it cannot be built (then the outputs are untouched). Any output may be NULL.
+int32_t BKMeshCameraAxes(const BKMeshCamera *camera, BKVec3d *right, BKVec3d *up, BKVec3d *forward);
+
+// What: half the picture size the vertex shader uses: orthographic = half width / height in mm;
+// perspective = tan(half vertical angle) and that times the drawing area's aspect (width / height).
+// Same float maths the renderer always used.
+void BKMeshCameraHalfSize(const BKMeshCamera *camera, float areaWidth, float areaHeight,
+                          float *halfWidth, float *halfHeight);
+
+// What: the depth range (mm along the viewing direction) that encloses everything drawn, from the
+// nearest / farthest object corner: 1 mm + 1 % of the depth extent of margin on both sides; in
+// perspective the far distance stays >= 0.001 and the near one >= far / 10000 (nothing behind the eye).
+// Why: a tight range keeps the depth test precise.
+void BKMeshDepthRange(float nearest, float farthest, int32_t perspective, float *nearDistance, float *farDistance);
+
+// Lighting terms (same meaning as BKVolumeRenderer's).
+typedef struct { float ambient, diffuse, specular, specularPower; } BKMeshLighting;
+
+// What: zeroes `u` and fills the part shared by every object of a frame: camera frame, half sizes,
+// depth range, lighting, projection, drawing-area size; lit = 1. Returns BKMeshCameraOK or the problem
+// (then `u` is zeroed only).
+int32_t BKMeshUniformsFill(BKMeshUniforms *u, const BKMeshCamera *camera, float areaWidth, float areaHeight,
+                           float nearDistance, float farDistance, BKMeshLighting lighting);
+
+// What: one object's placement. `model` = 16 floats, column-major (object -> patient mm). With
+// `withNormalMatrix` = 1 the normal matrix is the inverse-transpose of the model's 3x3 part (computed in
+// double; a singular 3x3 part is used as it is), otherwise identity (lines, points).
+void BKMeshUniformsSetModel(BKMeshUniforms *u, const float model[16], int32_t withNormalMatrix);
+
+// What: object colour (rgb) and opacity; the opacity is clamped to 0..1 exactly as the Objective-C
+// MIN(MAX(opacity, 0), 1) did (so a NaN opacity becomes 1). The colour is stored as given.
+void BKMeshUniformsSetColor(BKMeshUniforms *u, float r, float g, float b, float opacity);
 
 #ifdef __cplusplus
 }

@@ -13,7 +13,6 @@
 
 #import "BKMeshRenderer.h"
 #import "BKMeshShaderTypes.h"
-#import "BKVecSimd.h"         // 2026-11-25: simd_float4x4 -> bk_float4x4 (GPU block matrices, BKGPUTypes.h)
 #import "BKVolumeTexture.h"   // BKRenderErrorDomain
 #import "BKMeshDrawCore.h"    // 2026-11-14: culling / texture / point rules (plain C)
 #import "BKMetalDevice.h"     // the user's chosen graphics card (Automatic by default)
@@ -533,25 +532,49 @@ static simd_float3 BKMeshFloat3(N3Vector v)
     _fieldOfView = r.fieldOfView;
 }
 
-// What: the orthonormal camera frame (right, up, forward), built like the volume
-// renderer builds it. Returns NO + error for a zero or degenerate camera.
+// What (2026-11-25, vulkan-engine M3): this renderer's camera as the plain-C BKMeshCamera, the input of
+// the shared uniform builder in BKMeshDrawCore (the same functions a Vulkan mesh pass calls).
+- (BKMeshCamera)meshCamera
+{
+    BKMeshCamera c;
+    c.projection = _projection;
+    c.position = BKV3d(_cameraPosition.x, _cameraPosition.y, _cameraPosition.z);
+    c.direction = BKV3d(_cameraDirection.x, _cameraDirection.y, _cameraDirection.z);
+    c.up = BKV3d(_cameraUp.x, _cameraUp.y, _cameraUp.z);
+    c.viewWidth = _viewWidth;
+    c.viewHeight = _viewHeight;
+    c.fieldOfView = _fieldOfView;
+    return c;
+}
+
+// What: turns a BKMeshCamera* status into this renderer's error (same codes and messages as before).
+static BOOL BKMeshCameraStatusOK(int32_t status, NSError **error)
+{
+    switch (status) {
+        case BKMeshCameraOK: return YES;
+        case BKMeshCameraZeroDirection:
+            if (error) *error = BKMeshRenderError(31, @"The camera direction is zero.");
+            return NO;
+        case BKMeshCameraUpParallel:
+            if (error) *error = BKMeshRenderError(32, @"The camera up vector is parallel to the viewing direction.");
+            return NO;
+        default:
+            if (error) *error = BKMeshRenderError(36, @"The camera's field of view is zero.");
+            return NO;
+    }
+}
+
+// What: the orthonormal camera frame (right, up, forward) as GPU floats. Returns NO + error for a zero
+// or degenerate camera. 2026-11-25 (M3): built by BKMeshCameraAxes (plain C, double, via BKCameraMath)
+// instead of Apple simd in float here, so Metal and a Vulkan backend use one definition.
 - (BOOL)getCameraRight:(simd_float3 *)right up:(simd_float3 *)up forward:(simd_float3 *)forward error:(NSError **)error
 {
-    simd_float3 f = BKMeshFloat3(_cameraDirection), u = BKMeshFloat3(_cameraUp);
-    if (simd_length(f) < 1e-6f) {
-        if (error) *error = BKMeshRenderError(31, @"The camera direction is zero.");
-        return NO;
-    }
-    f = simd_normalize(f);
-    simd_float3 r = simd_cross(f, u);
-    if (simd_length(r) < 1e-6f) {
-        if (error) *error = BKMeshRenderError(32, @"The camera up vector is parallel to the viewing direction.");
-        return NO;
-    }
-    r = simd_normalize(r);
-    *right = r;
-    *up = simd_cross(r, f);
-    *forward = f;
+    BKMeshCamera camera = [self meshCamera];
+    BKVec3d r, u, f;
+    if (!BKMeshCameraStatusOK(BKMeshCameraAxes(&camera, &r, &u, &f), error)) return NO;
+    *right = simd_make_float3((float)r.x, (float)r.y, (float)r.z);
+    *up = simd_make_float3((float)u.x, (float)u.y, (float)u.z);
+    *forward = simd_make_float3((float)f.x, (float)f.y, (float)f.z);
     return YES;
 }
 
@@ -754,12 +777,9 @@ static simd_float3 BKMeshFloat3(N3Vector v)
 
     // 2. Depth range: just enclose the scene (a tight range keeps the depth test precise).
     // Perspective cannot see behind the eye, so the near distance stays positive.
-    float margin = 1.0f + 0.01f * MAX(farthest - nearest, 0.0f);
-    float nearDistance = nearest - margin, farDistance = farthest + margin;
-    if (perspective) {
-        farDistance = MAX(farDistance, 1e-3f);
-        nearDistance = MAX(nearDistance, farDistance * 1e-4f);
-    }
+    // 2026-11-25 (M3): the rule lives in BKMeshDrawCore (shared with a Vulkan mesh pass).
+    float nearDistance, farDistance;
+    BKMeshDepthRange(nearest, farthest, perspective ? 1 : 0, &nearDistance, &farDistance);
     BOOL anything = (opaque.count + opaqueLines.count + transparent.count) > 0 && isfinite(nearDistance) && isfinite(farDistance) && farDistance > nearDistance;
 
     // 3. The render pass: colour (+ ray distance) + depth.
@@ -822,37 +842,19 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                                          (NSUInteger)area.size.width, (NSUInteger)area.size.height}];
 
     if (anything) {
-        // Shared camera part of the uniforms.
+        // Shared camera part of the uniforms: camera frame, half view sizes, depth range, lighting.
+        // 2026-11-25 (M3): filled by the plain-C BKMeshUniformsFill (BKMeshDrawCore) - the same function
+        // a Vulkan mesh pass calls, so both engines send identical settings blocks.
         BKMeshUniforms base;
-        memset(&base, 0, sizeof base);
-        base.cameraPosition = simd_make_float4(camera, 1);
-        base.cameraRight = simd_make_float4(right, 0);
-        base.cameraUp = simd_make_float4(up, 0);
-        base.cameraForward = simd_make_float4(forward, 0);
-        float aspect = (float)area.size.width / (float)area.size.height;
-        if (perspective) {
-            // Same as the volume renderer: vertical angle given, horizontal follows the image.
-            base.halfHeight = tanf(0.5f * (float)_fieldOfView * (float)M_PI / 180.0f);
-            base.halfWidth = base.halfHeight * aspect;
-        } else {
-            base.halfWidth = 0.5f * (float)_viewWidth;
-            base.halfHeight = 0.5f * (float)_viewHeight;
-        }
-        if (!(base.halfWidth > 0) || !(base.halfHeight > 0)) {
+        BKMeshCamera meshCamera = [self meshCamera];
+        BKMeshLighting lighting = { _ambient, _diffuse, _specular, _specularPower };
+        int32_t status = BKMeshUniformsFill(&base, &meshCamera, (float)area.size.width, (float)area.size.height,
+                                            nearDistance, farDistance, lighting);
+        if (status != BKMeshCameraOK) {
             [enc endEncoding];
-            if (error) *error = BKMeshRenderError(36, @"The camera's field of view is zero.");
+            BKMeshCameraStatusOK(status, error);
             return NO;
         }
-        base.nearDistance = nearDistance;
-        base.farDistance = farDistance;
-        base.ambient = _ambient;
-        base.diffuse = _diffuse;
-        base.specular = _specular;
-        base.specularPower = _specularPower;
-        base.projection = _projection;
-        base.lit = 1;
-        base.viewportWidth = (float)area.size.width;
-        base.viewportHeight = (float)area.size.height;
 
         // Pass 0: solid meshes; pass 1: solid lines; pass 2: everything see-through,
         // farthest first (meshes and lines mixed, so they blend in the right order).
@@ -865,9 +867,9 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                     // 2026-11-14: points, squares of pointSize pixels (flat colour, never culled).
                     BKPointObject *pts = item.pointObject;
                     BKMeshUniforms u = base;
-                    u.model = BKFloat4x4FromSimd(pts.transform);
-                    u.normalMatrix = BKFloat4x4FromSimd(matrix_identity_float4x4);
-                    u.color = simd_make_float4(pts.color, MIN(MAX(pts.opacity, 0.0f), 1.0f));
+                    simd_float4x4 placement = pts.transform;
+                    BKMeshUniformsSetModel(&u, (const float *)&placement, 0);   // identity normal matrix
+                    BKMeshUniformsSetColor(&u, pts.color.x, pts.color.y, pts.color.z, pts.opacity);
                     u.lit = 0;
                     u.lineHalfWidth = (float)(0.5 * pts.pointSize);
                     [enc setCullMode:MTLCullModeNone];
@@ -882,9 +884,9 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                 if (item.lineObject) {
                     BKLineObject *l = item.lineObject;
                     BKMeshUniforms u = base;
-                    u.model = BKFloat4x4FromSimd(l.transform);
-                    u.normalMatrix = BKFloat4x4FromSimd(matrix_identity_float4x4);
-                    u.color = simd_make_float4(l.color, MIN(MAX(l.opacity, 0.0f), 1.0f));
+                    simd_float4x4 placement = l.transform;
+                    BKMeshUniformsSetModel(&u, (const float *)&placement, 0);   // identity normal matrix
+                    BKMeshUniformsSetColor(&u, l.color.x, l.color.y, l.color.z, l.opacity);
                     u.lit = 0;
                     u.lineHalfWidth = (float)(0.5 * l.lineWidth);
                     [enc setCullMode:MTLCullModeNone];   // 2026-11-14: lines are never culled (as in OpenGL)
@@ -919,12 +921,10 @@ static simd_float3 BKMeshFloat3(N3Vector v)
                     }
                 }
                 BKMeshUniforms u = base;
-                u.model = BKFloat4x4FromSimd(o.transform);
-                simd_float3x3 linear = simd_matrix(o.transform.columns[0].xyz, o.transform.columns[1].xyz, o.transform.columns[2].xyz);
-                simd_float3x3 nm = simd_determinant(linear) != 0 ? simd_transpose(simd_inverse(linear)) : linear;
-                u.normalMatrix = BKFloat4x4FromSimd(simd_matrix(simd_make_float4(nm.columns[0], 0), simd_make_float4(nm.columns[1], 0),
-                                             simd_make_float4(nm.columns[2], 0), simd_make_float4(0, 0, 0, 1)));
-                u.color = simd_make_float4(o.color, MIN(MAX(o.opacity, 0.0f), 1.0f));
+                // 2026-11-25 (M3): placement + normal matrix (inverse-transpose) + colour in plain C.
+                simd_float4x4 placement = o.transform;
+                BKMeshUniformsSetModel(&u, (const float *)&placement, 1);
+                BKMeshUniformsSetColor(&u, o.color.x, o.color.y, o.color.z, o.opacity);
                 u.useVertexColors = (o.useVertexColors && mesh.colors) ? 1 : 0;
                 u.hasNormals = mesh.normals ? 1 : 0;
                 u.lit = o.lit ? 1 : 0;
@@ -1042,14 +1042,9 @@ simd_float3 BKMeshUnprojectPixel(BKProjection projection, simd_float3 position, 
     if (CGRectIsEmpty(area)) return NO;
     simd_float3 right, up, forward;
     if (![self getCameraRight:&right up:&up forward:&forward error:error]) return NO;
-    float halfWidth, halfHeight;
-    if (_projection == BKProjectionPerspective) {
-        halfHeight = tanf(0.5f * (float)_fieldOfView * (float)M_PI / 180.0f);
-        halfWidth = halfHeight * (float)(area.size.width / area.size.height);
-    } else {
-        halfWidth = 0.5f * (float)_viewWidth;
-        halfHeight = 0.5f * (float)_viewHeight;
-    }
+    float halfWidth, halfHeight;   // 2026-11-25 (M3): the same rule the drawing uses (BKMeshDrawCore)
+    BKMeshCamera meshCamera = [self meshCamera];
+    BKMeshCameraHalfSize(&meshCamera, (float)area.size.width, (float)area.size.height, &halfWidth, &halfHeight);
     // Pixel centre -> -1..1 inside the drawing area (y up).
     float ndcX = (float)(((px + 0.5) - area.origin.x) / area.size.width * 2.0 - 1.0);
     float ndcY = (float)(1.0 - ((py + 0.5) - area.origin.y) / area.size.height * 2.0);
